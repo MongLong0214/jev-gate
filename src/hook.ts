@@ -4,7 +4,7 @@ import { prepareDispatchAllocation, selectedDispatchPair, type DispatchAllocatio
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
-import { claudeTerminal, dispatchMarker, taskNoticeVerdict, type NoticeBasis } from './claude-background.js';
+import { claudeTerminal, dispatchMarker, isStopNotice, taskNoticeVerdict, type NoticeBasis } from './claude-background.js';
 import { hasWorktreeHead } from './worktree.js';
 import { observedDelegationPrices } from './delegation-prices.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -546,7 +546,26 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
 
   /** Read once: both the background path and Gate A ask it, and an older payload pays a transcript scan for it. */
   let taskNotice: { notice: boolean; basis: NoticeBasis } | undefined;
-  const isTaskNotice = (): boolean => (taskNotice ??= taskNoticeVerdict(input)).notice;
+  const noticeVerdict = (): { notice: boolean; basis: NoticeBasis } => {
+    const verdict = taskNoticeVerdict(input);
+    if (verdict.basis !== 'unproven' || !input.session_id) return verdict;
+    // #281: a killed notice whose row is not yet written is the host's only if a native TaskStop of that exact
+    // execution is on record here. Taking the record makes it one notice: a later copy is a person's again.
+    let stopped = false;
+    updateJob(deps.env, input.session_id, prev => {
+      const take = (gen: JobGeneration): JobGeneration => {
+        const i = stopped ? -1 : (gen.background_stopped ?? []).findIndex(stop => isStopNotice(input.prompt ?? '', stop));
+        if (i < 0) return gen;
+        stopped = true;
+        return { ...gen, background_stopped: gen.background_stopped!.filter((_, j) => j !== i) };
+      };
+      if (!prev) return null;
+      const next = { ...prev, current: take(prev.current), history: prev.history.map(take) };
+      return stopped ? next : null;
+    });
+    return stopped ? { notice: true, basis: 'task_stop' } : verdict;
+  };
+  const isTaskNotice = (): boolean => (taskNotice ??= noticeVerdict()).notice;
   /** #281: every Gate A record says whether the prompt was taken as a person's and why, so notice inflow is countable. */
   const humanInput = (): { human_input: { verdict: 'human' | 'task_notification'; basis: NoticeBasis } } =>
     ({ human_input: { verdict: isTaskNotice() ? 'task_notification' : 'human', basis: taskNotice!.basis } });
@@ -703,7 +722,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (owners.length !== 1) return skip();
     const owner = owners[0]!;
     const result = await backgroundResult(owner, { completed: false, text: '', model: owner.r.background_execution!.resolved_model }, taskId);
-    updateJob(deps.env, input.session_id, prev => prev && sameGeneration(prev.current, owner.gen) && Object.keys(prev.current.active).length === 0 ? { ...prev, current: { ...prev.current, outcome: 'incomplete' } } : null);
+    // The host then queues a killed notice for this execution; its record lets that notice settle here, not open a new job.
+    const stop = { agent_id: taskId, tool_use_id: owner.id };
+    const mark = (gen: JobGeneration): JobGeneration => sameGeneration(gen, owner.gen) ? { ...gen, background_stopped: [...(gen.background_stopped ?? []), stop] } : gen;
+    updateJob(deps.env, input.session_id, prev => prev ? { ...prev, current: { ...mark(prev.current), ...(sameGeneration(prev.current, owner.gen) && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) }, history: prev.history.map(mark) } : null);
     return result;
   };
 

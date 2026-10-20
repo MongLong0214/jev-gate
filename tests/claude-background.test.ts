@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runHook } from '../src/hook.js';
 import { newGeneration, readJob, updateJob } from '../src/job.js';
 import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
-import { isNativeTaskNotification } from '../src/claude-background.js';
+import { isNativeTaskNotification, isStopNotice } from '../src/claude-background.js';
 import { humanInputText } from '../src/recent-prompts.js';
 
 const roots: string[] = [];
@@ -291,6 +291,31 @@ describe('responsive native background contracts', () => {
     expect(f.job().current.outcome).toBe('incomplete'); expect(f.job().current.background_delivery).toBeUndefined();
     const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'next-human', prompt: 'Implement a different request.' });
     expect(f.job().current.prompt_id).toBe('next-human'); expect(next.stdout).not.toContain('background completion notice');
+  });
+  // #281: on 2.1.304 the killed notice carries no source and its hook runs before its row. The TaskStop on record proves it, once.
+  const killed = '<task-notification>\n<task-id>worker</task-id>\n<tool-use-id>dispatch</tool-use-id>\n<output-file>/tmp/worker.output</output-file>\n<status>killed</status>\n<summary>Agent "work" was stopped</summary>\n</task-notification>';
+  it.each([['current', 'original'], ['current', 'notice-turn'], ['retired', 'notice-turn']] as const)('settles the killed notice of a native TaskStop into the stopped job before its row is written (%s job, prompt ID %s)', async (job, promptId) => {
+    const f = await fixture(); const trace = join(f.root, 'trace'); Object.assign(f.env, { JEV_GATE_TRACE_DIR: trace });
+    await f.launch();
+    if (job === 'retired') updateJob(f.env, 's', prev => newGeneration(prev, 's', 'human-after', 'direct').state);
+    const before = f.job().current;
+    await f.run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'TaskStop', tool_input: { task_id: 'worker' }, tool_response: { message: 'Successfully stopped task: worker (work)', task_id: 'worker', task_type: 'local_agent' } });
+    expect(isNativeTaskNotification({ hook_event_name: 'UserPromptSubmit', session_id: 's', transcript_path: f.parent, prompt_id: promptId, prompt: killed })).toBe(false);
+    const notice = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: promptId, prompt: killed });
+    expect(f.job().current).toMatchObject({ prompt_id: before.prompt_id, generation_id: before.generation_id });
+    if (job === 'current') { expect(f.job().current.outcome).toBe('incomplete'); expect(notice.stdout).toContain('background completion notice'); }
+    const records = readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8')));
+    expect(records.filter(r => r.prompt_id === promptId && r.human_input).map(r => r.human_input)).toContainEqual({ verdict: 'task_notification', basis: 'task_stop' });
+    // The record is taken: the same XML again is a person's and opens its own job.
+    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'pasted', prompt: killed });
+    expect(f.job().current.prompt_id).toBe('pasted');
+  });
+  it('takes no other execution\'s notice, status or envelope as a stop\'s notice', () => {
+    const stop = { agent_id: 'worker', tool_use_id: 'dispatch' };
+    expect(isStopNotice(killed, stop)).toBe(true);
+    for (const prompt of [killed.replace('<tool-use-id>dispatch', '<tool-use-id>other'), killed.replace('<task-id>worker', '<task-id>other'), killed.replace('killed', 'completed'),
+      killed.replace('<task-id>worker</task-id>', '<task-id>worker</task-id><task-id>worker</task-id>'), killed.replace('<tool-use-id>dispatch</tool-use-id>\n', ''), `${killed}\nAlso fix the parser.`])
+      expect(isStopNotice(prompt, stop)).toBe(false);
   });
   it('upgrades only the complete old Jev launch profile without changing host permissions', () => {
     const root = mkdtempSync('/tmp/jev-bg-setup-'); roots.push(root); mkdirSync(join(root, '.claude'));

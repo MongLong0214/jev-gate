@@ -7,7 +7,7 @@ import type { HookInput } from './types.js';
 export const dispatchMarker = (token: string): string => `\n\n[JEV_DISPATCH token=${token}]`;
 
 /** #281: why a prompt was or was not taken as a native notice. Gate A records it, so notice inflow can be counted. */
-export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'unproven';
+export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'task_stop' | 'unproven';
 
 /** Suppress host-authored notice turns; this never establishes worker termination. */
 export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: NoticeBasis } => {
@@ -36,6 +36,17 @@ export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: N
   finally { if (fd !== undefined) closeSync(fd); }
 };
 export const isNativeTaskNotification = (input: HookInput): boolean => taskNoticeVerdict(input).notice;
+
+/**
+ * #281: the host's killed notice for an execution a native TaskStop just ended. Its hook runs before its row, so
+ * taskNoticeVerdict cannot prove it; the recorded stop can. Exactly one task, its launching tool call, status killed.
+ */
+export const isStopNotice = (prompt: string, stop: { agent_id: string; tool_use_id: string }): boolean => {
+  if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(prompt)) return false;
+  const fields = (name: string): string[] => [...prompt.matchAll(new RegExp(`<${name}>([^<>]*)</${name}>`, 'g'))].map(m => m[1]!);
+  const [task, tool, status] = [fields('task-id'), fields('tool-use-id'), fields('status')];
+  return task.length === 1 && task[0] === stop.agent_id && tool.length === 1 && tool[0] === stop.tool_use_id && status.length === 1 && status[0] === 'killed';
+};
 
 /** Native terminal evidence, never a launch receipt or a string taken from a newer root prompt. */
 export const claudeTerminal = (input: HookInput, nativeNotification = false): { token: string | null; text: string; model: string | null; completed: boolean } | null => {

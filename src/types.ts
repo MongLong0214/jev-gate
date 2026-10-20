@@ -421,6 +421,8 @@ export interface JobGeneration {
   background_delivery?: { result: string; prompt_id: string; stalled_since: string };
   /** Terminal policy guidance delivered to the root, rather than to a SubagentStop child context. */
   background_context?: string;
+  /** #281: executions a native TaskStop ended, each awaiting the host's one killed notice. Taken once by that notice. */
+  background_stopped?: Array<{ agent_id: string; tool_use_id: string }>;
 }
 
 export interface JobState {
