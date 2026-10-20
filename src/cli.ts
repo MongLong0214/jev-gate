@@ -84,9 +84,8 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       const servers = isRecord(manifest) && isRecord(manifest['mcpServers']) ? manifest['mcpServers'] : {};
       const evidence = servers['evidence'];
       const validMcp = isRecord(evidence) && evidence['command'] === 'node' && JSON.stringify(evidence['args']) === JSON.stringify(['${CLAUDE_PLUGIN_ROOT}/plugins/evidence/dist/server.mjs']);
-      say(validMcp ? 'ok' : 'fail', 'Evidence MCP: packaged server command and discovery path');
-      for (const rel of ['plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) say(readableFile(join(root, rel)) ? 'ok' : 'fail', `${rel}: readable regular file required`);
-      say(isRecord(manifest) && manifest['skills'] === './plugins/evidence/skills/' ? 'ok' : 'fail', 'Evidence skill: packaged discovery path');
+      say(validMcp ? 'ok' : 'fail', 'Plugin MCP: packaged server command and discovery path');
+      say(readableFile(join(root, 'plugins/evidence/dist/server.mjs')) ? 'ok' : 'fail', 'plugins/evidence/dist/server.mjs: readable regular file required');
       const hooks = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8')) as unknown;
       const modules = isRecord(hooks) ? hooks['modules'] : undefined;
       if (JSON.stringify(modules) !== JSON.stringify(['./register.ts'])) say('fail', 'Function Hooks: exactly one packaged hooks/register.ts module required');

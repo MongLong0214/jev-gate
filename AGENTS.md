@@ -28,7 +28,7 @@
 | `src/entry.ts` | 어댑터 | (#48) `dist/entry.js`. gate 모듈 static import 0개. `JEV_GATE_MODE=off` 또는 config 파일 `mode:"off"`면 stdin 소비 후 즉시 종료, 아니면 `./hook.js`를 동적 import해 `main()` 호출. hooks.json이 가리키는 실제 진입점 |
 | `src/hook.ts` | 어댑터 | 이벤트 디스패치. `JEV_GATE_MODE=off`는 상태·config 읽기 전에 종료. `main()` export를 자기 main-module 블록과 entry.ts 양쪽에서 호출. job state가 없는 native Agent 호출도(#48) `post`/`failure` trace에 `subagent_type`/`requested_model`/`resolved_model` 기록(과거엔 기록 없이 skip) |
 | `src/brief.ts` | 어댑터 | 적격성, allow-list 가드, 입력 패치(원문이 정확한 prefix), 출력 ≤512 KiB. `renderSystemMessage`(#48)는 모델 컨텍스트로 가지 않는 SessionStart 알림 전용. `AgentPatch.isolation`(#48): `emitPatch` 경로에서만 실릴 수 있고 `preserve` 경로는 출력이 없어 절대 실리지 않는다 |
-| `src/outbound-text.ts` | 코어 | 호스트 중립 송신 텍스트 선별: `looksSecret` 비밀정보 스크린, `estimateTokens`. Evidence·recent-prompts가 쓰고 `src/router-secret.ts`가 미러링 |
+| `src/outbound-text.ts` | 코어 | 호스트 중립 송신 텍스트 선별: `looksSecret` 비밀정보 스크린, `estimateTokens`. hook·recent-prompts가 쓰고 `src/router-secret.ts`가 미러링 |
 | `src/cli.ts` | 어댑터 | `doctor` + `explain`. 추론 0. (#48) doctor는 host window·effective floor·liveness도 같은 FAIL/WARN 기준으로 보고. doctor는 `OWNED_AGENT_PROFILES`+`DEFAULT_CONFIG.models`에서 파생된 기대값과 설치된 frontmatter 불일치, 그리고 유효 config의 `models.<tier>`와 설치된 frontmatter의 family 불일치(#48)를 각각 fail 처리 |
 | `hooks/hooks.json`, `agents/*.md` | 어댑터 | (legacy) UserPromptSubmit·PreToolUse(matcher 없음)·PostToolUse/Failure(`^Agent$`)·Stop·SessionStart(#48, matcher 없음); worker 4종 + planner 2종, 모두 Agent·SendMessage 금지. 커맨드는 `dist/entry.js`(#48) |
 | `src/bench/ab.ts` | 도구 | (#130) 설치된 플러그인의 짝지은 A/B 벤치: 4조건(A off/B Gate/C Compact/D all)×2턴(프라이밍→`--resume`)×조건 순서 회전. 타임아웃·영구 out 디렉토리·git worktree 정리·셀별 시각 기록. `report`는 ok 셀 중앙값+cache_create/read 분리+짝지은 부호 판정. 해석 주의는 `docs/bench-ab.md` |

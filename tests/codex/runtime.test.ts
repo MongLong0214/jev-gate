@@ -52,7 +52,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const staged = join(tmp, 'source');
     const stagedPlugin = join(staged, 'plugins/codex');
     cpSync(join(root, 'plugins/codex'), stagedPlugin, { recursive: true, filter: p => !p.includes('/dist/') && !p.endsWith('/dist') });
-    // MCP server names are global in the host. A user's installed Evidence server must not shadow this fixture,
+    // MCP server names are global in the host. A user's installed Jev Gate server must not shadow this fixture,
     // or be re-enabled by it. Keep the packaged manifest path and loader, with only a disposable server name.
     const mcpFile = join(stagedPlugin, '.mcp.json');
     const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as { mcpServers: Record<string, unknown> };
@@ -71,7 +71,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     expect(spawnSync('unzip', ['-q', join(tmp, 'archives', archive), '-d', plugin]).status).toBe(0);
     mkdirSync(workspace); mkdirSync(join(workspace, '.bin'));
     expect(spawnSync('git', ['init', '-q'], { cwd: workspace }).status).toBe(0);
-    writeFileSync(join(workspace, 'source.ts'), 'export const runtimeEvidenceNeedle = 42;\n');
+    writeFileSync(join(workspace, 'source.ts'), 'export const runtimeNeedle = 42;\n');
     writeFileSync(join(workspace, '.bin/vitest'), `#!${process.execPath}\nconst text = ${JSON.stringify(log)}; const fail = process.argv.includes("fail"); process.stdout.write(fail ? text.replaceAll("1 passed", "1 failed") : text); process.exitCode = fail ? 1 : 0;\n`, { mode: 0o755 });
     const marketplace = JSON.parse(readFileSync(join(plugin, '.agents/plugins/marketplace.json'), 'utf8')) as Rec;
     marketplace['name'] = market;
@@ -112,14 +112,14 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       let item = index===2 ? fn('exec_command',{cmd:'touch guard-must-not-exist',login:false}) : index===3 ? fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'Investigate the fixture and run vitest run.'}) : index===4 ? fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000}) : index===5 ? final('```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:'vitest run',result:'pass',note:'actual run'}],blockers:[]})+'\n```') : final('managed native complete');
       const report=(check:string):string=>'```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:check,result:'pass',note:'actual run'}],blockers:[]})+'\n```';
       if (scenario === 'bounded-lookup') {
-        if (index === 3) item = fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeEvidenceNeedle in source.ts and return its exact line. Run rg -n runtimeEvidenceNeedle source.ts.' });
-        if (index === 4) item = fn('exec_command', { cmd: 'rg -n runtimeEvidenceNeedle source.ts', login: false });
-        if (index === 5) item = final(report('rg -n runtimeEvidenceNeedle source.ts'));
+        if (index === 3) item = fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeNeedle in source.ts and return its exact line. Run rg -n runtimeNeedle source.ts.' });
+        if (index === 4) item = fn('exec_command', { cmd: 'rg -n runtimeNeedle source.ts', login: false });
+        if (index === 5) item = final(report('rg -n runtimeNeedle source.ts'));
       }
       if (scenario === 'direct-lookup') {
-        item = index === 2 ? fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeEvidenceNeedle in source.ts and run rg -n runtimeEvidenceNeedle source.ts.' })
-          : index === 3 ? fn('exec_command', { cmd: 'rg -n runtimeEvidenceNeedle source.ts', login: false })
-          : index === 4 ? final(report('rg -n runtimeEvidenceNeedle source.ts')) : final('managed native complete');
+        item = index === 2 ? fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeNeedle in source.ts and run rg -n runtimeNeedle source.ts.' })
+          : index === 3 ? fn('exec_command', { cmd: 'rg -n runtimeNeedle source.ts', login: false })
+          : index === 4 ? final(report('rg -n runtimeNeedle source.ts')) : final('managed native complete');
       }
       if (scenario === 'background') {
         const worker = Array.isArray(request['input']) && request['input'].some(i => (i as Rec)?.['role'] === 'user' && JSON.stringify(i).includes('JEV_BG_NATIVE_WORKER'));
@@ -189,7 +189,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const session = await startCodexSession({ cwd: workspace, env: { ...runtimeEnv, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions; if (semantic && Object.keys(q).some(k => /^m\d+t\d+$/.test(k))) semanticBatches.push(parsed);
-        const bounded = scenario === 'bounded-lookup' && JSON.stringify(parsed.state).includes('runtimeEvidenceNeedle');
+        const bounded = scenario === 'bounded-lookup' && JSON.stringify(parsed.state).includes('runtimeNeedle');
         return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k.startsWith('effort_')?rootPair?q[k].criteria.findIndex((v:string)=>v.startsWith(targetEffort==='max'?'Maximum':targetEffort==='low'?'Light':'Strong')):q[k].criteria.length-1:k==='tool_calls'?(scenario==='bounded-lookup'?(bounded?1:0):4):k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=/^m\d+t\d+$/.test(k) ? (parsed.state.candidates.find((c:Rec)=>c['id']===k)?.result.includes(dependencyFact) ? 'required' : 'unrelated') : k==='bounded_tool_work'?(bounded?'bounded':'other'):k.startsWith('relation_')?'omit':k==='capability' && (['bounded-lookup','direct-lookup','routing-model-luna'].includes(scenario) || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))) ? 'mechanical' : k==='model' && ['bounded-lookup','direct-lookup'].includes(scenario) ? 'gpt-6-luna' : k==='model' && routing ? scenario==='routing-auto-model'?'gpt-6-astra':scenario==='routing-model-luna' || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))?'gpt-6-luna':'__keep__' : picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
       }) as typeof fetch });
     const socket = new WebSocket(session.url, { headers: { Authorization: `Bearer ${session.token}` } });
@@ -264,7 +264,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       expect(rows.some(r=>r['phase']==='codex_router_result'),JSON.stringify(rows)).toBe(true);
       expect(rows.some(r=>r['phase']==='codex_route_applied' && r['request_kind']==='root_response' && r['applied']===true),JSON.stringify({rows,headerKeys,hookCount:(hookList['data'] as Rec[]).length})).toBe(true);
       const before=messages.length;
-      await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:'medium',developer_instructions:null}},input:[{type:'text',text:scenario === 'bounded-lookup' ? 'Find runtimeEvidenceNeedle in source.ts and return the exact line. Do not edit.' : 'Investigate the repository fixture and check it using vitest run.',text_elements:[]}]});
+      await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:'medium',developer_instructions:null}},input:[{type:'text',text:scenario === 'bounded-lookup' ? 'Find runtimeNeedle in source.ts and return the exact line. Do not edit.' : 'Investigate the repository fixture and check it using vitest run.',text_elements:[]}]});
       if(scenario==='cancelled') {
         const deadline=Date.now()+15000;
         while(!messages.slice(before).some(m=>m['method']==='item/started' && (m['params'] as Rec)['threadId']!==id && ((m['params'] as Rec)['item'] as Rec)['type']==='commandExecution') && Date.now()<deadline) await new Promise(r=>setTimeout(r,20));
@@ -283,7 +283,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       const all=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
       if (scenario === 'direct-lookup') {
         expect(requests).toHaveLength(5); expect(requests[2]!['model']).toBe('gpt-6-luna');
-        expect(JSON.stringify(requests[3]!['input'])).toContain('1:export const runtimeEvidenceNeedle = 42;');
+        expect(JSON.stringify(requests[3]!['input'])).toContain('1:export const runtimeNeedle = 42;');
         expect(all.some(r => r['phase'] === 'post' && r['verdict'] === 'accept' && r['root_fallback'] === false)).toBe(true);
         const job = readJob({ JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`, 'codex') }, id);
         expect(job.ok && job.value?.current.shape).toBe('direct'); expect(job.ok && job.value?.current.active).toEqual({});
@@ -336,7 +336,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       if(scenario!=='worktree') expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).toContain('denied');
       if (scenario === 'bounded-lookup') {
         expect(requests[3]!['model']).toBe('gpt-6-luna');
-        expect(JSON.stringify(requests[4]!['input'])).toContain('1:export const runtimeEvidenceNeedle = 42;');
+        expect(JSON.stringify(requests[4]!['input'])).toContain('1:export const runtimeNeedle = 42;');
         const admissions = all.filter(r => r['phase'] === 'admission_result' && r['attempted'] === true);
         expect(admissions).toHaveLength(2); // one batch for each of the two native root prompts, never per tool step
         expect(new Set(admissions.map(r => r['prompt_id'])).size).toBe(2);
@@ -373,13 +373,10 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       const request = JSON.parse(body.toString()) as Rec;
       requests.push(request);
-      const tool = requestFunctions(request).find(t => String(t['name']).endsWith('jev_evidence'));
       const index = requests.length;
       const item: Rec = index === 1
         ? { id: `fc_${index}`, type: 'function_call', call_id: `call_${index}`, name: 'exec_command', arguments: JSON.stringify({ cmd: scenario === 'failed' ? 'vitest run fail' : 'vitest run', login: false, max_output_tokens: 8000 }) }
-        : index === 2 && tool
-          ? { id: `fc_${index}`, type: 'function_call', call_id: `call_${index}`, name: tool['name'], ...(tool['namespace'] ? { namespace: tool['namespace'] } : {}), arguments: JSON.stringify({ goal: 'Locate fixture evidence', exactSymbols: ['runtimeEvidenceNeedle'] }) }
-          : { id: 'msg_final', type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] };
+        : { id: 'msg_final', type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] };
       const response = { id: `resp_${index}`, object: 'response', created_at: 1, model: 'jev-test-model', status: 'completed', output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const event of [
@@ -406,7 +403,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];
     let output = '';
-    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
+    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
     child.stdin.end(); child.stdout.on('data', b => { output += String(b); }); child.stderr.on('data', b => { output += String(b); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 40_000);
     try {
@@ -415,25 +412,18 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     } finally { clearTimeout(timer); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   };
 
-  it('loads plugin MCP and trusted hooks, leaves the model-visible result native and records both paths', async () => {
+  it('loads trusted hooks, leaves the model-visible result native and records the hook path', async () => {
     const result = await run(true);
     expect(result.code, result.output).toBe(0);
-    expect(result.requests.length, result.output).toBeGreaterThanOrEqual(3);
-    expect(functions(result.requests[0]!['tools']).some(t => String(t['name']).endsWith('jev_evidence')), result.output).toBe(true);
-    expect(JSON.stringify(result.requests[0])).toContain('Read-only source evidence from the one project this server was configured for');
+    expect(result.requests.length, result.output).toBeGreaterThanOrEqual(2);
     const second = JSON.stringify(result.requests[1]!['input']);
     expect(second).not.toContain('[jev-gate output]');
     expect(second.split('fixture repeat detail').length - 1).toBe(100);
-    const last = JSON.stringify(result.requests.at(-1)!['input']);
-    expect(last).toContain('runtimeEvidenceNeedle');
-    expect(last).not.toContain('/wrong-workspace');
+    expect(JSON.stringify(result.requests.at(-1)!['input'])).not.toContain('/wrong-workspace');
     const records = readdirSync(result.trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
-    expect(records.some(r => r['phase'] === 'evidence_result')).toBe(true);
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) expect(records.some(r => r['event'] === event), event).toBe(true);
     const snapshot = loadActivity({ traceDir: result.trace, env: {}, host: 'codex' });
-    expect(snapshot.operations.features.find(f => f.id === 'evidence')?.state).toBe('observed');
     expect(snapshot.operations.features.find(f => f.id === 'admission')?.capability?.mode).toBe('connect');
-    expect(JSON.stringify(records)).not.toContain('runtimeEvidenceNeedle');
     expect(JSON.stringify(snapshot)).not.toContain('fixture repeat detail');
   }, 60_000);
 
@@ -456,30 +446,15 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     expect(snapshot.operations.feed.some(s => s.lifecycle)).toBe(true);
   }, 60_000);
 
-  it('binds Evidence to the actual native workspace with no environment setting or launcher', async () => {
-    const result = await run(true, 'missing-workspace');
-    expect(result.code, result.output).toBe(0);
-    const last = JSON.stringify(result.requests.at(-1)?.['input']);
-    expect(last).not.toContain('unavailable_config');
-    expect(last).toContain('export const runtimeEvidenceNeedle');
-    expect(last).toContain(workspace);
-    expect(last).not.toContain('/wrong-workspace');
-    const rows = readdirSync(result.trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
-    expect(rows.some(r => r['phase'] === 'evidence_result')).toBe(true);
-    expect(rows.find(r => r['phase'] === 'evidence_result')?.['session_id']).toBeTypeOf('string');
-  }, 60_000);
-
   it.each(['recording-unavailable', 'hooks-disabled'])('preserves native output and the separate MCP when %s', async scenario => {
     const result = await run(true, scenario);
     expect(result.code, result.output).toBe(0);
     const input = JSON.stringify(result.requests[1]?.['input']);
     expect(input).not.toContain('[jev-gate output]');
     expect(input.split('fixture repeat detail').length - 1).toBe(100);
-    expect(JSON.stringify(result.requests.at(-1)?.['input'])).toContain('runtimeEvidenceNeedle');
     if (scenario === 'recording-unavailable') expect(readFileSync(result.trace, 'utf8')).toBe('not a directory');
     else {
       const rows = readdirSync(result.trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
-      expect(rows.some(r => r['phase'] === 'evidence_result')).toBe(true);
       expect(rows.some(r => String(r['phase']).startsWith('codex_'))).toBe(false);
     }
   }, 60_000);

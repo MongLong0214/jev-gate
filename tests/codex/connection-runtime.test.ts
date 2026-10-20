@@ -60,7 +60,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
     market['name'] = 'jev-auto-fixture';
     writeFileSync(marketFile, JSON.stringify(market));
     const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome, JEV_CODEX_TRACE_DIR: trace, ...fixtureEnv };
-    delete env['JEV_CODEX_WORKSPACE']; delete env['JEV_EVIDENCE_CONFIG']; delete env['JEV_CODEX_BRIDGE_URL']; delete env['JEV_CODEX_BRIDGE_TOKEN'];
+    delete env['JEV_CODEX_BRIDGE_URL']; delete env['JEV_CODEX_BRIDGE_TOKEN'];
     delete env['TYPESAFE_API_KEY']; delete env['CLAUDE_PLUGIN_OPTION_TYPESAFEAPIKEY'];
     const cli = (args: string[]) => spawnSync('codex', args, { env, cwd: workspace, encoding: 'utf8', timeout: 20_000 });
     const config = join(codexHome, 'config.toml');

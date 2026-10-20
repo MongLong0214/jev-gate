@@ -2,11 +2,11 @@
 
 Install, the five parts, and what a normal session sends are in the [README](../README.md). This page is Gate configuration, background execution and worktree conditions, and a checkout. It is not a benchmark report. Older measurements are linked at the bottom and are not restated as current results.
 
-Option names and defaults for Compact, the Router, and Evidence stay in their own pages: [Compact](../mods/compact/README.md), [Router](../mods/router/README.md), [Evidence](../plugins/evidence/README.md). The manifest is [plugin.json](../.claude-plugin/plugin.json).
+Option names and defaults for Compact and the Router stay in their own pages: [Compact](../mods/compact/README.md), [Router](../mods/router/README.md). The manifest is [plugin.json](../.claude-plugin/plugin.json).
 
 ## Gate modes
 
-`gateMode` does not turn Compact, the Router, or Evidence off.
+`gateMode` does not turn Compact or the Router off.
 
 | Mode | What runs | Gate request |
 |---|---|---|
@@ -14,7 +14,7 @@ Option names and defaults for Compact, the Router, and Evidence stay in their ow
 | `native` | The same roles, guard, and contracts if you start them. The session decides whether to call the planner and which worker profile to name. | None |
 | `auto` | Gate A on an eligible root prompt. An admitted turn is single or orchestrated, below. Gate B on an eligible planner or worker dispatch. | At most one per eligible gate event. No retry |
 
-`auto` is the manifest default and the call-path default of a legacy plugin hook with no config file. `off` is the call-path default for doctor and a bare `node`. A config file, `JEV_GATE_MODE` or `gateMode` with any other value is invalid config: the Gate does nothing for that call, `doctor` reports the value, and Router, Compact and Evidence are unaffected.
+`auto` is the manifest default and the call-path default of a legacy plugin hook with no config file. `off` is the call-path default for doctor and a bare `node`. A config file, `JEV_GATE_MODE` or `gateMode` with any other value is invalid config: the Gate does nothing for that call, `doctor` reports the value, and Router and Compact are unaffected.
 
 An admitted turn is one of two shapes. `single` (the usual one under `admittedShape: "auto"`) dispatches the request once to a worker and does not run the planner. `hierarchy` runs a planner, then workers. Gate A calls the second shape orchestrated. Both are admitted jobs: the root is told to coordinate, and the guard below is on until terminal acceptance with no active work. Then the root can do remaining checks, integration and reporting under its native permissions. Reuse the observed checks for the same state; new edits, merges and explicitly requested independent reviews still need their own checks. Command success does not prove all requirements were met. A direct admission does not start a job or the guard.
 
@@ -112,9 +112,9 @@ Codex `jev_agent` defaults to background execution. `action: "status", agent_id:
 
 In `auto`, the normal path sends two kinds of text to TypeSafe: the user request at admission, and the composed task contract with the relevant predecessor summaries at each eligible planner or worker dispatch. That text can include source excerpts, file names, and earlier constraints. The hook does not independently upload the repository, the transcript, or the environment. There is no secret scrubber and no zero-retention promise. Enable `auto` only for data you are allowed to send.
 
-`native` and `off` send no Gate request. They do not stop the Router or Evidence. Those switches are in the [README](../README.md#settings-and-data).
+`native` and `off` send no Gate request. They do not stop the Router or Compact. Those switches are in the [README](../README.md#settings-and-data).
 
-Optional traces (`JEV_GATE_TRACE_DIR`) are local per-phase JSON: lengths, hashes, decisions, Jev usage, and the reported model. The writer is not given the key. Current records store a prompt's length and hash, not its text. They are not uploaded. Job state is one file per session. The directory is `<stateRoot>/jev-gate/jobs/`, where `stateRoot` is `JEV_GATE_STATE_DIR` when that is set, otherwise `XDG_STATE_HOME`, otherwise `~/.local/state`. The file holds the plan and the request. A file older than 7 days is removed only when cleanup can establish no retained executor identity or unsettled native execution. Background reservations remain protected across age and history limits until termination is observed. Trace records older than 3 days are deleted automatically, at most once a day when the Evidence server starts. This plugin has no command that deletes job files, traces, credentials, or transcripts.
+Optional traces (`JEV_GATE_TRACE_DIR`) are local per-phase JSON: lengths, hashes, decisions, Jev usage, and the reported model. The writer is not given the key. Current records store a prompt's length and hash, not its text. They are not uploaded. Job state is one file per session. The directory is `<stateRoot>/jev-gate/jobs/`, where `stateRoot` is `JEV_GATE_STATE_DIR` when that is set, otherwise `XDG_STATE_HOME`, otherwise `~/.local/state`. The file holds the plan and the request. A file older than 7 days is removed only when cleanup can establish no retained executor identity or unsettled native execution. Background reservations remain protected across age and history limits until termination is observed. Trace records older than 3 days are deleted automatically, at most once a day when the plugin's MCP server starts. This plugin has no command that deletes job files, traces, credentials, or transcripts.
 
 `node dist/cli.js explain <trace-dir>` reads those records. A missing record means nothing was recorded, not that nothing happened. A worker verdict is what the worker reported. A model after `ran` is what the host reported, not a check that a patch took effect.
 
@@ -122,7 +122,7 @@ When Gate A answers `needs_context` for the prompt alone, it is asked once more 
 
 ## Doctor and explain
 
-From a built checkout, `node dist/cli.js doctor` reads this tree. From an installed bundle, `node <plugin-dir>/dist/cli.js doctor` reads that bundle. Evidence is the other program: `node <plugin-dir>/plugins/evidence/dist/server.mjs --doctor`. A passing doctor is not model access, not source accuracy, and not a performance guarantee.
+From a built checkout, `node dist/cli.js doctor` reads this tree. From an installed bundle, `node <plugin-dir>/dist/cli.js doctor` reads that bundle. A passing doctor is not model access, not source accuracy, and not a performance guarantee.
 
 Doctor reports the launch profile, key presence (not validity), the role files, a model-family mismatch between config and installed frontmatter, the compaction window, the effective floor, and liveness. Liveness is `<stateRoot>/jev-gate/liveness.json`, a ring of the last 50 auto-mode admission decisions. Doctor warns when all 50 never attempted Gate A. In `off`, doctor warns that the hook process still starts; `claude plugin disable jev-gate@jev-gate` is what stops that. On Claude Code 2.1.299+ in a Team or Enterprise organization, or on a machine with managed settings, doctor states that the function Compact is unavailable there because the host's built-in security default passes compaction over for an installed plugin, and that the classic path (PreCompact, SessionStart on `compact`, PostCompact hooks) is active: it guides and supplements the native compaction and cannot replace it. [Compact](../mods/compact/README.md#the-classic-path-team-enterprise-and-managed-machines) describes it; the managed-settings enablement for an administrator who can is in [Compact](../mods/compact/README.md#enable). Explain is `node dist/cli.js explain`. Neither command calls Jev.
 
@@ -130,7 +130,7 @@ Use `--json` for structured checks, `--verbose` for all local details, and `--ch
 
 The installed plugin opens one shared dashboard automatically for Claude Code and Codex. Recording is on by default and Router and Compact write independent Jev metadata. The UI and `recording on|off|status` / `dashboard on|off|status` CLI commands control shared recording and automatic opening independently. The default directories are `$XDG_STATE_HOME/jev-gate/{claude,codex}/traces` or `~/.local/state/jev-gate/{claude,codex}/traces`. Explicit `JEV_GATE_TRACE_DIR`, and `JEV_CODEX_TRACE_DIR` are supported. `node dist/cli.js dashboard --port 4733` opens a manual development view; `--trace` overrides the source. Missing records mean unknown. Selected models, observed response models and observed effort are separate facts.
 
-The page keeps concurrent runs separate and shows the decision path in time order: Gate A admission and context floor, planner and Gate B tier choice, task dependencies, worker dispatch and reported checks, root guard decisions. Router separates selected pairs, submitted request values and reported response models; missing observed effort remains unknown; Compact shows the bounded Jev dependency judgment (actual dispatch, candidate coverage, selected dependencies, latency and observed usage), local digest packing and native installation or fallback separately; Evidence shows local search, Jev batches, cache reuse, and result coverage. Jev intent and result are separate. A sent request without a result becomes unconfirmed, and a missing usage counter stays unknown. The page reads only named metadata, not prompts, source bodies, job state, credentials, or transcript text. It makes no Jev request and grants no tool permission. Existing v0.6.5 trace records can appear where their fields suffice; events that version never wrote cannot be reconstructed.
+The page keeps concurrent runs separate and shows the decision path in time order: Gate A admission and context floor, planner and Gate B tier choice, task dependencies, worker dispatch and reported checks, root guard decisions. Router separates selected pairs, submitted request values and reported response models; missing observed effort remains unknown; Compact shows the bounded Jev dependency judgment (actual dispatch, candidate coverage, selected dependencies, latency and observed usage), local digest packing and native installation or fallback separately. Jev intent and result are separate. A sent request without a result becomes unconfirmed, and a missing usage counter stays unknown. The page reads only named metadata, not prompts, source bodies, job state, credentials, or transcript text. It makes no Jev request and grants no tool permission. Existing v0.6.5 trace records can appear where their fields suffice; events that version never wrote cannot be reconstructed.
 
 ## Checkout
 
@@ -146,7 +146,7 @@ node dist/cli.js doctor
 
 `npm run typecheck`, `npm test`, and `claude plugin validate . --strict` are the checks in [AGENTS.md](../AGENTS.md). Tests are offline. Do not put a key in the repository, an issue, or a chat log, and do not attach raw transcripts.
 
-`npm run pack` writes `dist-pack/jev-gate-<version>.zip` for the integrated plugin. `--profile router` and `--profile evidence` write the single-part archives used for development. The bench is not part of that. `npm run release:check` rebuilds the integrated archive and compares it with the pin; it fails on a released version whose bytes changed, which is the point of the check. Do not publish from a documentation edit.
+`npm run pack` writes `dist-pack/jev-gate-<version>.zip` for the integrated plugin. `--profile router` writes the single-part archive used for development. The bench is not part of that. `npm run release:check` rebuilds the integrated archive and compares it with the pin; it fails on a released version whose bytes changed, which is the point of the check. Do not publish from a documentation edit.
 
 Load the checkout with `claude --plugin-dir .` after the build. It performs the same automatic initialization as the installed archive; start a fresh host after a first-start notice.
 

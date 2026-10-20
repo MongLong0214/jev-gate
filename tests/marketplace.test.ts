@@ -16,14 +16,14 @@ describe('the marketplace', () => {
   it('is named jev-gate, so a plugin installs as <plugin>@jev-gate', () => {
     expect(marketplace.name).toBe('jev-gate');
     expect(marketplace.owner.name).toBeTruthy();
-    // v0.6.0: one plugin, so one install and one update; the Mods and the evidence server ship inside it.
+    // v0.6.0: one plugin, so one install and one update; the Mods and the MCP server ship inside it.
     expect(marketplace.plugins.map((p) => p.name)).toEqual(['jev-gate']);
   });
 
   it('leaves every version to plugin.json, and every plugin.json is at the package version', () => {
     // A version in both places is taken from plugin.json without warning; one place keeps the update signal honest.
     for (const p of marketplace.plugins) expect(p.version, p.name).toBeUndefined();
-    for (const rel of ['.claude-plugin/plugin.json', ...['mods/compact', 'mods/router', 'plugins/evidence'].map((d) => `${d}/.claude-plugin/plugin.json`)]) {
+    for (const rel of ['.claude-plugin/plugin.json', ...['mods/compact', 'mods/router'].map((d) => `${d}/.claude-plugin/plugin.json`)]) {
       expect((readJson(join(root, rel)) as { version: string }).version, rel).toBe(version);
     }
   });

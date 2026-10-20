@@ -20,7 +20,6 @@ const INSTALL_DOCS = [
   'docs/advanced-usage.md',
   'docs/bench-ab.md',
   'bench/ab/tasks.example.json',
-  'plugins/evidence/README.md',
   'plugins/codex/README.md',
   'mods/compact/README.md',
   'mods/router/README.md',
@@ -57,8 +56,6 @@ const expectReadmeLinksInside = (dir: string, rel = 'README.md') => {
 
 const expectInstallDocs = (dest: string) => {
   for (const rel of INSTALL_DOCS) expect(readFileSync(join(dest, rel), 'utf8').length, rel).toBeGreaterThan(20);
-  expect(readFileSync(join(dest, 'README.md'), 'utf8')).toContain('plugins/evidence/README.md#configure');
-  expect(readFileSync(join(dest, 'plugins/evidence/README.md'), 'utf8')).toMatch(/^## Configure$/m);
   for (const rel of INSTALL_DOCS.filter((f) => f.endsWith('.svg'))) expect(readFileSync(join(dest, rel), 'utf8'), rel).toMatch(/^<svg\b/);
   expectReadmeLinksInside(dest);
   expectReadmeLinksInside(dest, 'docs/advanced-usage.md');
@@ -71,8 +68,8 @@ beforeAll(() => {
   const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', join(pluginRoot, 'dist')], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
   mkdirSync(join(pluginRoot, 'docs'), { recursive: true });
-  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills', 'plugins/evidence/.claude-plugin', 'plugins/evidence/README.md', 'plugins/codex/README.md', 'assets/readme', 'README.md', 'AGENTS.md', 'CHANGELOG.md', 'docs/advanced-usage.md', 'docs/bench-ab.md', 'bench/ab/tasks.example.json', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
-  // The evidence bundle is build output, and the tests run before the build.
+  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/codex/README.md', 'assets/readme', 'README.md', 'AGENTS.md', 'CHANGELOG.md', 'docs/advanced-usage.md', 'docs/bench-ab.md', 'bench/ab/tasks.example.json', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+  // The MCP server bundle is build output, and the tests run before the build.
   const evidence = spawnSync(process.execPath, [join(root, 'scripts', 'build-evidence.mjs'), join(pluginRoot, 'plugins', 'evidence', 'dist', 'server.mjs')], { encoding: 'utf8' });
   expect(evidence.status, evidence.stderr).toBe(0);
   // The classic Compact bundle is build output too (esbuild, outside tsc's rootDir).
@@ -95,12 +92,12 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/compact-hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('agents/'))).toEqual([...agents].sort());
     expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
-    // v0.6.0: the one plugin carries the two Mods from their source, the module that loads them, and the evidence
-    // server with its skill, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
+    // v0.6.0: the one plugin carries the two Mods from their source, the module that loads them, and the MCP
+    // server bundle, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
     // #95 adds the feature READMEs beside that source, not the Mod tests.
-    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
+    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs']) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|router)\/(?:hooks\/[a-z-]+\.ts|README\.md)$/.test(f))).toEqual([]);
-    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
+    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/dist/server.mjs']);
 
     const dest = join(tmp, 'installed here', 'jev gate');
     mkdirSync(dest, { recursive: true });
@@ -200,25 +197,5 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(spawnSync('unzip', ['-q', join(outDir, `jev-gate-router-${manifest.version}.zip`), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
     expectReadmeLinksInside(dest);
     expect(readFileSync(join(dest, 'README.md'), 'utf8')).toMatch(/^## Enable$/m);
-  });
-
-  it('packs evidence with a root readme whose relative links stay inside that archive', () => {
-    const outDir = join(tmp, 'pack evidence out');
-    const otherCwd = join(tmp, 'other evidence cwd');
-    mkdirSync(otherCwd, { recursive: true });
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot, '--profile', 'evidence'], { cwd: otherCwd, encoding: 'utf8' });
-    expect(pack.status, pack.stderr).toBe(0);
-    const manifest = JSON.parse(readFileSync(join(pluginRoot, 'plugins', 'evidence', '.claude-plugin', 'plugin.json'), 'utf8')) as { version: string };
-    const archive = join(outDir, `jev-gate-evidence-${manifest.version}.zip`);
-    const list = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8' }).stdout.trim().split('\n').sort();
-    expect(list).toEqual(['.claude-plugin/plugin.json', 'README.md', 'dist/server.mjs', 'skills/evidence/SKILL.md']);
-    const dest = join(tmp, 'evidence installed', 'jev evidence');
-    mkdirSync(dest, { recursive: true });
-    expect(dest.includes(' ')).toBe(true);
-    expect(dest.startsWith(root)).toBe(false);
-    expect(spawnSync('unzip', ['-q', archive, '-d', dest], { encoding: 'utf8' }).status).toBe(0);
-    expectReadmeLinksInside(dest);
-    expect(readFileSync(join(dest, 'README.md'), 'utf8')).toMatch(/^## Configure$/m);
-    expect(existsSync(join(dest, 'dist', 'server.mjs'))).toBe(true);
   });
 });

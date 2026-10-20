@@ -13,7 +13,7 @@
 [![Codex](https://img.shields.io/badge/Codex-plugin-10A37F)](#codex)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](package.json)
 
-**Jev-assisted model routing, delegation, evidence search and context compaction for Claude Code and native Codex.**
+**Jev-assisted model routing, delegation and context compaction for Claude Code and native Codex.**
 
 [Install](#install) · [Results](#results) · [How it works](#how-it-works) · [Dashboard](#read-the-live-dashboard) · [Data and privacy](#settings-and-data) · [Troubleshoot](#update-and-troubleshoot)
 
@@ -76,8 +76,7 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 1. **Gate** reads a new request and decides: answer directly, hand it to one background worker, or plan worker tasks with contracts and checks.
 2. **Router** picks the model and effort for the main turn and for each eligible agent, from the candidates your host actually supports. Your explicit pins always win.
 3. **Compact** replaces stale context with an extractive digest that keeps what the current task needs.
-4. **Evidence** answers code questions with verified source windows instead of bulk file reads.
-5. **The dashboard** records each judgment, request and observed result, live.
+4. **The dashboard** records each judgment, request and observed result, live.
 
 If a key is missing, a judgment is invalid or slow, or a host fact is unavailable, Jev Gate keeps the native call. It never upgrades low confidence into a more expensive tier.
 
@@ -114,10 +113,9 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Gate | Chooses direct execution, one background worker, or a plan with worker tasks. Code checks contracts and passing checks. | Eligible admission and allocation judgments; optional plan interpretation |
 | Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
 | Compact | Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
-| Evidence | Returns verified source windows, paths, lines, hashes, and a continuation cursor. Searches the whole worktree by narrowing to matching files first; credential-like windows are returned as references only. | Semantic candidates; exact symbols and read-back stay local |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
-Gate, Router, Compact, remote Evidence, recording, and automatic dashboard opening default to **on**. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
+Gate, Router, Compact, recording, and automatic dashboard opening default to **on**. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
 
 Default Gate settings permit native tools (`guardAllowTools: ["*"]`), up to 16 isolated workers, 64 planned tasks, a depth floor of 0, and plan interpretation. Worktree snapshots include current working files. Native permissions remain authoritative. Missing keys, invalid judgments, timeouts, or unavailable host facts preserve the native call.
 
@@ -151,7 +149,7 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
-An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact, Evidence) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its execution row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The execution list, the Jev call log (one row per call) and the execution detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
+A seven-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compact) hangs off a Jev rail. Every new record flashes its node, the node's 60-second strip and its execution row in recorded order, including policy, host and lifecycle records; measured Jev responses travel the rail and set the latency readout. The **Jev traffic** bar covers the last 30 seconds: requests as short ticks, responses at their latency. Between records a soft sweep runs along the rail and the node wires flow to show the view is live; neither carries a record. The execution list, the Jev call log (one row per call) and the execution detail change in the same frame. Pause, disconnected streams and reduced-motion preferences stop all movement and keep the numbers. All layouts fit without horizontal page scrolling.
 
 1. Start a task in your normal coding session.
 2. Read the **Execution circuit** at the top. Select a node to see its latest decision, confidence and Jev response time in **Stage details**; it also filters the execution list to that feature, and selecting it again shows all.
@@ -163,7 +161,7 @@ An eight-node circuit (Gate A, Gate B, plan, workers, tool guard, Router, Compac
 | --- | --- |
 | Running | A recorded request or stage is still awaiting its result |
 | Complete | The recorded stage completed; a policy decision alone is not whole-task completion |
-| Error | A specific Jev, host, Evidence, request-setting, or observed-model error was recorded |
+| Error | A specific Jev, host, request-setting, or observed-model error was recorded |
 | Unobserved | A needed fact is missing; success or failure cannot be inferred |
 | Interrupted | User interruption was observed |
 | Needs review | A failure that may still affect work: later records of the same operation also failed, or none followed yet (current impact unknown) |
@@ -199,9 +197,8 @@ When enabled and eligible, these inputs can leave the machine:
 - **Gate:** the request, composed task contracts, or predecessor summaries. A needs-context retry can include recent user turns.
 - **Router:** the task text and routing/cache facts used for its judgment.
 - **Compact:** the current task and a bounded set of older successful-result excerpts. Sensitive candidates are filtered before sending. Mandatory preservation and final size limits remain local.
-- **Evidence:** semantic goals, constraints, and candidate source windows. Exact-symbol queries and verified read-back do not call Jev.
 
-The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. To disable remote Evidence, set `remote: false` in its optional config. That does not disable Gate, Router, or Compact's Jev selection. The dashboard is local. [Evidence configuration](plugins/evidence/README.md#configure).
+The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. The dashboard is local.
 
 Recording stores private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (`$XDG_STATE_HOME` supported). Records older than 3 days are deleted automatically. Prompt text, source bodies, tool output, and keys do not appear in the dashboard.
 
@@ -229,9 +226,6 @@ Restart the host after upgrading to load new hooks/provider code. Old separate J
 | Dashboard absent | Check `dashboard status`, recording, and the local service with doctor |
 | Worker dispatch denied | The Router records `spawn_denied` with a reason code (for example `policy_unavailable`, `no_eligible_model`, `subagent_model_pinned`); fix that cause, or check pins and `frontierEnabled` |
 | Model/effort warning | Inspect selected, submitted, and observed values; distinguish request mismatch from missing response facts |
-| Evidence `partial` / empty | Check coverage and reason codes; an incomplete empty page is not proof of absence |
-| Evidence not used in Claude Code | Claude loads `jev_evidence` with ToolSearch when the Evidence plugin is enabled; check that the plugin and its MCP server are enabled with doctor |
-| Evidence `stale` | Search again; continue only with every field of the returned `next` |
 | Settings seem ignored | Use user-level plugin options and start a fresh host |
 
 Run `node "<plugin path>/dist/cli.js" doctor` (Codex: `cli.mjs`). It groups failures and warnings with next actions and checks native CLI model/effort capabilities, including alias resolutions and minimum host versions. Use `--json` for structured facts, `--verbose` for every local check, or `--check-update` to compare with the public GitHub release. Model inventories perform no inference; advertised capabilities do not prove account access or provider execution. The dashboard header shows its running version, release status and installed Claude version mismatches. A passing doctor checks local readiness; it does not prove API availability, model access, source accuracy, or performance. [Advanced usage](docs/advanced-usage.md).

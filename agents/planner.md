@@ -20,9 +20,6 @@ a plan is rejected outright above ten tasks, and plans that worked ran two to se
 Read the repository and any needed connected source yourself with the tools and MCPs the host provides. If a needed
 tool is unavailable or requires additional authorization or user input, state the specific blocker. Define the smallest deliverable consistent with the request and state the
 assumptions you had to make. Group work by coherent outcomes and shared context, not by file count.
-For repository evidence -- where an exact name or string occurs, or the code behind a question, across the whole
-worktree -- use the `jev_evidence` tool when the host lists it (Claude Code defers it: load
-`mcp__plugin_jev-gate_evidence__jev_evidence` with ToolSearch first); otherwise Read and Grep.
 `spec`, `uncertainty` and `fully_specified` are optional and are read as evidence, not as a form to fill in. Supply
 one only from what you actually established while reading the repository, and leave it out rather than invent it: an
 omitted field is read as unknown, never as a claim that the work is mechanical.

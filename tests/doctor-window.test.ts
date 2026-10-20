@@ -22,7 +22,7 @@ beforeAll(() => {
   out = join(root, 'dist');
   const r = spawnSync(process.execPath, [join(__dirname, '..', 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(__dirname, '..', 'tsconfig.json'), '--outDir', out], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
-  for (const d of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
+  for (const d of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
   mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
   writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
   writeFileSync(join(out, 'compact-hook.js'), '// Fake classic compact bundle; Doctor only checks that it is there.\n');

@@ -47,13 +47,7 @@ export type TracePhase =
   | 'worktree_result'
   /** A23: the plan-interpretation pair, joined by a shared `request_id` like every other gate call. */
   | 'interpretation_intent'
-  | 'interpretation_result'
-  /** The evidence MCP server records only bounded metadata; source text and goals stay out. */
-  | 'evidence_start'
-  | 'evidence_jev_intent'
-  | 'evidence_jev_result'
-  | 'evidence_cache'
-  | 'evidence_result';
+  | 'interpretation_result';
 
 
 /**
