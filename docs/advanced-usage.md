@@ -31,7 +31,7 @@ New automatic atomic jobs carry the user request verbatim. If the request or com
 A missing key, a missing Function Hooks flag, and an unsupported fork profile are different. The flag does not affect Gate.
 
 - No `prompt_id`, a slash command, a child caller, or blank input: no admission request.
-- The session cannot run a fresh owned worker, or a concrete `CLAUDE_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` is set: `auto` stays native (`host_unsupported`) and do not send. [Background execution](#background-execution-and-worktrees).
+- The session cannot run a fresh owned worker, or `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` is set: `auto` stays native (`host_unsupported`) and do not send. A concrete `CLAUDE_CODE_SUBAGENT_MODEL` alone is the default model of a child that names none; owned roles and routed spawns override it, so it blocks nothing. [Background execution](#background-execution-and-worktrees).
 - Depth below the floor: the turn stays direct and Gate A is not asked. [Floor](#depth-floor).
 - The composed answer says the turn is not worth delegating, forbids delegation, or is otherwise not admitted: direct, no planner, no guard.
 - Invalid config, other than an explicit `off`: the hook reports the error and preserves the call. It is not treated as "no file".

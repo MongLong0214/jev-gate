@@ -28,8 +28,13 @@ export interface HostPins {
   mainModel: boolean;
   /** CLAUDE_CODE_EFFORT_LEVEL: the root effort was chosen outside this plugin. */
   mainEffort: boolean;
-  /** CLAUDE_CODE_SUBAGENT_MODEL or its _FORCE form: the host overrides every child model anyway. */
+  /** CLAUDE_CODE_SUBAGENT_MODEL_FORCE: the host overrides every child model anyway. */
   subagentModel: boolean;
+  /**
+   * CLAUDE_CODE_SUBAGENT_MODEL without _FORCE, as written: no pin but the model of a child whose call and definition
+   * name none (2.1.251+); a call's or a definition's model, a routed one among them, outranks it.
+   */
+  subagentDefault?: string;
   /** ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL: an alias no longer names the model this table describes. */
   aliasRemap: boolean;
 }
@@ -141,6 +146,8 @@ export const hostSupported = (base: string | undefined): boolean => {
   return m !== null && Number(m[1]) >= 282;
 };
 const INHERITING_BUILT_INS = new Set(['general-purpose', 'claude', 'Plan', 'Explore']);
+/** The inheriting built-ins whose definitions name no model; Plan's and Explore's `inherit` is a definition's own. */
+const UNNAMED_BUILT_INS = new Set(['general-purpose', 'claude']);
 const EXPLORE_FAMILIES = new Set(['haiku', 'sonnet', 'opus']);
 /** The built-ins whose definitions withhold Edit, Write and NotebookEdit (2.1.301); the other two hold every tool. */
 const READ_ONLY_BUILT_INS = new Set(['Plan', 'Explore']);
@@ -1304,15 +1311,21 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     return explicit ?? (e.fork || inheritSkip(e) === null ? e.parentModel : null);
   };
 
+  /** The host's default subagent model when this spawn runs it: a built-in whose definition names no model, called without one. */
+  const hostDefault = (e: SpawnEvent, pins: HostPins): string | null =>
+    !e.fork && !e.model?.trim() && UNNAMED_BUILT_INS.has(e.subagentType) && pins.subagentDefault ? pins.subagentDefault : null;
+
   /**
-   * Whether a differing model is really a mismatch: a model pin overrides every child model, and an alias remap changes
-   * what an alias names. Only a mismatch pays for these reads, bounded like the dispatch's own; unread, it stays unknown.
+   * Whether a differing model is really a mismatch: a model pin overrides every child model, a default subagent model
+   * replaces the parent's for a built-in that names none, and an alias remap changes what an alias names. Only a
+   * mismatch pays for these reads, bounded like the dispatch's own; unread, it stays unknown.
    */
-  const nativeMismatch = async (engine: RouterEngine, requested: string, observed: string, own: AbortSignal): Promise<string | null> => {
+  const nativeMismatch = async (engine: RouterEngine, e: SpawnEvent, requested: string, observed: string, own: AbortSignal): Promise<string | null> => {
     const wait = budget(engine, engine.now() + config.timeoutMs, own);
     try {
       const [pins, aliases] = await within(Promise.all([pinsOf(engine, 'spawn', wait.signal), aliasesOf(engine)]), wait.signal);
-      const resolved = aliases[requested] ?? requested;
+      const expected = hostDefault(e, pins) ?? requested;
+      const resolved = aliases[expected] ?? expected;
       return pins.subagentModel ? null : resolved;
     } catch { return null; }
     finally { wait.dispose(); }
@@ -1377,7 +1390,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (pins.aliasRemap && !engine.modelAliases) return spawnSkip(engine, e, 'alias_remapped');
     const aliases = await within(aliasesOf(engine), live);
     const available = await within(engine.availableModels().catch(() => []), live);
-    const native = explicit ?? (declared && declared !== 'inherit' ? declared : e.parentModel);
+    const native = explicit ?? (declared && declared !== 'inherit' ? declared : hostDefault(e, pins) ?? e.parentModel);
     const baselineModel = aliases[native] ?? native;
     const catalog = claudeCandidates({ baseline: baselineModel, aliases, allowFable,
       ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), scope: 'spawn', preferences: Object.values(config.tiers) });
@@ -1459,7 +1472,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const ev: E = native ? { ...e, parentModel: native } : e;
     let plan: SpawnPlan | null = null;
     let baselineAllowed = claudeTargetAllowed(ev.model ?? ev.parentModel, config.allowFable);
-    // Only an agent that inherits its parent's model runs on the native one; a declared model is the agent's own.
+    // Only an agent that inherits its parent's model runs on the native one; a declared model, or the host's default
+    // subagent model for one that names none, is the agent's own.
     let inherits = false;
     try {
       const allowFable = await within(frontierFor(engine), wait.signal);
@@ -1467,7 +1481,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       baselineAllowed = claudeTargetAllowed(aliases[ev.model ?? ev.parentModel] ?? ev.model ?? ev.parentModel, allowFable);
       plan = await spawnTarget(engine, ev, wait.signal, own);
       // The native model is restored only while it may still be sent, by the checks every target passes.
-      inherits = native !== null && !e.model?.trim() && (inheritSkip(ev) === null ||
+      inherits = native !== null && !e.model?.trim() && (inheritSkip(ev) === null && hostDefault(ev, await within(pinsOf(engine, 'spawn', wait.signal), wait.signal)) === null ||
         await within(engine.agentModel?.(e.subagentType).catch(() => null) ?? Promise.resolve(null), wait.signal) === 'inherit') &&
         await nativeAllowed(engine, native, wait.signal).catch(() => false);
     } catch {
@@ -1536,7 +1550,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         }
       } else {
         let requested = nativeExpected(e);
-        if (requested !== null && result.deny === undefined && !sameModel(requested, result.model)) requested = await nativeMismatch(engine, requested, result.model, own);
+        if (requested !== null && result.deny === undefined && !sameModel(requested, result.model)) requested = await nativeMismatch(engine, e, requested, result.model, own);
         log(engine, result.deny !== undefined
           ? { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, denied: true }
           : { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, observed: result.model, agent_id: result.agentId ?? null,

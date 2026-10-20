@@ -311,7 +311,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const o = subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL: launch('CLAUDE_CODE_SUBAGENT_MODEL'), CLAUDE_CODE_SUBAGENT_MODEL_FORCE: launch('CLAUDE_CODE_SUBAGENT_MODEL_FORCE') });
     const overrideEffect = gated ? `mode=${mode} stays native on every prompt as host_unsupported and sends no Jev request` : 'eligible calls are preserved (no routing)';
     if (o.force) say(gated ? 'fail' : 'warn', `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1: every subagent model is overridden; ${overrideEffect}`);
-    else if (o.concrete) say(gated ? 'fail' : 'warn', `CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; ${overrideEffect}`);
+    else if (o.concrete) say('info', `CLAUDE_CODE_SUBAGENT_MODEL=${o.value} is the default model of a child that names none; owned roles and routed spawns override it`);
     else if (o.value === 'inherit') say('info', 'CLAUDE_CODE_SUBAGENT_MODEL=inherit is treated as unset on v2.1.196+ (harmless)');
     else say('ok', 'no CLAUDE_CODE_SUBAGENT_MODEL override');
     const fork = launch('CLAUDE_CODE_FORK_SUBAGENT');
@@ -348,7 +348,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       if (!isRecord(s)) return;
       if ('apiKeyHelper' in s) say('warn', 'settings.json has apiKeyHelper: the session may not use subscription OAuth');
       const env = isRecord(s['env']) ? Object.keys(s['env']) : [];
-      const risky = env.filter((k) => k.startsWith('ANTHROPIC_') || k.startsWith('CLAUDE_CODE_SUBAGENT_MODEL') || k === 'CLAUDE_CODE_FORK_SUBAGENT' || k === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS');
+      const risky = env.filter((k) => k.startsWith('ANTHROPIC_') || k === 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE' || k === 'CLAUDE_CODE_FORK_SUBAGENT' || k === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS');
       if (risky.length) say('warn', `settings.json env sets ${risky.join(', ')} (names only; not modified)`);
     } catch {
       say('warn', 'cannot parse ~/.claude/settings.json');

@@ -712,7 +712,7 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
   const authEnv = AUTH_CONFLICT_ENV.filter((k) => process.env[k]);
   if (authEnv.length) errors.push(`API-key/gateway/cloud env active (${authEnv.join(', ')})`);
   const override = subagentModelOverride(process.env);
-  if ((override.concrete || override.force) && !o.allowEnvConflicts) errors.push('CLAUDE_CODE_SUBAGENT_MODEL/FORCE override would replace role models; unset it or pass --allow-env-conflicts');
+  if (override.force && !o.allowEnvConflicts) errors.push('CLAUDE_CODE_SUBAGENT_MODEL_FORCE override would replace role models; unset it or pass --allow-env-conflicts');
   if (process.env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') errors.push('CLAUDE_CODE_FORK_SUBAGENT=1 conflicts with the foreground launch profile');
   const observed = ['CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE', 'CLAUDE_CODE_FORK_SUBAGENT', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', 'JEV_GATE_CONFIG', 'JEV_GATE_STATE_DIR', 'JEV_GATE_EXPERIMENT_ADMISSION'];
   const env_observed: Record<string, string | null> = {};
@@ -736,7 +736,7 @@ export const preflight = (o: Options, needsJev: boolean): Preflight => {
     claude_version: version.status === 0 ? version.stdout.trim() : null,
     auth,
     auth_reason,
-    env_conflicts: [...authEnv, ...(override.concrete || override.force ? ['CLAUDE_CODE_SUBAGENT_MODEL'] : [])],
+    env_conflicts: [...authEnv, ...(override.force ? ['CLAUDE_CODE_SUBAGENT_MODEL_FORCE'] : [])],
     env_observed,
     typesafe_key_present,
     plugin_hook_present,

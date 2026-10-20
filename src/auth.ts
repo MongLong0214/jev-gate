@@ -41,8 +41,11 @@ export const isSubscriptionOAuth = (s: AuthStatus): boolean => s.loggedIn && s.a
 export const AUTH_CONFLICT_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'] as const;
 
 /**
- * A concrete CLAUDE_CODE_SUBAGENT_MODEL value overrides owned-role models; the documented `inherit` value is treated as unset
- * from v2.1.196 and is therefore harmless. FORCE=1 makes any value (or the main model) override everything.
+ * Since Claude Code 2.1.251 a concrete CLAUDE_CODE_SUBAGENT_MODEL value is only the default model of a child that names
+ * none: an agent definition's `model:` (every owned role has one) and a per-spawn model take precedence. The documented
+ * `inherit` value is treated as unset from v2.1.196 and is therefore harmless. FORCE=1 (2.1.257) makes the value (or the
+ * main model) override everything, so only `force` pins a child's model. No owned role's model runs on a host before
+ * 2.1.257 (`minimumHostRelease` in src/claude-models.ts), and the Router refuses one before 2.1.282.
  */
 export const subagentModelOverride = (env: Record<string, string | undefined>): { concrete: boolean; force: boolean; value: string | null } => {
   const raw = env['CLAUDE_CODE_SUBAGENT_MODEL'];

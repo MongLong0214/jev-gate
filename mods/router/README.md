@@ -153,7 +153,7 @@ The standalone names omit the `router` prefix where listed below. Existing names
 | `routerTimeoutMs` | `timeoutMs` | 800 | Total preparation budget, 50–30000ms |
 | `routerLogDecisions` | `logDecisions` | true | Optional diagnostics |
 
-`ANTHROPIC_MODEL` pins the root model; `CLAUDE_CODE_EFFORT_LEVEL` pins effort; `CLAUDE_CODE_SUBAGENT_MODEL` and its `_FORCE` form pin child model resolution. `ANTHROPIC_DEFAULT_*_MODEL` maps an alias to its actual ID and does not disable all routing. Unreadable pin/allowlist facts are conservative. Plugin option changes reload the activation; no polling watcher or global model rewrite is installed.
+`ANTHROPIC_MODEL` pins the root model; `CLAUDE_CODE_EFFORT_LEVEL` pins effort; `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` pins child model resolution. `CLAUDE_CODE_SUBAGENT_MODEL` alone (Claude Code 2.1.251+) is the default model of a child that names none, which owned roles and routed spawns override; a general-purpose or claude spawn and a custom agent without `model:` are compared against it rather than the parent's model. `ANTHROPIC_DEFAULT_*_MODEL` maps an alias to its actual ID and does not disable all routing. Unreadable pin/allowlist facts are conservative. Plugin option changes reload the activation; no polling watcher or global model rewrite is installed.
 
 ## Diagnostics and verification
 

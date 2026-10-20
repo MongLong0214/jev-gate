@@ -243,12 +243,19 @@ describe('doctor: a launch profile that lets an admitted job reach a worker (#48
     expect(expectFail(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }, cwd))).toContain('fork=1');
   });
 
-  it('fails in auto mode under a subagent model override, which every owned Agent call refuses', () => {
-    const r = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_SUBAGENT_MODEL: 'opus' });
+  it('fails in auto mode under a forced subagent model, which every owned Agent call refuses', () => {
+    const forced = { CLAUDE_CODE_SUBAGENT_MODEL: 'opus', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' };
+    const r = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CODE_FORK_SUBAGENT: '0', ...forced });
     expect(r.status).toBe(1);
-    expect(r.stdout).toMatch(/\[fail\] CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; mode=auto stays native on every prompt as host_unsupported/);
-    const off = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'off' }), CLAUDE_CODE_SUBAGENT_MODEL: 'opus' });
-    expect(off.stdout).toMatch(/\[warn\] CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; eligible calls are preserved/);
+    expect(r.stdout).toMatch(/\[fail\] CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1: every subagent model is overridden; mode=auto stays native on every prompt as host_unsupported/);
+    const off = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'off' }), ...forced });
+    expect(off.stdout).toMatch(/\[warn\] CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1: every subagent model is overridden; eligible calls are preserved/);
+  });
+
+  it('reports a concrete subagent model without _FORCE as the default of a child that names none', () => {
+    const r = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_SUBAGENT_MODEL: 'opus' });
+    expect(r.stdout).toMatch(/\[info\] CLAUDE_CODE_SUBAGENT_MODEL=opus is the default model of a child that names none; owned roles and routed spawns override it/);
+    expect(r.stdout).not.toMatch(/\[(fail|warn)\][^\n]*SUBAGENT_MODEL/);
   });
 
   it('reads the profile from the user settings env too, and lets it win over the shell', () => {

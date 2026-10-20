@@ -5,7 +5,7 @@ import { JEV_ENDPOINT, JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
 import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
-import type { RootRecord, SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
+import type { HostPins, RootRecord, SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { cachePatch, createRouter, hostSupported, ROUTER_HOOK_VERSION, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
 import type { Responder } from './fake-engine.ts';
 import { answering, choice, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext, warmRoot } from './fake-engine.ts';
@@ -993,6 +993,25 @@ describe('spawn model', () => {
     expect(n.calls).toEqual([spawn({ subagentType: type })]);
     expect(f.logs).toContainEqual({ event: 'spawn', tool_use_id: 'tu1', type: 'other', skipped: 'type_unverified' });
     expect(JSON.stringify(f.logs)).not.toContain(type);
+  });
+
+  it("compares a built-in that names no model with the host's default subagent model, not its parent's", async () => {
+    const run = async (subagentDefault: string, tier: string) => {
+      const router = createRouter(configOf(SPAWN_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: [tier, 0.95], effort: ['high', 0.95] }), pins: { subagentDefault } });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      const e = spawn({ subagentType: 'general-purpose' });
+      const n = spawnNext();
+      await router.agentSpawn(f.engine, e, n.next);
+      return { e, calls: n.calls, logs: f.logs };
+    };
+    // Under an Opus parent: read as Opus, a standard answer was a move down to Sonnet, above the Haiku the host runs.
+    const up = await run('haiku', 'standard');
+    expect(up.calls).toEqual([up.e]);
+    expect(up.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-haiku-5-5', reasons: expect.objectContaining({ model: 'tool_ceiling' }) }));
+    const down = await run('opus', 'fast');
+    expect(down.calls).toEqual([{ ...down.e, model: 'claude-sonnet-5-5' }]);
+    expect(down.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-opus-5-5' }));
   });
 
   describe('a custom agent\'s file model', () => {
@@ -2420,7 +2439,7 @@ describe('bounded child history question feasibility (#140)', () => {
 
 describe('native spawn outcome observability', () => {
   const NATIVE = { ...SPAWN_ONLY, routeExplicitSpawnModel: false, routeSubagentEffort: false };
-  const nativeRecord = async (e: SpawnEvent, observed: string, over: { pins?: Record<string, boolean>; offer?: string; cfg?: Partial<typeof NATIVE> } = {}) => {
+  const nativeRecord = async (e: SpawnEvent, observed: string, over: { pins?: Partial<HostPins>; offer?: string; cfg?: Partial<typeof NATIVE> } = {}) => {
     const router = createRouter(configOf({ ...NATIVE, ...over.cfg }));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95] }), ...(over.pins ? { pins: over.pins } : {}) }); router.agentOffer(OFFER_BUILT_IN(over.offer ?? 'general-purpose'));
     const n = spawnNext(() => ({ model: observed, agentId: 'child' }));
@@ -2462,6 +2481,12 @@ describe('native spawn outcome observability', () => {
       expect(record).toMatchObject({ requested: null, observed: 'claude-sonnet-5-5', confirmation: 'unobserved' });
       expect(record).not.toHaveProperty('reason');
     }
+  });
+
+  it("expects the host's default subagent model for a built-in that names none, and still the parent's for Plan's inherit", async () => {
+    const effortOnly = { routeSubagentModel: false, routeSubagentEffort: true };
+    expect(await nativeRecord(spawn({ subagentType: 'general-purpose' }), 'claude-haiku-5-5', { pins: { subagentDefault: 'haiku' }, cfg: effortOnly })).toMatchObject({ requested: 'claude-haiku-5-5', confirmation: 'confirmed' });
+    expect(await nativeRecord(spawn({ subagentType: 'Plan' }), 'claude-opus-5-5', { offer: 'Plan', pins: { subagentDefault: 'haiku' }, cfg: effortOnly })).toMatchObject({ requested: 'claude-opus-5-5', confirmation: 'confirmed' });
   });
 
   it('leaves a model pin unconfirmed whatever the call named', async () => {
@@ -2837,6 +2862,17 @@ describe('root baseline across a resume', () => {
     expect(n.calls.map(c => [c.model, c.effort])).toEqual([['claude-opus-5-5', 'xhigh'], ['claude-opus-5-5', 'xhigh']]);
     expect(store.get('session')).toMatchObject({ native: { model: 'claude-opus-5-5', effort: 'xhigh' }, drift: { model: 'claude-haiku-5-5' } });
     expect(s.f.sent).toHaveLength(1);
+  });
+
+  it("leaves a built-in that names no model on the host's default subagent model while the main loop drifts", async () => {
+    const resumed = processOf(DRIFTED(), KEEP, undefined, { routeSubagentModel: true });
+    resumed.f.pins.subagentDefault = 'haiku';
+    await turn(resumed, 't1', 'claude-haiku-5-5', 'medium', 40);
+    resumed.router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const main = spawnNext();
+    await resumed.router.agentSpawn(resumed.f.engine, spawn({ subagentType: 'general-purpose', parentModel: 'claude-haiku-5-5' }), main.next);
+    // Restoring the native Opus here would run the child above the Haiku the host gives it.
+    expect(main.calls[0]?.model).toBeUndefined();
   });
 
   it("keeps a custom agent's declared model while the main loop drifts; only an inheriting agent takes the native one", async () => {

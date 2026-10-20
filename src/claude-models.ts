@@ -161,12 +161,15 @@ export const parseFrontmatter = (text: string): Frontmatter => {
   return { fields, lists, error: null };
 };
 
-/** The `model:` an agent file declares: absent or `inherit` is 'inherit', unparsable is null. */
-export const frontmatterModel = (text: string): string | null => {
+/**
+ * The `model:` an agent file declares: `inherit` is 'inherit', absent is `absent` (the host's default subagent model
+ * when one is set, else 'inherit'), unparsable is null.
+ */
+export const frontmatterModel = (text: string, absent = 'inherit'): string | null => {
   const { fields, error } = parseFrontmatter(text);
   if (error) return null;
   const model = fields['model']?.replace(/^(["'])(.*)\1$/, '$2').trim();
-  return model && model !== 'inherit' ? model : 'inherit';
+  return model || absent;
 };
 
 /** The tools that change files. Bash can too (a shell or Python write), so it is read with them below. */

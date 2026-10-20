@@ -2153,7 +2153,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const text =
         blocker === 'background_only'
           ? 'jev-gate: mode=auto, but this session has no verified fresh owned Agent profile, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code with CLAUDE_CODE_FORK_SUBAGENT=0; otherwise set mode to off.'
-          : 'jev-gate: mode=auto, but CLAUDE_CODE_SUBAGENT_MODEL pins every subagent\'s model, which each owned Agent call refuses, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code without that override; otherwise set mode to off.';
+          : 'jev-gate: mode=auto, but CLAUDE_CODE_SUBAGENT_MODEL_FORCE pins every subagent\'s model, which each owned Agent call refuses, so no admitted job could reach a worker. Every prompt stays native and sends no Jev request. To use the gate, start Claude Code without that override; otherwise set mode to off.';
       const stdout = renderSystemMessage(text);
       return stdout === null ? skip('host_unsupported') : { kind: 'notice', code: 'host_unsupported', stdout };
     }
