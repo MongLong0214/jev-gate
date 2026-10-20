@@ -3,7 +3,6 @@ import { dirname, join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from '../codex-paths.js';
-import { loadConfig } from '../evidence/source.js';
 import { startDashboard, dashboardSources } from '../dashboard.js';
 import { ensureDashboard, serveAutomaticDashboard } from '../dashboard-launch.js';
 import { dashboardPreferenceCommand } from '../dashboard-settings.js';
@@ -48,7 +47,7 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
     const mcp: unknown = JSON.parse(readFileSync(join(root, '.mcp.json'), 'utf8'));
     const servers = obj(mcp) && obj(mcp['mcpServers']) ? mcp['mcpServers'] : {};
     const evidence = servers['jev_gate_evidence'];
-    check(obj(evidence) && evidence['command'] === 'node' && JSON.stringify(evidence['args']) === JSON.stringify(['dist/server.mjs', '--codex']) && evidence['cwd'] === '.', 'Evidence MCP: packaged server command and workspace');
+    check(obj(evidence) && evidence['command'] === 'node' && JSON.stringify(evidence['args']) === JSON.stringify(['dist/server.mjs', '--codex']) && evidence['cwd'] === '.', 'Plugin MCP: packaged server command and workspace');
     const tools = obj(evidence) && obj(evidence['tools']) ? evidence['tools'] : {};
     check(obj(tools['jev_agent']) && tools['jev_agent']['approval_mode'] === 'approve', 'Owned Agent MCP: native approval remains required');
   } catch { check(false, 'Codex package metadata: invalid JSON or unreadable file'); }
@@ -59,13 +58,6 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
     if (!issue) { try { say('info', `recorded files: ${readdirSync(path).filter(f => f.endsWith('.json')).length} (file count is not proof of policy execution)`); } catch { say('info', 'recorded files: unknown; trace directory is not present or readable yet'); } }
   } catch { check(false, 'trace: set an absolute JEV_CODEX_TRACE_DIR'); }
   diagnosis.group('configuration');
-  const automatic = env['JEV_CODEX_WORKSPACE'] === undefined && env['JEV_EVIDENCE_CONFIG'] === undefined;
-  if (automatic) say('info', 'Evidence workspace: selected automatically from native MCP call metadata; the calling native thread supplies its Git worktree. No workspace export is required; doctor cannot confirm a future calling thread.');
-  else {
-    const load = await loadConfig(env, { host: 'codex', cwd: env['JEV_CODEX_WORKSPACE'] ?? '' });
-    check(load.ok, 'Evidence workspace override: explicit configuration must be valid');
-    say('info', load.ok ? `Evidence scope: ${load.config.projectRoot}` : `Invalid explicit override; current directory ${cwd} is not substituted.`);
-  }
   say('info', `hooks: ${env['JEV_CODEX_ENABLED'] === '0' ? 'disabled by JEV_CODEX_ENABLED=0' : 'enabled by configuration; use /hooks in Codex to review trust and execution'}`);
   try {
     const policy = loadCodexPolicy(env);

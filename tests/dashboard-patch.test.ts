@@ -103,12 +103,12 @@ describe('dashboard frame patches', () => {
       const write = (name: string, value: object) => writeFileSync(join(trace, name), JSON.stringify(value));
       const at = (s: number) => new Date(Date.now() - 60_000 + s * 1000).toISOString();
       const feed = stream(), env = { HOME: trace, JEV_GATE_STATE_DIR: trace }, load = () => loadActivity({ traceDir: trace, env });
-      const result = (request_id: string, written_at: string, extra: object) => ({ host: 'codex', session_id: `s-${request_id}`, phase: 'evidence_result', request_id, written_at, backend: 'local', items: 0, remote_calls: 0, cache_hits: 0, duration_ms: 0, ...extra });
-      write('e1.json', result('e1', at(1), { status: 'unavailable', is_error: true, reason_codes: ['unavailable_config'] }));
+      const result = (request_id: string, written_at: string, extra: object) => ({ host: 'codex', session_id: `s-${request_id}`, phase: 'admission_result', request_id, written_at, attempted: true, decision: { shape: 'direct' }, ...extra });
+      write('e1.json', result('e1', at(1), { http: { status: 0, code: 'network' } }));
       let next = load(); const failed = next.operations.runs[0]!;
-      expect(failed).toMatchObject({ state: 'attention', steps: [{ impact: { now: 'unknown' } }] }); expect(next.operations.attention).toBe(1);
+      expect(failed).toMatchObject({ state: 'attention', steps: [{ impact: { now: 'unknown' } }, { lane: 'policy' }] }); expect(next.operations.attention).toBe(1);
       feed(next);
-      write('e2.json', result('e2', at(2), { status: 'ok', is_error: false, items: 2, reason_codes: [] }));
+      write('e2.json', result('e2', at(2), { http: { status: 200, code: 'ok' } }));
       next = load();
       const { patch, held } = feed(next), sent = JSON.parse(patch!) as { ops: Record<string, unknown>; runs: Record<string, { meta: OperationRun; put: Record<string, OperationStep> }> };
       expect(sent.ops['attention']).toBe(0);
@@ -116,7 +116,7 @@ describe('dashboard frame patches', () => {
       expect(Object.values(sent.runs[failed.id]!.put)).toMatchObject([{ state: 'error', impact: { now: 'later_ok', lastState: 'done' } }]);
       same(held, next);
       const runs = (held['operations'] as { runs: OperationRun[] }).runs;
-      expect(runs.find(r => r.id === failed.id)).toMatchObject({ state: 'past_error', steps: [{ state: 'error', impact: { now: 'later_ok' } }] });
+      expect(runs.find(r => r.id === failed.id)).toMatchObject({ state: 'past_error', steps: [{ state: 'error', impact: { now: 'later_ok' } }, { lane: 'policy' }] });
     });
   });
 });

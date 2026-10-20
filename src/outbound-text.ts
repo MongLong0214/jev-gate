@@ -1,5 +1,5 @@
 /**
- * Checks applied to text before it leaves the machine. Evidence and the recent-prompt context use them, and
+ * Checks applied to text before it leaves the machine. The gate hook and the recent-prompt context use them, and
  * `src/router-secret.ts` carries a copy of the screen that `tests/router/secret-parity.test.ts` keeps identical.
  */
 

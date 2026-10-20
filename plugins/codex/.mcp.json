@@ -20,8 +20,6 @@
         "JEV_CODEX_CONFIG",
         "JEV_GATE_STATE_DIR",
         "JEV_GATE_MODE",
-        "JEV_CODEX_WORKSPACE",
-        "JEV_EVIDENCE_CONFIG",
         "TYPESAFE_API_KEY",
         "JEV_CODEX_TRACE_DIR",
         "JEV_GATE_TRACE_DIR",

@@ -1,5 +1,5 @@
 // Keeps the marketplace's archive pins true to what the release builds. From v0.6.0 the marketplace lists one plugin,
-// jev-gate, which runs from build output that is not committed (the gate's dist and the evidence server's bundle), so
+// jev-gate, which runs from build output that is not committed (the gate's dist and the MCP server's bundle), so
 // its entry is a release archive pinned by SHA-256 rather than a relative path that would install without it. A
 // source-directory entry, as the Function Hooks Mods had until v0.5.1, is still checked if one is listed.
 // Usage, after `npm run build`:
@@ -28,7 +28,6 @@ const MANIFESTS = [
   '.claude-plugin/plugin.json',
   'mods/compact/.claude-plugin/plugin.json',
   'mods/router/.claude-plugin/plugin.json',
-  'plugins/evidence/.claude-plugin/plugin.json',
   'plugins/codex/.codex-plugin/plugin.json',
 ];
 
@@ -61,7 +60,7 @@ const tag = flag('tag');
 if (tag !== null && tag !== `v${version}`) fail(`tag ${tag} does not name package.json's version ${version}`);
 
 // The pack profile that builds each archive entry the marketplace may list; jev-gate is required.
-const PROFILES = { 'jev-gate': 'legacy', 'jev-gate-evidence': 'evidence' };
+const PROFILES = { 'jev-gate': 'legacy' };
 const entryOf = (m, name) => m.plugins.find((p) => p.name === name);
 
 const marketplace = readJson(MARKETPLACE_PATH);

@@ -1,11 +1,10 @@
 // Builds a distributable local plugin archive (#18): compiled hook + modules, manifest, hooks, agents, docs.
-// Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|router|evidence|codex]
+// Usage: node scripts/pack.mjs [outDir] [--root <pluginRoot>] [--profile legacy|router|codex]
 //   legacy (default) → <outDir>/jev-gate-<version>.zip         six routing roles, the V5 hook set,
-//                                                              the two Mods and the evidence server (the one plugin)
+//                                                              the two Mods and the MCP server (the one plugin)
 //   router (JGR-01)  → <outDir>/jev-gate-router-<version>.zip  the Function Hooks Mod in mods/router, at its own version
-//   evidence (JGE-03) → <outDir>/jev-gate-evidence-<version>.zip the bundled jev_evidence MCP server in plugins/evidence
-//   codex → <outDir>/jev-gate-codex-<version>.zip native Codex hooks, Evidence MCP, skills and dashboard
-// legacy, evidence and codex require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
+//   codex → <outDir>/jev-gate-codex-<version>.zip native Codex hooks, MCP server, skills and dashboard
+// legacy and codex require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
 // The archive is written here rather than by the zip CLI, so one tree gives the same bytes on any machine: the marketplace pins
 // the legacy archive's SHA-256 before a release is tagged, and scripts/release.mjs check rebuilds it to compare.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -19,7 +18,7 @@ const flag = (name) => {
 };
 const root = flag('root') ? resolve(flag('root')) : dirname(dirname(fileURLToPath(import.meta.url)));
 const profile = flag('profile') ?? 'legacy';
-if (!['legacy', 'router', 'evidence', 'codex'].includes(profile)) {
+if (!['legacy', 'router', 'codex'].includes(profile)) {
   process.stderr.write(`pack: unknown profile ${profile}\n`);
   process.exit(1);
 }
@@ -47,13 +46,10 @@ const ROUTER = 'mods/router';
 const routerHooks = () =>
   existsSync(join(root, ROUTER, 'hooks')) ? readdirSync(join(root, ROUTER, 'hooks')).filter((n) => n.endsWith('.ts') || n === 'hooks.json').sort() : [];
 
-// The evidence archive is the plugin directory with its one bundled server: nothing of dist/, hooks or agents.
-const EVIDENCE = 'plugins/evidence';
-const EVIDENCE_FILES = ['.claude-plugin/plugin.json', 'dist/server.mjs', 'skills/evidence/SKILL.md', 'README.md'];
 const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'dist/activity-worker.mjs', 'skills/jev-gate/SKILL.md', 'README.md'];
 
 // The one jev-gate plugin (v0.6.0) also carries the two Mods, loaded through hooks/register.ts from their source, and
-// the evidence server with its skill, at the paths the manifest and that module name.
+// the MCP server bundle, at the paths the manifest and that module name.
 const modSources = () =>
   ['compact', 'router'].flatMap((m) =>
     readdirSync(join(root, 'mods', m, 'hooks'))
@@ -61,9 +57,8 @@ const modSources = () =>
       .sort()
       .map((n) => `mods/${m}/hooks/${n}`),
   );
-const EVIDENCE_IN_PLUGIN = [`${EVIDENCE}/dist/server.mjs`, `${EVIDENCE}/skills/evidence/SKILL.md`];
 const ROUTER_SHARED = ['cost', 'provider-prices', 'provider-prices-data', 'route-cost', 'claude-cache', 'router-answers', 'router-selection', 'router-context', 'router-child-context', 'router-secret', 'claude-models', 'claude-candidates', 'frontier-routing'].map(n => `src/${n}.ts`);
-const shared = () => ['hooks/register.ts', ...modSources(), ...ROUTER_SHARED, ...EVIDENCE_IN_PLUGIN];
+const shared = () => ['hooks/register.ts', ...modSources(), ...ROUTER_SHARED, 'plugins/evidence/dist/server.mjs'];
 // Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo and results banner are the
 // README's images, each with its dark-theme variant. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.
 const INSTALL_DOCS = [
@@ -71,7 +66,6 @@ const INSTALL_DOCS = [
   'docs/advanced-usage.md',
   'docs/bench-ab.md',
   'bench/ab/tasks.example.json',
-  'plugins/evidence/README.md',
   'plugins/codex/README.md',
   'mods/compact/README.md',
   'mods/router/README.md',
@@ -79,8 +73,6 @@ const INSTALL_DOCS = [
   'assets/readme/jev-gate-logo-dark.svg',
   'assets/readme/results.svg',
   'assets/readme/results-dark.svg',
-  'assets/readme/dashboard.svg',
-  'assets/readme/dashboard-dark.svg',
 ];
 
 // [source path relative to root, path inside the archive]. The hook set is the only file that is renamed.
@@ -88,8 +80,6 @@ const hostsDist = profile === 'legacy';
 const entries =
   profile === 'codex'
     ? CODEX_FILES.map((f) => [`plugins/codex/${f}`, f])
-    : profile === 'evidence'
-    ? EVIDENCE_FILES.map((f) => [`${EVIDENCE}/${f}`, f])
     : profile === 'router'
     ? [
         [`${ROUTER}/.claude-plugin/plugin.json`, '.claude-plugin/plugin.json'],
@@ -131,9 +121,7 @@ const name =
     ? `jev-gate-codex-${JSON.parse(readFileSync(join(root, 'plugins/codex/.codex-plugin/plugin.json'), 'utf8')).version}`
     : profile === 'router'
     ? `jev-gate-router-${manifestVersion(ROUTER)}`
-    : profile === 'evidence'
-      ? `jev-gate-evidence-${manifestVersion(EVIDENCE)}`
-      : `jev-gate-${pkg.version}`;
+    : `jev-gate-${pkg.version}`;
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
   for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;

@@ -64,7 +64,7 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
   if (event === 'SessionStart' && env['JEV_CODEX_BRIDGE_URL']) return { hookSpecificOutput: { hookEventName: event, additionalContext:
     'Jev Gate is connected to the native Codex session adapter. Gate A/B, plans, contract acceptance and root guard use the shared policies; Router uses official turn settings. Follow the current turn guidance and use jev_agent for owned dispatches. Native permissions and the user request remain authoritative. Do not claim unobserved policies or savings ran.' } };
   if (event === 'SessionStart') return { hookSpecificOutput: { hookEventName: event, additionalContext:
-    'Jev Gate native Codex plugin: jev_evidence provides repository evidence and hooks record lifecycle metadata. The installed plugin connects ordinary native Codex automatically. A session already open during installation retains its previous provider; use a fresh native session once connection is ready. This startup notice does not establish actual Gate or Router application; inspect recorded requests and never claim unobserved policies ran. See the Jev Gate skill for setup.' } };
+    'Jev Gate native Codex plugin: hooks record lifecycle metadata. The installed plugin connects ordinary native Codex automatically. A session already open during installation retains its previous provider; use a fresh native session once connection is ready. This startup notice does not establish actual Gate or Router application; inspect recorded requests and never claim unobserved policies ran. See the Jev Gate skill for setup.' } };
   return {};
 };
 

@@ -40,18 +40,6 @@ const SCENARIOS: Scenario[] = [
     ],
   },
   {
-    id: 'evidence-token-cap',
-    task: 'Raise the Evidence selector per-request token cap from 25,000 to 30,000 estimated tokens.',
-    candidates: [
-      { file: 'src/config.ts', anchor: 'export const MIGRATION_SAMPLE', lines: 12, label: 'unrelated' },
-      { file: 'src/evidence/types.ts', anchor: 'requestBytes: 128', lines: 3, label: 'required' },
-      { file: 'src/jev.ts', anchor: 'export const MAX_REQUEST_BYTES', lines: 3, label: 'related' },
-      { file: 'src/evidence/selector.ts', anchor: 'const overCap', lines: 4, label: 'required' },
-      { file: 'src/allocation.ts', anchor: 'export const ROUTE_QUESTION', lines: 10, label: 'unrelated' },
-      { file: 'mods/router/hooks/client.ts', anchor: 'export const MAX_REQUEST_TOKENS', lines: 1, label: 'related' },
-    ],
-  },
-  {
     id: 'compact-trim-order',
     task: 'Make the Compact selector drop the oldest candidates instead of the newest when the candidate request is over the cap.',
     candidates: [
@@ -88,39 +76,14 @@ const SCENARIOS: Scenario[] = [
     ],
   },
   {
-    id: 'evidence-page-size',
-    task: 'Raise the Evidence default page size from 8 to 12 candidates.',
-    candidates: [
-      { file: 'src/allocation.ts', anchor: 'export const ROUTE_QUESTION', lines: 6, label: 'unrelated' },
-      { file: 'src/evidence/selector.ts', anchor: 'for (let i = 0; i < sendable.length', lines: 4, label: 'related' },
-      { file: 'src/evidence/types.ts', anchor: 'windowLines: 40', lines: 8, label: 'required' },
-      { file: 'src/job.ts', anchor: 'export const RETENTION_MS', lines: 1, label: 'unrelated' },
-      { file: 'src/jev.ts', anchor: 'const statusToCode', lines: 10, label: 'unrelated' },
-      { file: 'src/evidence/types.ts', anchor: 'export const RELEVANT_FLOOR', lines: 2, label: 'related' },
-    ],
-  },
-  {
     id: 'price-entry',
     task: 'Add a price entry for a new model jev-1.15.0 at 0.05 dollars per million input tokens to the table the dashboard cost estimate reads.',
     candidates: [
       { file: 'src/dashboard-page.ts', anchor: 'const PRICES', lines: 1, label: 'related' },
       { file: 'src/trace.ts', anchor: 'export const TRACE_RETENTION_MS', lines: 1, label: 'unrelated' },
       { file: 'src/bench/usage.ts', anchor: 'export const JEV_PRICING', lines: 5, label: 'required' },
-      { file: 'src/evidence/types.ts', anchor: 'windowLines: 40', lines: 8, label: 'unrelated' },
       { file: 'src/bench/usage.ts', anchor: 'export const estimateJevCostUsd', lines: 6, label: 'related' },
       { file: 'scripts/pack.mjs', anchor: 'const ROUTER_SHARED', lines: 2, label: 'unrelated' },
-    ],
-  },
-  {
-    id: 'no-dependency',
-    task: 'Raise the Evidence result byte cap from 64 KiB to 128 KiB.',
-    candidates: [
-      { file: 'src/jev.ts', anchor: 'const statusToCode', lines: 10, label: 'unrelated' },
-      { file: 'src/evidence/types.ts', anchor: 'requestBytes: 128', lines: 2, label: 'related' },
-      { file: 'src/config.ts', anchor: 'export const MIGRATION_SAMPLE', lines: 12, label: 'unrelated' },
-      { file: 'mods/router/hooks/client.ts', anchor: 'export const MAX_RESPONSE_BYTES', lines: 1, label: 'related' },
-      { file: 'src/trace.ts', anchor: 'export const TRACE_RETENTION_MS', lines: 1, label: 'unrelated' },
-      { file: 'src/allocation.ts', anchor: 'export const ROUTE_QUESTION', lines: 6, label: 'unrelated' },
     ],
   },
 ];

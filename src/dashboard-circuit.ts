@@ -34,8 +34,8 @@ svg.wires line{stroke:var(--spark);stroke-dasharray:2 6}
 export const CIRCUIT_SCRIPT = `
 // The feature filter uses the steps the circuit shows, so a node that is waiting on a response never filters to an empty list.
 const circuitStep=s=>!s.lifecycle||s.title==='모델 · 응답 대기'||s.title==='모델 · 요청 실패';
-const CIRCUIT=['admission','allocation','planning','workers','guard','router','compact','evidence'];
-const NODE={admission:[['실행 형태','Execution path'],['형태','Path'],['실행 형태?','Execution path?']],allocation:[['등급 배정','Tier allocation'],['등급','Tier'],['등급?','Tier?']],planning:[['의존성 계획','Dependency plan'],['단계','Steps'],['단계 계획?','Plan steps?']],workers:[['수락 검사','Acceptance check'],['수락','Accept'],['수락?','Accept?']],guard:[['루트 도구 가드','Root tool guard'],['도구','Tool'],['도구 허용?','Allow tool?']],router:[['모델과 effort','Model and effort'],['모델','Model'],['이 턴 모델?','Model for this turn?']],compact:[['요약 대체','Summary replacement'],['유지','Kept'],['이 청크 유지?','Keep these chunks?']],evidence:[['근거 판정','Evidence judgment'],['근거','Evidence'],['근거 충분?','Evidence relevant?']]};
+const CIRCUIT=['admission','allocation','planning','workers','guard','router','compact'];
+const NODE={admission:[['실행 형태','Execution path'],['형태','Path'],['실행 형태?','Execution path?']],allocation:[['등급 배정','Tier allocation'],['등급','Tier'],['등급?','Tier?']],planning:[['의존성 계획','Dependency plan'],['단계','Steps'],['단계 계획?','Plan steps?']],workers:[['수락 검사','Acceptance check'],['수락','Accept'],['수락?','Accept?']],guard:[['루트 도구 가드','Root tool guard'],['도구','Tool'],['도구 허용?','Allow tool?']],router:[['모델과 effort','Model and effort'],['모델','Model'],['이 턴 모델?','Model for this turn?']],compact:[['요약 대체','Summary replacement'],['유지','Kept'],['이 청크 유지?','Keep these chunks?']]};
 // A Jev call is a measured response record; intents, policy follow-ups and host events are not calls.
 const isCall=s=>s.lane==='jev'&&s.durationMs!==undefined&&!s.lifecycle;
 // Jev traffic is every recorded Jev request and response; only a response is a call.

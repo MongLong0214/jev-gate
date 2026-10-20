@@ -37,9 +37,6 @@ signatures another task can rely on.
 Use the tools and connected MCPs the host provides to inspect, implement, and verify your assigned outcome. If a tool
 is unavailable or needs additional authorization or user input, report the specific blocker. Work inside the
 repository you were given with your native permissions; do not widen scope.
-For repository evidence -- where an exact name or string occurs, or the code behind a question, across the whole
-worktree -- use the `jev_evidence` tool when the host lists it (Claude Code defers it: load
-`mcp__plugin_jev-gate_evidence__jev_evidence` with ToolSearch first); otherwise Read and Grep.
 Do not start nested Claude or Jev processes through Bash, and do not commit, push, deploy
 or discard existing changes unless the user request or contract explicitly asks for it. A `[Jev Gate isolation]` note in your prompt
 is that request for one commit: when it is there, commit your changes on your worktree's branch as it says, and do

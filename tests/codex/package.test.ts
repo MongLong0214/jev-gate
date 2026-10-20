@@ -1,11 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { loadConfig } from '../../src/evidence/source.js';
 import { startDashboard } from '../../src/dashboard.js';
 import { liveFrames } from '../live-frames.js';
 import { resolveApiKey } from '../../src/credentials.js';
@@ -16,7 +15,7 @@ const staged = join(tmp, 'source');
 const installed = join(tmp, 'installed plugin');
 const project = join(tmp, 'workspace');
 const traces = join(tmp, 'records');
-const shellEnv = { PATH: process.env['PATH'] ?? '', HOME: tmp, CODEX_HOME: join(tmp, 'codex-home'), XDG_CONFIG_HOME: join(tmp, 'config'), XDG_STATE_HOME: join(tmp, 'state'), JEV_GATE_TRACE_DIR: join(tmp, 'claude-records'), JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_CODEX_TRACE_DIR: traces, JEV_CODEX_WORKSPACE: project, JEV_CODEX_AUTO_CONNECT: '0' };
+const shellEnv = { PATH: process.env['PATH'] ?? '', HOME: tmp, CODEX_HOME: join(tmp, 'codex-home'), XDG_CONFIG_HOME: join(tmp, 'config'), XDG_STATE_HOME: join(tmp, 'state'), JEV_GATE_TRACE_DIR: join(tmp, 'claude-records'), JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_CODEX_TRACE_DIR: traces, JEV_CODEX_AUTO_CONNECT: '0' };
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 beforeAll(() => {
@@ -42,7 +41,6 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   mkdirSync(installed); mkdirSync(project);
   expect(spawnSync('unzip', ['-q', zip, '-d', installed]).status).toBe(0);
   expect(spawnSync('git', ['init', '-q'], { cwd: project }).status).toBe(0);
-  writeFileSync(join(project, 'source.ts'), 'export const codexEvidenceNeedle = 42;\n');
 }, 60_000);
 
 describe('installed Codex archive', () => {
@@ -58,9 +56,8 @@ describe('installed Codex archive', () => {
       const response = await fetch(url!, { method: 'POST', headers: { origin: new URL(url!).origin, 'content-type': 'application/json' }, body: JSON.stringify({ apiKey: 'fake-native-entry-key' }) });
       expect(response.status).toBe(204); expect(resolveApiKey(keyEnv)).toBe('fake-native-entry-key');
       expect(diagnostics).not.toContain('fake-native-entry-key');
-      expect((await client.listTools()).tools.map(t => t.name)).toEqual(['jev_evidence']);
-      const found = await client.callTool({ name: 'jev_evidence', arguments: { goal: 'Find the test symbol', exactSymbols: ['codexEvidenceNeedle'] } });
-      expect(JSON.stringify(found)).toContain('codexEvidenceNeedle');
+      // Without the automatic connection the server offers no tool: jev_agent needs the connection.
+      expect((await client.listTools()).tools).toEqual([]);
     } finally { await client.close(); }
   });
   it('runs doctor without starting an MCP transport or writing records', () => {
@@ -96,33 +93,6 @@ describe('installed Codex archive', () => {
     expect(invalid).toMatchObject({ status: 0, stdout: '{}\n', stderr: '' });
   });
 
-  it('serves real Evidence MCP calls in the Codex workspace, with no key or installed node_modules', async () => {
-    const client = new Client({ name: 'codex-package-test', version: '0' });
-    try {
-      await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(installed, 'dist/server.mjs'), '--codex'], cwd: project,
-        env: { ...shellEnv, CLAUDE_PROJECT_DIR: '/wrong-project', PWD: '/wrong-pwd' }, stderr: 'pipe' }));
-      const listed = await client.listTools();
-      expect(listed.tools.map(t => t.name)).toEqual(['jev_evidence']);
-      expect(listed.tools[0]!.description).toContain(realpathSync(project));
-      const found = await client.callTool({ name: 'jev_evidence', arguments: { goal: 'Find the test symbol', exactSymbols: ['codexEvidenceNeedle'] } });
-      const content = found.content as Array<{ type: string; text: string }>;
-      const body = JSON.parse(content[0]!.text);
-      expect(body.projectRoot).toBe(realpathSync(project));
-      expect(body.items[0].text).toContain('codexEvidenceNeedle');
-      const readBack = await client.callTool({ name: 'jev_evidence', arguments: { goal: 'Read returned source', sources: [body.items[0].source] } });
-      expect(JSON.stringify(readBack)).toContain('codexEvidenceNeedle');
-      const invalid = await client.callTool({ name: 'jev_evidence', arguments: { goal: 'Bad input', roots: ['../outside'] } });
-      expect(invalid.isError).toBe(true);
-    } finally { await client.close(); }
-  });
-
-  it('uses an explicit Evidence config as the authoritative scope and refuses unknown Codex workspaces', async () => {
-    const cfg = join(tmp, 'evidence.json');
-    writeFileSync(cfg, JSON.stringify({ projectRoot: project, allowedRoots: ['.'], remote: false }));
-    expect(await loadConfig({ JEV_EVIDENCE_CONFIG: cfg }, { host: 'codex', cwd: '/no/workspace' })).toMatchObject({ ok: true, origin: 'explicit', config: { remote: false } });
-    expect(await loadConfig({ PWD: project, CLAUDE_PROJECT_DIR: project }, { host: 'codex', cwd: tmp })).toMatchObject({ ok: false, reason: 'unsupported_inventory' });
-  });
-
   it('streams real hook records to the dashboard and explains how to connect automatic policies', async () => {
     const server = await startDashboard({ traceDir: traces, env: {}, host: 'codex' }, 0);
     const abort = new AbortController();
@@ -136,7 +106,6 @@ describe('installed Codex archive', () => {
       expect(event).toContain('Codex · 도구 시작');
       expect(event).toContain('"state":"active"');
       expect(event).toContain('"mode":"connect"');
-      expect(event).not.toContain('codexEvidenceNeedle');
       await reader.cancel();
     } finally { abort.abort(); await server.close(); }
   });

@@ -140,7 +140,7 @@ describe('connection failures are named, not collapsed (#287)', () => {
     owner(home, (hanging.address() as { port: number }).port);
     let observedSignal: AbortSignal | undefined;
     const dispatch = connectionDispatch(env, opened.writer);
-    const server = createMcpServer({ ok: false, reason: 'unavailable_config', origin: 'session', detail: 'waiting' }, { apiKey: null, host: 'codex', callerEnv: env, dispatch: (args, meta, signal) => { observedSignal = signal; return dispatch(args, meta, signal); } });
+    const server = createMcpServer({ dispatch: (args, meta, signal) => { observedSignal = signal; return dispatch(args, meta, signal); } });
     const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a);
     const client = new Client({ name: 'cancel-test', version: '0' }); await client.connect(b);
     try {

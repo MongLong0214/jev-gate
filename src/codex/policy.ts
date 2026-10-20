@@ -573,7 +573,7 @@ export class CodexPolicy {
         const name = String(input['tool_name']);
         if (/^(Agent|spawn_agent|send_input|SendMessage|jev_agent)$/.test(name)) return deny('Jev owned workers and planners cannot create or coordinate child agents.');
         if (OWNED_AGENTS[session.role]?.role === 'planner' && /^(apply_patch|Edit|Write)$/.test(name)) return deny('The Jev planner is read-only. Return a plan; do not implement.');
-        if (OWNED_AGENTS[session.role]?.role === 'planner' && !String(obj(session.settings['activePermissionProfile'])?.['id'] ?? '').startsWith(':') && name === 'Bash') return deny('A planner under a custom permission profile cannot run shell commands. Use read-only source or Evidence tools; the parent permission profile remains in force.');
+        if (OWNED_AGENTS[session.role]?.role === 'planner' && !String(obj(session.settings['activePermissionProfile'])?.['id'] ?? '').startsWith(':') && name === 'Bash') return deny('A planner under a custom permission profile cannot run shell commands. Use read-only source tools; the parent permission profile remains in force.');
       }
       return {};
     }

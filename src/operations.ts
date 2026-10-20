@@ -8,7 +8,7 @@ import { CODEX_CAPABILITIES, CODEX_PLUGIN_CAPABILITIES, type HostCapability, typ
 
 /** A display model made only from named metadata fields. Raw prompts and source text never leave here. */
 type Rec = Record<string, unknown>;
-export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'router' | 'compact' | 'evidence';
+export type FeatureId = 'admission' | 'allocation' | 'planning' | 'workers' | 'guard' | 'router' | 'compact';
 export type StepState = 'active' | 'done' | 'skipped' | 'error' | 'unconfirmed' | 'interrupted';
 export type StepLane = 'jev' | 'policy' | 'host' | 'local';
 
@@ -30,12 +30,12 @@ export interface OperationStep {
   summary: string;
   details: string[];
   /** Concrete recorded failure category; an effort mismatch is not a response-model mismatch. */
-  issue?: 'request_model' | 'request_effort' | 'request_unconfirmed' | 'response_model' | 'jev' | 'host' | 'evidence' | 'contract';
+  issue?: 'request_model' | 'request_effort' | 'request_unconfirmed' | 'response_model' | 'jev' | 'host' | 'contract';
   /** The failure reason code the record names, such as `invalid_input` or `timeout`. */
   cause?: string;
   /** On a failure only: what later settled records of the same operation on the same host show now. The failure itself stays
    * recorded as it was; a later success never turns it into one, and nothing here claims a recovery. */
-  impact?: { now: 'ongoing' | 'unknown' | 'later_ok' | 'request_only'; lastAt: string; lastState: StepState };
+  impact?: { now: 'ongoing' | 'unknown' | 'later_ok'; lastAt: string; lastState: StepState };
   /** Worker results only (#232). Only an accept receipt is `accepted`; an incomplete, invalid, rework or replan receipt is `rejected`;
    * a receipt that reached no verdict is `unknown`; the host's own end of a call, which judges no contract, is `host_ended`. */
   outcome?: 'host_ended' | 'accepted' | 'rejected' | 'unknown';
@@ -63,7 +63,7 @@ export interface OperationRun {
   executionId?: string;
   host?: Host;
   title: string;
-  source: 'gate' | 'router' | 'compact' | 'evidence' | 'codex';
+  source: 'gate' | 'router' | 'compact' | 'codex';
   mode: string;
   firstAt: string;
   lastAt: string;
@@ -104,7 +104,6 @@ const FEATURES: Array<{ id: FeatureId; label: string }> = [
   { id: 'guard', label: '루트 도구 가드' },
   { id: 'router', label: 'Router · 모델과 effort' },
   { id: 'compact', label: 'Compact · 요약 대체' },
-  { id: 'evidence', label: 'Evidence · 근거 판정' },
 ];
 const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
@@ -199,7 +198,6 @@ const traceFeature = (phase: string): FeatureId | null => {
   if (phase.startsWith('interpretation_') || phase === 'plan') return 'planning';
   if (phase.startsWith('background_') || phase.startsWith('worktree_') || phase === 'dispatch_denied' || phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
   if (phase === 'guard') return 'guard';
-  if (phase.startsWith('evidence_')) return 'evidence';
   return null;
 };
 const traceTitle = (phase: string, r: Rec): string => ({
@@ -211,7 +209,6 @@ const traceTitle = (phase: string, r: Rec): string => ({
   plan: '플래너 결과 · 작업 그래프', dispatch: token(r['role']) === 'planner' ? '플래너 호출' : '워커 호출',
   background_dispatch: '백그라운드 실행 준비', background_launch: '백그라운드 워커 실행', background_conversation: '메인 대화 계속', background_terminal: '백그라운드 워커 종료', background_policy_delivery: '종료 정책 전달',
   worktree_start: 'Worktree · 생성 시작', worktree_result: 'Worktree · 생성 결과', dispatch_denied: 'Agent 호출 거절', post: '워커 결과 · 수락 판정', failure: '호스트 호출 실패', stop: '턴 종료', guard: '루트 도구 가드',
-  evidence_start: 'Evidence · 근거 검색 시작', evidence_jev_intent: 'Evidence · Jev 판정 요청', evidence_jev_result: 'Evidence · Jev 판정 결과', evidence_cache: 'Evidence · 판정 캐시', evidence_result: 'Evidence · 근거 결과',
 } as Record<string, string>)[phase] ?? phase;
 
 const compactSelectionReason = (value: unknown): string | null => ({
@@ -306,7 +303,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   if (!at) return null;
   const requestId = token(r['request_id']);
   const ownId = token(r['invocation_id']) ?? `${phase}:${at}:${requestId ?? ''}`;
-  const isIntent = phase.endsWith('_intent') || phase === 'evidence_start' || phase === 'worktree_start';
+  const isIntent = phase.endsWith('_intent') || phase === 'worktree_start';
   const expected = phase.endsWith('_start') ? phase.replace(/_start$/, '_result') : phase.replace(/_intent$/, '_result');
   const hasResult = requestId !== null && resultIds.has(`${requestId}:${expected}`);
   const http = field(r, 'http');
@@ -322,12 +319,11 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   let outcome: OperationStep['outcome'], refusal: [string, string] | null = null;
   if (isIntent) {
     lane = phase.endsWith('_start') ? 'local' : 'jev';
-    summary = phase === 'evidence_start' ? text(token(r['kind']), token(r['mode']), r['remote_configured'] === true ? '원격 판정 허용' : '로컬만') : hasResult ? '응답 기록과 연결됨' : state === 'active' ? '응답을 기다리는 중' : '응답 기록 없음 · 진행 여부 미확인';
-    if (phase === 'evidence_jev_intent') summary = text(`후보 ${n(number(r['candidates']))}개`, summary);
+    summary = hasResult ? '응답 기록과 연결됨' : state === 'active' ? '응답을 기다리는 중' : '응답 기록 없음 · 진행 여부 미확인';
   } else if (phase === 'worktree_result') {
     lane = 'local'; summary = r['ok'] === true ? '워커 격리 작업 공간 생성 완료' : '워커 격리 작업 공간 생성 실패';
     details.push(text(token(r['branch']), token(r['baseline']), token(r['reason'])));
-  } else if (phase.endsWith('_result') && phase !== 'evidence_result') {
+  } else if (phase.endsWith('_result')) {
     lane = r['attempted'] === false || r['known_not_sent'] === true ? 'policy' : 'jev';
     details.push(...callDetails(r), ...relation(r));
     const decision = field(r, 'decision');
@@ -375,15 +371,6 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   } else if (phase === 'codex_router_response') {
     lane = 'host'; summary = text('Codex 응답 관측', token(r['observed_model']) ?? '모델 미확인', r['observed_effort'] === 'unknown' ? 'effort 미확인' : token(r['observed_effort']));
     details.push('응답이 보고한 값만 표시');
-  } else if (phase === 'evidence_result') {
-    lane = 'local';
-    summary = text(token(r['status']), token(r['backend']), `근거 ${n(number(r['items']))}건`, `Jev 호출 ${n(number(r['remote_calls']))}건`, `캐시 ${n(number(r['cache_hits']))}건`);
-    details.push(text(...list(r['reason_codes'])));
-    const coverage = field(r, 'coverage');
-    if (coverage) details.push(text(`읽은 파일 ${n(number(coverage['read_files']))}`, `후보 ${n(number(coverage['candidates']))}`, `판정 안 된 항목 ${n(number(coverage['unjudged_on_page']))}`));
-    if (number(r['duration_ms']) !== null) details.push(`전체 ${n(number(r['duration_ms']))}ms`);
-  } else if (phase === 'evidence_cache') {
-    lane = 'local'; summary = `저장된 판정 재사용 · 후보 ${n(number(r['candidates']))}개`;
   } else if (phase === 'plan') {
     lane = 'host';
     summary = text(token(r['status']), token(r['outcome']), `작업 ${n(number(r['tasks']))}개`, number(r['chain_depth']) === null ? null : `의존 깊이 ${n(number(r['chain_depth']))}`);
@@ -448,7 +435,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     details.push(text(`요청 모델 ${token(r['requested_model']) ?? '미기록'}`, token(r['routed_model']) && `Router 변경 ${token(r['routed_model'])}`, `실행 모델 ${token(r['resolved_model']) ?? '미관측'}`));
   }
   const measured = number(http?.['duration_ms']);
-  const duration = measured !== null && measured >= 0 ? measured : phase === 'evidence_result' ? number(r['duration_ms']) : null;
+  const duration = measured !== null && measured >= 0 ? measured : null;
   const sentAt = requestId && phase.endsWith('_result') ? intents.get(`${requestId}:${phase.replace(/_result$/, '_intent')}`) : undefined;
   const elapsed = sentAt ? Date.parse(at) - Date.parse(sentAt) : null;
   const model = phase === 'codex_router_response' ? modelObservation(r['selected_model'], r['observed_model'], r['selected_effort'], r['observed_effort'], undefined, 'submitted_effort' in r ? { value: r['submitted_effort'], source: 'provider_request' } : undefined)
@@ -504,8 +491,8 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     details.push(`전달 모델 ${token(r['submitted_model']) ?? '?'}`);
   }
   if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
-  if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : feature === 'evidence' ? 'evidence' : 'host';
-  const cause = state !== 'error' ? null : phase === 'post' ? refusal?.[0] ?? null : phase === 'evidence_result' ? list(r['reason_codes'])[0] ?? null : token(http?.['code']) ?? token(r['reason']);
+  if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : 'host';
+  const cause = state !== 'error' ? null : phase === 'post' ? refusal?.[0] ?? null : token(http?.['code']) ?? token(r['reason']);
   const decided = field(r, 'decision'), selection = field(r, 'selection'), answered = judgements(r)?.find(j => j.confidence !== null);
   const receipt = lane === 'jev' && duration !== null && duration >= 0 && !isIntent ? jevReceipt(number(http?.['status']), token(http?.['code']), token(field(r, 'jev')?.['model']), field(field(r, 'jev'), 'usage') ?? field(r, 'usage'),
     phase === 'codex_router_result' ? text(token(r['selected_model']), token(r['selected_effort'])) || null : token(decided?.['shape']) ?? token(field(r, 'allocation')?.['selected_model']) ?? token(decided?.['tier']) ?? token(decided?.['action']),
@@ -677,7 +664,6 @@ const modStep = (row: ModRecord, closed: Set<string>, responses: Map<string, str
 
 const gateGroup = (r: Rec): string => {
   const phase = token(r['phase']) ?? '';
-  if (phase.startsWith('evidence_')) return `evidence:${token(r['parent_request_id']) ?? token(r['request_id']) ?? token(r['invocation_id']) ?? 'unknown'}`;
   if (phase.startsWith('codex_router_') || phase.startsWith('codex_model_') || phase === 'codex_route_applied') return `router:${token(r['session_id']) ?? 'unknown'}:${token(r['prompt_id']) ?? 'unknown'}`;
   return `gate:${token(r['session_id']) ?? 'unknown'}:${token(r['execution_prompt_id']) ?? token(r['prompt_id']) ?? 'unknown'}`;
 };
@@ -810,7 +796,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
     const key = `${host}:${gateGroup(r)}`;
     const session = token(r['session_id']); const prompt = token(r['execution_prompt_id']) ?? token(r['prompt_id']);
     const group = grouped.get(key) ?? { source, host, mode: token(r['mode']) ?? 'unknown',
-      ...(session && prompt && source !== 'evidence' ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [], rank: { cls: 0, at: '', index } };
+      ...(session && prompt ? { executionId: id(`execution:${host}:${session}:${prompt}`) } : {}), steps: [], rank: { cls: 0, at: '', index } };
     const phase = token(r['phase']);
     if (r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'codex_router_result'].includes(phase ?? '')) {
       const { durationMs: _duration, elapsedMs: _elapsed, judgements: _judgements, receipt: _receipt, ...rest } = step;
@@ -834,7 +820,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   const separate = [...grouped].map(([key, group]): { run: OperationRun; rank: Rank } => {
     const steps = group.steps.sort((a, b) => a.at.localeCompare(b.at) || (a.lane === 'policy' ? 1 : 0) - (b.lane === 'policy' ? 1 : 0) || a.id.localeCompare(b.id));
     const state = operationState(steps);
-    const title = ({ gate: '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', evidence: 'Evidence 검색', codex: 'Codex 실행' } as const)[group.source];
+    const title = ({ gate: '게이트 세션', router: 'Router 실행', compact: 'Compact 실행', codex: 'Codex 실행' } as const)[group.source];
     return { run: { id: id(key), ...(group.executionId ? { executionId: group.executionId } : {}), host: group.host, title, source: group.source, mode: group.mode, firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state, steps }, rank: group.rank };
   });
   const native = codexOperations(records, now, at => flipsAt(live, at), context?.codexEnds.length ? { ends: context.codexEnds, position: context.position } : undefined);
@@ -853,8 +839,8 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   const requests = new Set<string>();
   for (const r of records) {
     const phase = token(r['phase']) ?? '';
-    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'evidence_jev_intent', 'codex_router_intent'].includes(phase)
-      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'evidence_jev_result', 'codex_router_result'].includes(phase))) continue;
+    if (!['admission_intent', 'pre_intent', 'interpretation_intent', 'codex_router_intent'].includes(phase)
+      && !(r['attempted'] === true && ['admission_result', 'pre_result', 'interpretation_result', 'codex_router_result'].includes(phase))) continue;
     const kind = phase.replace(/_(intent|result)$/, '');
     requests.add(`${kind}:${token(r['request_id']) ?? token(r['invocation_id']) ?? iso(r['written_at'])}`);
   }
@@ -863,7 +849,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
     if (row.component !== 'router' || (row.rec['event'] !== 'request' && row.rec['sent'] !== true)) continue;
     requests.add(`router:${routerDecisionKey(row.rec)}`);
   }
-  const managed = records.some(r => r['host'] === 'codex' && (r['managed'] === true || traceFeature(String(r['phase'])) !== null && r['phase'] !== 'evidence_result' && !String(r['phase']).startsWith('evidence_')));
+  const managed = records.some(r => r['host'] === 'codex' && (r['managed'] === true || traceFeature(String(r['phase'])) !== null));
   return { runs: [...executions.values()].map(e => e.run), ranks: [...executions.values()].map(e => e.rank), requests: [...requests], managed, until: live.until, origins };
 };
 
@@ -885,7 +871,7 @@ const relations = (item: Item, mod: boolean): string[] => {
   if (phase && traceFeature(phase)) {
     const group = gateGroup(r), prompt = token(r['execution_prompt_id']) ?? token(r['prompt_id']);
     keys.push(`group:${host}:${group}`);
-    if (session && prompt && !group.startsWith('evidence:')) keys.push(`exec:execution:${host}:${session}:${prompt}`);
+    if (session && prompt) keys.push(`exec:execution:${host}:${session}:${prompt}`);
   }
   for (const name of ['request_id', 'run_id']) if (typeof r[name] === 'string') keys.push(`${name}:${r[name]}`);
   if (typeof r['session_id'] === 'string' && typeof r['tool_use_id'] === 'string') keys.push(`alloc:${JSON.stringify([r['host'] ?? 'claude', r['session_id'], r['tool_use_id']])}`);
@@ -1152,8 +1138,6 @@ const build = (g: Group, now: Date): void => {
   g.built = summarize(g, part, records, mods);
 };
 
-/** Request-scoped refusals: the call's own arguments or bounds. They show nothing about the service, its key or the connection. */
-const REQUEST_CAUSES = new Set(['invalid_input', 'out_of_scope', 'range_too_large', 'output_limit', 'cancelled']);
 const MODEL_ISSUES = new Set(['response_model', 'request_model', 'request_effort', 'request_unconfirmed']);
 const modelCheck = (s: OperationStep): 'model' | 'request' | null => s.issue === 'response_model' || !s.issue && s.model?.status === 'mismatch' ? 'model' : s.issue && MODEL_ISSUES.has(s.issue) ? 'request' : null;
 /** The operation a step belongs to on its host. A model is checked only by an observed model and a request setting only by
@@ -1161,9 +1145,8 @@ const modelCheck = (s: OperationStep): 'model' | 'request' | null => s.issue ===
  * step by later records of its own kind. */
 const operationKey = (host: string, run: string, s: OperationStep, check = modelCheck(s)): string => check ? `${host}\n${s.feature}\n${check}`
   : s.outcome === 'accepted' || s.outcome === 'rejected' ? `${host}\n${run}\ncontract\n${s.task ?? ''}` : `${host}\n${s.feature}\n${s.lane}\n${s.title}`;
-/** What one settled step shows: [operation, worked]. A request-scoped refusal shows nothing about its operation. */
+/** What one settled step shows: [operation, worked]. */
 const observations = (host: string, run: string, s: OperationStep): Array<[string, boolean]> => {
-  if (s.cause && REQUEST_CAUSES.has(s.cause)) return [];
   const seen: Array<[string, boolean]> = [];
   if (s.model && s.model.status !== 'unobserved') seen.push([operationKey(host, run, s, 'model'), s.model.status === 'confirmed']);
   if (s.model?.requestApplied !== undefined) seen.push([operationKey(host, run, s, 'request'), s.model.requestApplied]);
@@ -1175,7 +1158,7 @@ type Known = { at: string; ok: boolean; okAt: string } | undefined;
 const impact = (s: OperationStep, known: Known): NonNullable<OperationStep['impact']> => {
   const last = known && known.at > s.at ? known : undefined;
   // A refused contract is about that worker's result, never a service: another refusal of the task is not an ongoing incident.
-  return { now: s.cause && REQUEST_CAUSES.has(s.cause) ? 'request_only' : known && known.okAt > s.at ? 'later_ok' : last && s.issue !== 'contract' ? 'ongoing' : 'unknown',
+  return { now: known && known.okAt > s.at ? 'later_ok' : last && s.issue !== 'contract' ? 'ongoing' : 'unknown',
     lastAt: last?.at ?? s.at, lastState: last ? last.ok ? 'done' : 'error' : s.state };
 };
 const impacts = new WeakMap<OperationRun, { sig: string; run: OperationRun }>();

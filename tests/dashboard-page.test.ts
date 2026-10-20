@@ -12,7 +12,7 @@ const step = (id: string, feature: OperationStep['feature'], lane: OperationStep
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution`, source: 'gate', mode: 'auto', firstAt: stamp, lastAt: stamp, state: 'done', steps, ...extra });
 const snapshot = (runs: OperationRun[]) => {
   const all = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host, runId: r.id, runTitle: r.title })));
-  const ids = ['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence'] as const;
+  const ids = ['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact'] as const;
   const values = all.filter(s => s.lane === 'jev' && s.durationMs !== undefined).map(s => ({ at: s.at, ms: s.durationMs! }));
   // The frame key replaced the operations signature; Omit keeps this fixture valid with or without the field.
   const operations: OperationsView = { runs, feed: all.slice().reverse(), active: 0, attention: 0, requests: values.length,
@@ -80,9 +80,9 @@ describe('dashboard live interactions', () => {
     expect(opened(p)).toContain('후보 8/16 · 필수 근거 3'); expect(text(p, 'trace')).not.toContain('호스트 훅에서 결과 이벤트가 빠진');
     p.click('.node[data-feature=compact]'); expect(text(p, 'circuit-inspector')).toContain('220ms');
   });
-  it('renders all eight real feature states and never invents traffic on first load', () => {
+  it('renders all seven real feature states and never invents traffic on first load', () => {
     const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 70 })]), run('x', 'codex', [step('l', 'workers', 'host', { lifecycle: true })])]));
-    expect(p.w.document.querySelectorAll('#pipeline .node')).toHaveLength(8);
+    expect(p.w.document.querySelectorAll('#pipeline .node')).toHaveLength(7);
     expect(node(p, 'workers').classList.contains('idle')).toBe(true); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('–');
     expect(node(p, 'admission').classList.contains('idle')).toBe(false);
     expect(p.w.document.querySelectorAll('.trip,.node.zap,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(1);
@@ -482,20 +482,20 @@ it('lands a recorded host step on its node, strip and run row without a Jev roun
 
 it('counts only current failures at the top, keeps settled ones as past errors and redraws a reclassification from a patch (#223)', () => {
   const day = new Date(Date.now() - 86_400_000).toISOString(), next = frames();
-  const outage = (now: 'unknown' | 'later_ok') => run('outage', 'codex', [step('cfg', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'unavailable_config', sessionId: 'cx-session-1', title: 'Evidence · 근거 결과', impact: { now, lastAt: now === 'unknown' ? day : stamp, lastState: now === 'unknown' ? 'error' : 'done' } })], { state: now === 'unknown' ? 'attention' : 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
-  const refused = run('refused', 'codex', [step('bad', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 'cx-session-2', title: 'Evidence · 근거 결과', impact: { now: 'request_only', lastAt: stamp, lastState: 'done' } })], { state: 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
+  const outage = (now: 'unknown' | 'later_ok') => run('outage', 'codex', [step('cfg', 'admission', 'jev', { at: day, state: 'error', issue: 'jev', cause: 'network', sessionId: 'cx-session-1', title: 'Gate A · Jev 응답', impact: { now, lastAt: now === 'unknown' ? day : stamp, lastState: now === 'unknown' ? 'error' : 'done' } })], { state: now === 'unknown' ? 'attention' : 'past_error', firstAt: day, lastAt: day });
+  const refused = run('refused', 'codex', [step('bad', 'workers', 'host', { at: day, state: 'error', issue: 'host', sessionId: 'cx-session-2', title: 'Codex · 도구 결과', impact: { now: 'later_ok', lastAt: stamp, lastState: 'done' } })], { state: 'past_error', firstAt: day, lastAt: day });
   // #269: two mismatches in one run are one execution to check, so the diagnosis counts it once.
   const wrong = (id: string) => step(id, 'router', 'host', { state: 'error', model: { selected: 'claude-opus-5-5', observed: 'claude-sonnet-5', status: 'mismatch', selectedEffort: null, observedEffort: null }, impact: { now: 'unknown', lastAt: stamp, lastState: 'error' } });
   const mismatch = run('mismatch', 'claude', [wrong('m'), wrong('m2')], { state: 'attention', source: 'router' });
   // The filters carry labels only; a count lives once, at the top, and each row shows its own state.
   const p = page(), shown = (cls: string) => p.get('runs').querySelectorAll('.c-st.' + cls).length;
   p.push(next(snapshot([mismatch, outage('unknown'), refused])));
-  expect(text(p, 'k-att')).toBe('2'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건 · Evidence 사용 불가·오류 1건');
+  expect(text(p, 'k-att')).toBe('2'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건 · Jev 판정 오류 1건');
   expect([shown('er'), shown('past')]).toEqual([2, 1]); expect(p.w.document.querySelector('#state-filters em')).toBeNull();
   p.click('[data-run="outage"]');
-  for (const fact of ['원인unavailable_config', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
+  for (const fact of ['원인network', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
   p.click('[data-run="refused"]');
-  expect(opened(p)).toContain('원인invalid_input · 요청 인자·범위 오류'); expect(opened(p)).toContain('현재 영향이 요청만 실패 · 서비스 장애 아님'); expect(opened(p)).toContain('마지막 관측');
+  expect(opened(p)).toContain('현재 영향이후 같은 작업 정상 기록'); expect(opened(p)).toContain('마지막 관측');
   // A later success arrives as a patch: the same row is redrawn as a past error and leaves the current count.
   p.patch(next(snapshot([mismatch, outage('later_ok'), refused])));
   expect(text(p, 'k-att')).toBe('1'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건');

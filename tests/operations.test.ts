@@ -103,10 +103,6 @@ describe('operations display model', () => {
       { ...base, phase: 'dispatch', role: 'worker', task_id: 't1', requested_tier: 'standard', requested_model: 'sonnet' },
       { ...base, phase: 'guard', tool_name: 'Read', allow: false, denials: 1 },
       { ...base, phase: 'post', task_id: 't1', verdict: 'accept', requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', reported_checks: { pass: 1, fail: 0, not_run: 0 } },
-      { written_at: at, phase: 'evidence_start', request_id: 'e1', kind: 'search', mode: 'locate' },
-      { written_at: at, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1', candidates: 4 },
-      { written_at: later, phase: 'evidence_jev_result', request_id: 'e1:1', parent_request_id: 'e1', attempted: true, http: { status: 200 }, jev: { usage: { input_tokens: 20, output_tokens: 3 } } },
-      { written_at: later, phase: 'evidence_result', request_id: 'e1', status: 'ok', backend: 'jev', items: 4, remote_calls: 1, cache_hits: 0 },
     ];
     const mods = [
       row('router', { event: 'request', turn: 'r1', sent: true }),
@@ -115,10 +111,10 @@ describe('operations display model', () => {
       row('compact', { event: 'compact', run_id: 'c1', applied: true, digestChars: 100 }, later),
     ];
     const view = buildOperations(records, mods, new Date('2026-09-29T06:00:02.000Z'), { trace: true });
-    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence']);
+    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact']);
     expect(view.features.every((f) => f.state === 'observed')).toBe(true);
-    expect(view.requests).toBe(4);
-    expect(view.runs.map((r) => r.source).sort()).toEqual(['compact', 'evidence', 'gate', 'router']);
+    expect(view.requests).toBe(3);
+    expect(view.runs.map((r) => r.source).sort()).toEqual(['compact', 'gate', 'router']);
     const gate = view.runs.find((r) => r.source === 'gate')!;
     expect(gate.steps.find((s) => s.feature === 'planning')?.graph).toEqual([
       { id: 't1', dependsOn: [], checks: 1 }, { id: 't2', dependsOn: ['t1'], checks: 2 },
@@ -521,7 +517,6 @@ it('rebuilds only the sessions that changed or still wait on their age, and equa
   const settled: Record<string, unknown>[] = [
     { ...base, written_at: old, phase: 'admission_intent', request_id: 'a1' },
     { ...base, written_at: old, phase: 'admission_result', request_id: 'a1', attempted: true, decision: { shape: 'direct' } },
-    { written_at: old, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1' },
     { ...base, session_id: 's2', written_at: old, phase: 'background_launch', tool_use_id: 'd' },
   ];
   const mods = [row('router', { session_id: 's1', event: 'root', turn: 't1' }, old), row('router', { event: 'root_result', turn: 't2', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', confirmation: 'confirmed' }, old)];
@@ -538,7 +533,7 @@ it('rebuilds only the sessions that changed or still wait on their age, and equa
   // Only the recording execution is rebuilt; then s1's Gate turn changes, and its Router turn, the answered session, the
   // session-less rows and s2 stay as they were: past 30 seconds nothing in them waits on its age.
   expect(second!.runs.filter(run => first!.runs.includes(run))).toEqual(second!.runs.slice(1));
-  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', 'Router 실행', '게이트 세션', '게이트 세션']);
+  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Router 실행', 'Router 실행', '게이트 세션', '게이트 세션']);
 });
 
 it('remakes only the steps a new row changes in a long Codex turn, and equals a fresh pass over copied records each time', () => {
@@ -666,25 +661,14 @@ it('keeps every record and Jev call of the last minute in the feed, past the new
 
 describe('current incidents and past error records (#223)', () => {
   const yesterday = '2026-09-28T09:00:00.000Z', now = new Date('2026-09-29T06:00:05.000Z'), avail = { trace: true };
-  const evidence = (request_id: string, written_at: string, extra: Record<string, unknown>) => ({ host: 'codex', session_id: `s-${request_id}`, phase: 'evidence_result', request_id, written_at, backend: 'local', items: 0, remote_calls: 0, cache_hits: 0, duration_ms: 0, coverage: { read_files: 0, candidates: 0, unjudged_on_page: 0 }, ...extra });
-  const refused = evidence('old', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['invalid_input'] });
-  const ok = evidence('new', at, { status: 'ok', is_error: false, items: 3, reason_codes: [] });
+  const admission = (request_id: string, written_at: string, extra: Record<string, unknown>) => ({ host: 'codex', session_id: `s-${request_id}`, phase: 'admission_result', request_id, written_at, attempted: true, decision: { shape: 'direct' }, ...extra });
+  const ok = admission('new', at, { http: { status: 200, code: 'ok' } });
   const failure = (view: ReturnType<typeof buildOperations>, id: string) => view.runs.find(r => r.steps.some(s => s.state === 'error' && s.at === id))!;
   const build = (records: Record<string, unknown>[], mods: ModRecord[] = []) => {
     const view = buildOperations(records, mods, now, avail);
     expect(view).toEqual(buildOperations(records, mods, now, avail, true));
     return view;
   };
-
-  it('keeps an old invalid-input refusal as a past record of that request, never as an incident or a later success', () => {
-    const view = build([refused, ok]);
-    const old = failure(view, yesterday);
-    expect(old.state).toBe('past_error');
-    expect(old.steps[0]).toMatchObject({ state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 's-old', impact: { now: 'request_only', lastAt: at, lastState: 'done' } });
-    expect(view.attention).toBe(0);
-    // Alone, it still affected only that request.
-    expect(build([refused]).runs[0]).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'request_only', lastAt: yesterday, lastState: 'error' } }] });
-  });
 
   it('keeps a service failure in the current count until a later success of the same operation on the same host', () => {
     const outage = (turn: string, time: string, assessment: string) => row('router', { session_id: `s-${turn}`, event: 'root', turn, sent: true, assessment }, time);
@@ -697,9 +681,9 @@ describe('current incidents and past error records (#223)', () => {
     expect(recovered.runs.filter(r => r.state === 'past_error')).toHaveLength(2);
     expect(recovered.feed.filter(s => s.state === 'error').map(s => s.impact)).toEqual([{ now: 'later_ok', lastAt: later, lastState: 'done' }, { now: 'later_ok', lastAt: later, lastState: 'done' }]);
     // A success on another host shows nothing about this one.
-    const config = evidence('cfg', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['unavailable_config'] });
+    const config = admission('cfg', yesterday, { http: { status: 0, code: 'network' } });
     const elsewhere = build([config, { ...ok, host: 'claude' }]);
-    expect(failure(elsewhere, yesterday)).toMatchObject({ host: 'codex', state: 'attention', steps: [{ cause: 'unavailable_config', impact: { now: 'unknown' } }] });
+    expect(failure(elsewhere, yesterday)).toMatchObject({ host: 'codex', state: 'attention', steps: [{ cause: 'network', impact: { now: 'unknown' } }, { lane: 'policy' }] });
     expect(elsewhere.runs.filter(r => r.host === 'codex' && r.state === 'attention')).toHaveLength(1);
     expect(elsewhere.runs.filter(r => r.host === 'claude' && r.state === 'attention')).toHaveLength(0);
   });
@@ -718,13 +702,13 @@ describe('current incidents and past error records (#223)', () => {
   });
 
   it('keeps an unchanged failure run object across rebuilds and replaces it when its classification changes', () => {
-    const config = evidence('cfg', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['unavailable_config'] });
+    const config = admission('cfg', yesterday, { http: { status: 0, code: 'network' } });
     const records = [config, { ...base, phase: 'admission_intent', request_id: 'a1' }];
     const first = buildOperations(records, [], now, avail), id = failure(first, yesterday).id;
     const second = buildOperations([...records, { ...base, session_id: 's9', phase: 'admission_intent', request_id: 'a9', written_at: later }], [], now, avail);
     expect(second.runs.find(r => r.id === id)).toBe(first.runs.find(r => r.id === id));
     const third = buildOperations([...records, ok], [], now, avail);
-    expect(third.runs.find(r => r.id === id)).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'later_ok' } }] });
+    expect(third.runs.find(r => r.id === id)).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'later_ok' } }, { lane: 'policy' }] });
   });
 });
 

@@ -91,9 +91,6 @@ describe('guardDecision', () => {
     expect(guardDecision('ToolSearch', {}, config)).toEqual({ allow: true });
     expect(guardDecision('mcp__unknown__do', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });
     expect(guardDecision('ToolSearch', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });
-    // #77: the evidence tool under the name 2.1.283 registers it with, the same way.
-    expect(guardDecision('mcp__plugin_jev-gate_evidence__jev_evidence', {}, config)).toEqual({ allow: true });
-    expect(guardDecision('mcp__plugin_jev-gate_evidence__jev_evidence', {}, { ...config, guardAllowMcp: false })).toEqual({ allow: false });
     expect(guardDecision('Agent', { subagent_type: 'Explore' }, config)).toEqual({ allow: false });
     expect(guardDecision('Agent', {}, config)).toEqual({ allow: false });
   });

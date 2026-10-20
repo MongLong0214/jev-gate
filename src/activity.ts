@@ -329,7 +329,7 @@ const routerChanged = (r: Rec): boolean => {
 const NOTES = [
   '프롬프트 원문, API 키, 작업 파일은 읽지 않습니다.',
   '가격의 토큰 수는 게이트가 위임을 고를 때 쓴 계산이고, 측정된 절감이나 청구액이 아닙니다.',
-  'Evidence·Compact·Router는 기본 로컬 기록을 사용합니다.',
+  'Compact·Router는 기본 로컬 기록을 사용합니다.',
 ];
 
 /** A result file is written after the HTTP call. Past this, an intent with no result is not still in flight. */
