@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ import type { Env } from './config.js';
 import { readPrivateJson, resolveApiKey, writePrivateJson } from './credentials.js';
 import { stateRoot } from './job.js';
 import { readRecentPrompts, readTail } from './recent-prompts.js';
-import { openTraceDir } from './trace.js';
+import { openTraceDir, type TraceWriter } from './trace.js';
 
 /**
  * The classic-hook path of Compact. Claude Code 2.1.299+ seats its built-in plugin security default so that
@@ -216,17 +216,17 @@ const nodeTransport: Transport = {
   }),
 };
 
-const record = (env: Env, session: string, fields: Rec): void => {
+const record = (writer: TraceWriter | null, session: string, fields: Rec): void => {
   try {
-    const dir = openTraceDir(claudeTraceDir(env), env);
-    if (dir.ok) dir.writer.write('mod_compact', { event: 'compact', path: 'classic', host: 'claude', session_id: session, ...fields });
+    writer?.write('mod_compact', { event: 'compact', path: 'classic', host: 'claude', session_id: session, ...fields });
   } catch { /* a record that cannot be written changes nothing */ }
 };
 
 /** PreCompact: the engine's summarizer instructions, as stdout; the restore is saved for SessionStart. */
-const preCompact = async (input: HookInput, env: Env, config: CompactConfig, deps: ClassicDeps): Promise<string | null> => {
+const preCompact = async (input: HookInput, env: Env, config: CompactConfig, deps: ClassicDeps, writer: TraceWriter | null): Promise<string | null> => {
   const now = deps.now ?? Date.now;
-  const log = (fields: Rec): void => record(env, input.session, { stage: 'pre', trigger: input.trigger, mode: config.mode, ...fields });
+  const runId = randomUUID();
+  const log = (fields: Rec): void => record(writer, input.session, { run_id: runId, stage: 'pre', trigger: input.trigger, mode: config.mode, ...fields });
   const deferred = input.agent ? 'subagent' : input.trigger === 'manual' && !config.manual ? 'trigger' : input.trigger === 'manual' && input.instructions?.trim() ? 'instructions' : functionPathAsked(env, input.session, now()) ? 'function_path' : null;
   if (deferred) { log({ deferred }); return null; }
   const started = now();
@@ -240,13 +240,14 @@ const preCompact = async (input: HookInput, env: Env, config: CompactConfig, dep
   let priorities: Array<{ message: number; tool: number }> = [];
   let jev = 'disabled';
   if (config.jevEnabled !== false && task && lastAssistant > 0) {
+    log({ stage: 'started' });
     try {
       const key = 'key' in deps ? deps.key : resolveApiKey(env);
       const baseline: DigestResult = { digest: '', start: lastAssistant, digestChars: 0, tailChars: 0, tailMessages: 0, headMessages: lastAssistant };
       const selection = await createCompactSelector(config.jevTimeoutMs ?? 1000)(messages, baseline, key, deps.transport ?? nodeTransport, deps.signal, true);
       priorities = selection.priorities; jev = selection.reason;
       log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, jev_model: selection.model, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason });
-    } catch { jev = 'error'; }
+    } catch { jev = 'error'; log({ stage: 'jev', jev_sent: null, selection: 'error' }); }
   }
   const restore = buildRestore(messages, requests, priorities, room);
   if (restore === null) { log({ deferred: 'nothing_to_restore' }); return null; }
@@ -260,7 +261,7 @@ const preCompact = async (input: HookInput, env: Env, config: CompactConfig, dep
 };
 
 /** SessionStart(compact): the restore, as additional context, when the PreCompact that saved it is this compaction's. */
-const restoreContext = (input: HookInput, env: Env, config: CompactConfig, deps: ClassicDeps): string | null => {
+const restoreContext = (input: HookInput, env: Env, config: CompactConfig, deps: ClassicDeps, writer: TraceWriter | null): string | null => {
   const now = (deps.now ?? Date.now)();
   const state = readState(env, input.session);
   if (!state?.restore || state.shadow || state.restored_chars !== null || now - state.at > STATE_MAX_AGE_MS) return null;
@@ -268,17 +269,17 @@ const restoreContext = (input: HookInput, env: Env, config: CompactConfig, deps:
   try { if (statSync(askedPath(env, input.session)).mtimeMs >= state.at) return null; } catch { /* no marker */ }
   if (state.restore.length > shares(config.budgetChars).restore) return null;
   try { writePrivateJson(statePath(env, input.session), { ...state, restore: null, restored_chars: state.restore.length }); } catch { return null; }
-  record(env, input.session, { stage: 'restore', restore_chars: state.restore.length });
+  record(writer, input.session, { stage: 'restore', restore_chars: state.restore.length });
   return JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: state.restore } });
 };
 
 /** PostCompact: what the engine's summary came to against the budget (measurement only; this output never reaches the model). */
-const postCompact = (input: HookInput, env: Env, deps: ClassicDeps): null => {
+const postCompact = (input: HookInput, env: Env, deps: ClassicDeps, writer: TraceWriter | null): null => {
   const state = readState(env, input.session);
   if (!state) return null;
   const summary = input.summary?.length ?? null;
   const restored = state.restored_chars ?? 0;
-  record(env, input.session, { stage: 'post', summary_chars: summary, restored_chars: state.restored_chars, summary_target: state.summary_chars, budget: state.budget, within_budget: summary === null ? null : summary + restored <= state.budget, compact_ms: (deps.now ?? Date.now)() - state.at, selection: state.jev });
+  record(writer, input.session, { stage: 'post', summary_chars: summary, restored_chars: state.restored_chars, summary_target: state.summary_chars, budget: state.budget, within_budget: summary === null ? null : summary + restored <= state.budget, compact_ms: (deps.now ?? Date.now)() - state.at, selection: state.jev });
   rmSync(statePath(env, input.session), { force: true });
   return null;
 };
@@ -291,9 +292,15 @@ export const runClassicCompact = async (stdin: string, env: Env, deps: ClassicDe
     // A kill switch that needs no settings file: the same variable turns the classic hooks off for one launch.
     if (env['JEV_GATE_COMPACT'] === 'off') return null;
     if (!input || !config || !config.enabled) return null;
-    if (input.event === 'PreCompact') return await preCompact(input, env, config, deps);
-    if (input.event === 'SessionStart' && input.source === 'compact') return restoreContext(input, env, config, deps);
-    if (input.event === 'PostCompact') return postCompact(input, env, deps);
+    const opened = openTraceDir(claudeTraceDir(env), env);
+    const writer = opened.ok ? opened.writer : null;
+    try {
+      if (input.event === 'PreCompact') return await preCompact(input, env, config, deps, writer);
+      if (input.event === 'SessionStart' && input.source === 'compact') return restoreContext(input, env, config, deps, writer);
+      if (input.event === 'PostCompact') return postCompact(input, env, deps, writer);
+    } finally {
+      writer?.finish?.({ producer: 'classic', session_id: input.session, hook_event_name: input.event });
+    }
   } catch { /* the engine's compaction goes on as it was */ }
   return null;
 };

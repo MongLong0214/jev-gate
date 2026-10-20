@@ -3,7 +3,7 @@ import type { EngineInterface, On, Register, SessionMessage } from 'claude-code'
 import type { CompactConfig } from './config.ts';
 import { resolveCompactConfig } from './config.ts';
 import { assemble, buildDigest } from './digest.ts';
-import { createRecorder } from './recording.ts';
+import { createRecorder, createRecordingState, type RecordingState } from './recording.ts';
 import { createCompactSelector } from './selection.ts';
 import { installedKeyPath, parseInstalledKey } from '../../router/hooks/key.ts';
 
@@ -11,7 +11,7 @@ let sequence = 0;
 
 
 // The native validator follows $ only within this file; the shared recorder receives plain callbacks.
-const recorderOf = ($: EngineInterface) => createRecorder({
+const recorderOf = ($: EngineInterface, state: RecordingState) => createRecorder({
   paths: async () => {
     const [home, state, config, trace, session] = await Promise.all([
       $.env.get('HOME'), $.env.get('XDG_STATE_HOME'), $.env.get('XDG_CONFIG_HOME'), $.env.get('JEV_GATE_TRACE_DIR'), $.session.id(),
@@ -21,7 +21,7 @@ const recorderOf = ($: EngineInterface) => createRecorder({
   stat: path => $.fs.stat(path), exists: path => $.fs.exists(path), read: path => $.fs.read(path),
   write: (path, text) => $.fs.write(path, text),
   wait: (ms, signal) => $.clock.sleep(ms, { signal }),
-});
+}, state);
 
 /** Bookkeeping never stands between the host and its own event. */
 const quietly = (f: () => void): void => {
@@ -41,11 +41,16 @@ const quietly = (f: () => void): void => {
 export const register: Register = (on, options) => {
   const resolved = resolveCompactConfig(options);
   if (!resolved.ok) return;
-  registerCompact(on, resolved.config);
+  const recording = createRecordingState();
+  registerCompact(on, resolved.config, undefined, recording);
+  if (resolved.config.enabled) on('session.end', async ($, e, next) => {
+    try { return await next(e); }
+    finally { await recorderOf($, recording).finish(); }
+  });
 };
 
 /** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
-export const registerCompact = (on: On, config: CompactConfig, observer?: { contextChanged?: (agentId?: string) => void }): void => {
+export const registerCompact = (on: On, config: CompactConfig, observer?: { contextChanged?: (agentId?: string) => void }, recording = createRecordingState()): void => {
   if (!config.enabled && !observer) return;
   const select = createCompactSelector(config.jevTimeoutMs ?? 1000);
 
@@ -56,7 +61,7 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
       return result;
     };
     if (!config.enabled) return forward(e);
-    const recorder = recorderOf($);
+    const recorder = recorderOf($, recording);
     try {
     // The engine's PreCompact that follows a deferral is this module's compaction too; its command-hook path reads this.
     quietly(() => recorder.touch());

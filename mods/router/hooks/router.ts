@@ -1432,7 +1432,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const toolClass = byTools ? await spawnToolClass(engine, e, live) : null;
     const state = routingContext(e.prompt); Object.assign(state.task, { description: e.description, subagent_type: e.subagentType, source: 'child_contract' });
     const started = engine.now();
-    const result = await client.assess(engine, key.key, state, offer.questions, live, usage => log(engine, { event: 'late', scope: 'spawn', tool_use_id: e.tool_use_id, usage: loggable(usage) }));
+    // The `spawn` receipt is the applied route; a final guard that stops the route leaves this sent intent without one,
+    // so its Jev cost reads as unknown rather than none.
+    const result = await client.assess(engine, key.key, state, offer.questions, live, usage => log(engine, { event: 'late', scope: 'spawn', tool_use_id: e.tool_use_id, usage: loggable(usage) }),
+      () => log(engine, { event: 'request', scope: 'spawn', tool_use_id: e.tool_use_id, sent: true }));
     // The dashboard counts a Jev call by its duration, as for root and child steps (#267).
     const timing = { hook_version: ROUTER_HOOK_VERSION, host_version: hostBase ?? null, duration_ms: Math.max(0, engine.now() - started) };
     if (!result.ok) { log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), assessment: result.reason, sent: result.sent, usage: loggable(result.usage), ...timing }); return !claudeTargetAllowed(baselineModel, allowFable) ? denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.') : null; }

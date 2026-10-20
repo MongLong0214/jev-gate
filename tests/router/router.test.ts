@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
@@ -7,6 +10,8 @@ import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
 import type { HostPins, RootRecord, SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { cachePatch, createRouter, hostSupported, ROUTER_HOOK_VERSION, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
+import { sessionFacts } from '../../src/bench/ab.js';
+import { buildOperations } from '../../src/operations.js';
 import type { Responder } from './fake-engine.ts';
 import { answering, choice, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext, warmRoot } from './fake-engine.ts';
 
@@ -912,6 +917,20 @@ describe('spawn model', () => {
       await run;
       expect(n.calls, reason).toEqual([spawn()]);
       expect(f.logs, reason).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason, requested: 'claude-haiku-5-5' });
+      // The `spawn` receipt is the applied route, so a stop writes none: the dashboard shows no change, and the sent
+      // intent leaves the bench's Jev cost unknown rather than 0.
+      expect(f.logs.some(r => r['event'] === 'spawn'), reason).toBe(false);
+      const at = '2026-10-20T00:00:00.000Z';
+      const view = buildOperations([], f.logs.map(rec => ({ at, component: 'router' as const, rec: { ...rec, session_id: 's' } })), new Date(at), { trace: true });
+      const steps = view.runs.flatMap(r => r.steps);
+      expect(steps.find(s => s.title === 'Router · Agent 판단 중단')?.summary, reason).toBe(reason);
+      expect(JSON.stringify(steps), reason).not.toMatch(/설정 변경|claude-haiku-5-5/);
+      // The decision closes its request: it is not left waiting for an answer.
+      expect(steps.filter(s => s.state === 'active' || s.state === 'unconfirmed'), reason).toEqual([]);
+      const dir = mkdtempSync(join(tmpdir(), 'router-receipt-'));
+      f.logs.forEach((r, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify({ ...r, phase: 'mod_router', session_id: 's', invocation_id: String(i) })));
+      expect(sessionFacts(dir, 's'), reason).toMatchObject({ jevRequests: 1, jevInput: null, jevCost: null });
+      rmSync(dir, { recursive: true });
     }
   });
 

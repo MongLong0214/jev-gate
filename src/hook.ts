@@ -1581,7 +1581,14 @@ export const main = async (): Promise<void> => {
   const env = withApiKey(process.env);
   if (env['CLAUDE_PLUGIN_ROOT'] && !env['JEV_GATE_TRACE_DIR']) env['JEV_GATE_TRACE_DIR'] = claudeTraceDir(env);
   const notice = !('code' in input) && input.hook_event_name === 'SessionStart' && integratedClaudePlugin(env) ? claudeSetupNotice(env) : null;
-  const result = await runHook({ stdin: (async function* () { yield read.text; })(), env, startedAt: performance.timeOrigin }).catch(() => null);
+  const opened = env['JEV_GATE_MODE'] !== 'off' && env['JEV_GATE_TRACE_DIR'] ? openTraceDir(env['JEV_GATE_TRACE_DIR'], env) : null;
+  const result = await runHook({ stdin: (async function* () { yield read.text; })(), env, startedAt: performance.timeOrigin,
+    ...(opened ? { openTrace: () => opened } : {}),
+  }).catch(() => null);
+  if (opened?.ok && !('code' in input)) opened.writer.finish?.({ producer: 'gate', session_id: input.session_id ?? null,
+    hook_event_name: input.hook_event_name, tool_use_id: input.tool_use_id ?? null, caller: { agent_id: input.agent_id ?? null },
+    internal_error: result === null,
+  });
   if (result === null) {
     process.stderr.write('jev-gate: internal\n');
     process.exitCode = 0;

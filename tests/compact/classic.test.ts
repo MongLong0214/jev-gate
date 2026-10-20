@@ -1,10 +1,20 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RESTORE_CAP, askedPath, buildRestore, buildSteering, classicConfig, runClassicCompact, shares, transcriptMessages, heldRecords } from '../../src/claude-compact.ts';
 import type { Transport } from '../../mods/router/hooks/client.ts';
+import { sessionFacts } from '../../src/bench/ab.js';
+
+const loss = vi.hoisted(() => ({ on: false }));
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>();
+  return { ...fs, openSync: (...args: Parameters<typeof fs.openSync>) => {
+    if (loss.on && String(args[0]).includes('/trace/.mod_compact-')) throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+    return fs.openSync(...args);
+  } };
+});
 
 const SESSION = 'b4f5b22d-d356-47c4-8e6c-dc52ae655985';
 let dir: string;
@@ -44,11 +54,25 @@ beforeEach(() => {
   mkdirSync(env['JEV_GATE_TRACE_DIR']!, { recursive: true, mode: 0o700 });
   write(session());
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => { loss.on = false; rmSync(dir, { recursive: true, force: true }); });
 
 const traces = (): Rec[] => files('trace').filter((n) => n.startsWith('mod_compact-')).map((n) => JSON.parse(readFileSync(join(dir, 'trace', n), 'utf8')) as Rec);
 
 describe('classic path: which path runs', () => {
+  it('binds pre-send intent and completion to a fake send whose receipt is lost, even if restore persistence then fails', async () => {
+    mkdirSync(join(dir, 'state/jev-gate'), { recursive: true });
+    writeFileSync(join(dir, 'state/jev-gate/compact'), 'not a directory');
+    const fake = fakeJev(ids => Object.fromEntries(ids.map(id => [id, 'discard'])));
+    const fetch = fake.transport.fetch;
+    fake.transport.fetch = async (url, init) => { const reply = await fetch(url, init); loss.on = true; return reply; };
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' }, { key: 'k'.repeat(16), transport: fake.transport })).toBeNull();
+    loss.on = false;
+    expect(fake.calls).toHaveLength(1);
+    expect(traces()).toMatchObject([{ stage: 'started', run_id: expect.any(String) }]);
+    const receipt = files('trace').find(name => name.startsWith('recording_complete-'))!;
+    expect(JSON.parse(readFileSync(join(dir, 'trace', receipt), 'utf8'))).toMatchObject({ complete: false, producer: 'classic' });
+    expect(sessionFacts(join(dir, 'trace'), SESSION)).toMatchObject({ jevRequests: 1, jevCost: null });
+  });
   it('PreCompact the engine runs (the Mod was never asked) guides the summarizer and saves the restore', async () => {
     const out = await runClassicCompact(input('PreCompact', { trigger: 'auto', custom_instructions: null }), env);
     expect(out).toContain('Write no <analysis> section');
