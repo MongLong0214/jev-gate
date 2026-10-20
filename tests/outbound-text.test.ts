@@ -47,7 +47,7 @@ const PLACEHOLDER_VALUES = [
   { branch: 'empty', whole: '', partial: 's3cure123' },
   { branch: 'dollar name prefix', whole: '$PASSWORD', partial: '$uperS3cret!' },
   { branch: 'dollar brace infix', whole: '${PASSWORD}', partial: 's3cure${literal}' },
-  { branch: 'dollar default prefix', whole: '${PASSWORD:-default}', partial: '${PASSWORD:-default}s3cure123' },
+  { branch: 'dollar default prefix', whole: '${PASSWORD:-}', partial: '${PASSWORD:-default}s3cure123' },
   { branch: 'percent name suffix', whole: '%PASSWORD%', partial: 's3cure%HOME%' },
   { branch: 'angle prefix', whole: '<redacted>', partial: '<a1b2c3d4e5f6>x' },
   { branch: 'double brace prefix', whole: '{{password}}', partial: '{{password}}s3cure123' },
@@ -93,12 +93,151 @@ const EXCLUSION_CASES = [
   { ...row, form: 'partial positive', text: render(row.partial), secret: true },
 ]);
 
+// Synthetic values only. Stable group/row/variant names make the baseline and fixed JSON reports comparable.
+const FORMAT_PLACEHOLDERS = ['<password>', '${X}', '${X:-}', '***', 'xxx', 'changeme', '{{ secrets.X }}', '$X', '%X%', '[REDACTED]'];
+const HEADER_FORMATS = [
+  { syntax: 'bare', render: (key: string, value: string) => `${key}: ${value}` },
+  ...["'", '"', '`'].map(quote => ({ syntax: `quoted ${quote}`, render: (key: string, value: string) => `${quote}${key}${quote}: ${quote}${value}${quote}` })),
+  { syntax: 'JSON compact', render: (key: string, value: string) => `{"${key}":"${value}"}` },
+  { syntax: 'JSON spaced', render: (key: string, value: string) => `{ "${key}" \t : \t "${value}" }` },
+  { syntax: 'YAML', render: (key: string, value: string) => `headers:\n  ${key}: ${value}` },
+  { syntax: 'Python dict', render: (key: string, value: string) => `headers = {'${key}': '${value}'}` },
+  { syntax: 'JS dict', render: (key: string, value: string) => `const headers = { ${key}: '${value}' };` },
+  { syntax: 'HTTP raw', render: (key: string, value: string) => `GET / HTTP/1.1\r\n${key}: ${value}\r\n` },
+  { syntax: 'curl', render: (key: string, value: string) => `curl -H '${key}: ${value}' https://example.test` },
+  { syntax: 'fetch', render: (key: string, value: string) => `fetch(url, { headers: { "${key}": "${value}" } })` },
+  { syntax: 'requests', render: (key: string, value: string) => `requests.get(url, headers={'${key}': '${value}'})` },
+];
+const FORMAT_LITERAL = 'review-canary-12345678';
+const CREDENTIAL_FORMAT_CORPUS = [
+  ...[
+    { label: 'env', render: (value: string) => `API_KEY=${value}` },
+    { label: '.env', render: (value: string) => `# fixture .env\nDB_PASSWORD="${value}"\n` },
+    { label: 'export', render: (value: string) => `export API_KEY=${value}` },
+    { label: 'Dockerfile ENV equals', render: (value: string) => `ENV API_KEY=${value}` },
+    { label: 'Dockerfile ENV space', render: (value: string) => `ENV API_KEY ${value}` },
+    { label: 'Dockerfile ARG', render: (value: string) => `ARG DB_PASSWORD=${value}` },
+    { label: 'compose list', render: (value: string) => `environment:\n  - DB_PASSWORD=${value}` },
+    { label: 'compose map', render: (value: string) => `environment:\n  DB_PASSWORD: "${value}"` },
+    { label: 'Kubernetes stringData', render: (value: string) => `kind: Secret\nstringData:\n  password: "${value}"` },
+    { label: 'Kubernetes data base64', value: 'cmV2aWV3LWNhbmFyeS0xMjM0NTY3OA==', render: (value: string) => `kind: Secret\ndata:\n  password: ${value}` },
+    { label: 'GitHub Actions env', render: (value: string) => `env:\n  API_KEY: ${value}` },
+    { label: 'GitHub Actions secrets twin', placeholder: '${{ secrets.X }}', render: (value: string) => `env:\n  API_KEY: "${value}"` },
+  ].map(row => ({ ...row, group: 'config' })),
+  ...[
+    ...['postgres', 'postgresql+psycopg', 'mysql', 'mongodb+srv', 'amqp'].map(scheme => ({
+      label: scheme, value: 'pass', render: (value: string) => `${scheme}://user:${value}@host/db`,
+    })),
+    { label: 'redis empty user', value: 'pass', render: (value: string) => `redis://:${value}@host` },
+    { label: 'JDBC query', value: 'p', render: (value: string) => `jdbc:postgresql://host/db?user=u&password=${value}` },
+    { label: 'ADO.NET', value: 'p', render: (value: string) => `Server=host;User Id=u;Password=${value};` },
+    { label: 'Azure AccountKey', render: (value: string) => `DefaultEndpointsProtocol=https;AccountName=fixture;AccountKey=${value};` },
+    { label: 'Azure SAS', render: (value: string) => `SharedAccessSignature=sv=2026-01-01&sig=${value}` },
+  ].map(row => ({ ...row, group: 'connections' })),
+  ...[
+    { label: '.npmrc', render: (value: string) => `//registry.npmjs.org/:_authToken=${value}` },
+    { label: '.pypirc', render: (value: string) => `[pypi]\nusername = review\npassword = ${value}` },
+    { label: 'pip.conf', render: (value: string) => `[global]\nindex-url = https://user:${value}@packages.example.test/simple` },
+    { label: 'docker auth base64', value: 'dTpw', render: (value: string) => `{"auths":{"registry.example.test":{"auth":"${value}"}}}` },
+    { label: 'AWS credentials', render: (value: string) => `[fixture]\naws_secret_access_key = ${value}` },
+    { label: 'GCP service account PEM', value: '-----BEGIN PRIVATE KEY-----\\nSYNTHETIC\\n-----END PRIVATE KEY-----', render: (value: string) => `{"type":"service_account","private_key":"${value}"}` },
+    { label: '.netrc', render: (value: string) => `machine example.test\nlogin review\npassword ${value}\n` },
+    { label: '.netrc inline', render: (value: string) => `machine example.test login review password ${value}` },
+    { label: 'git remote', render: (value: string) => `git remote add origin https://user:${value}@github.com/org/repo.git` },
+  ].map(row => ({ ...row, group: 'credential-files' })),
+  ...[
+    { name: 'Authorization', value: `Bearer ${FORMAT_LITERAL}`, wrap: (value: string) => `Bearer ${value}` },
+    { name: 'Proxy-Authorization', value: `Basic ${FORMAT_LITERAL}`, wrap: (value: string) => `Basic ${value}` },
+    { name: 'Cookie', value: `custom_login=${FORMAT_LITERAL}`, wrap: (value: string) => `custom_login=${value}` },
+    { name: 'Set-Cookie', value: `custom_login=${FORMAT_LITERAL}; HttpOnly`, wrap: (value: string) => `custom_login=${value}; HttpOnly` },
+    { name: 'X-Api-Key', value: FORMAT_LITERAL, wrap: (value: string) => value },
+  ].flatMap(header => KEY_SPELLINGS.flatMap(spelling => HEADER_FORMATS.map(format => ({
+    group: 'headers', label: `${header.name} / ${spelling.spelling} / ${format.syntax}`, value: header.value,
+    render: (value: string) => format.render(spelling.key(header.name), value), wrap: header.wrap,
+  })))),
+  ...[
+    { name: 'Authorization token', value: 'ghp_' + 'a1'.repeat(20), wrap: (value: string) => `token ${value}` },
+    { name: 'Authorization Basic', value: 'dTpw', wrap: (value: string) => `Basic ${value}` },
+  ].flatMap(header => HEADER_FORMATS.map(format => ({
+    group: 'header-schemes', label: `${header.name} / ${format.syntax}`, value: header.value,
+    render: (value: string) => format.render('Authorization', header.wrap(value)),
+  }))),
+  ...[
+    ...['sk-', 'sk-ant-', 'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'xoxa-', 'xoxb-', 'xoxp-', 'xoxr-', 'xoxs-',
+      'npm_', 'sk_live_', 'rk_live_', 'jv_live_'].map(prefix => ({ name: prefix, value: prefix + 'a1'.repeat(20) })),
+    ...['AKIA', 'ASIA'].map(prefix => ({ name: prefix, value: prefix + 'A1'.repeat(8) })),
+    { name: 'AIza', value: 'AIza' + 'a'.repeat(35) },
+    { name: 'JWT', value: 'eyJhbGciOiJIUzI1NiJ9.e30.c3ludGhldGlj' },
+    { name: 'PEM', value: '-----BEGIN PRIVATE KEY-----\\nSYNTHETIC\\n-----END PRIVATE KEY-----' },
+  ].flatMap(token => [
+    { syntax: 'JSON string', render: (value: string) => `{"message":"${value}"}` },
+    { syntax: 'URL path', render: (value: string) => `https://example.test/${value}` },
+    { syntax: 'query', render: (value: string) => `https://example.test/?value=${value}` },
+    { syntax: 'prose', render: (value: string) => `Observed ${value} during review.` },
+  ].map(format => ({ group: 'provider-tokens', label: `${token.name} / ${format.syntax}`, value: token.value, render: format.render }))),
+  ...[
+    { label: 'Slack', render: (value: string) => `https://hooks.slack.com/services/T000REVIEW/B000REVIEW/${value}` },
+    { label: 'Discord', render: (value: string) => `https://discord.com/api/webhooks/123456789012345678/${value}` },
+  ].map(row => ({ ...row, group: 'webhooks' })),
+  ...[':-', '-', ':=', '=', ':?', ':+'].flatMap(operator => [
+    { syntax: 'assignment', render: (value: string) => `password="\${PASSWORD${operator}${value}}"` },
+    { syntax: 'header', render: (value: string) => `Authorization: Bearer \${TOKEN${operator}${value}}` },
+    { syntax: 'URL', render: (value: string) => `postgres://user:\${PASSWORD${operator}${value}}@host/db` },
+    { syntax: 'Basic input', render: (value: string) => `btoa('user:\${PASSWORD${operator}${value}}')` },
+  ].flatMap(context => [
+    { label: `${operator} / ${context.syntax}`, render: context.render },
+    { label: `${operator} / ${context.syntax} / nested`, render: (value: string) => context.render(`\${INNER:-${value}}`) },
+    { label: `${operator} / ${context.syntax} / literal beside references`, render: (value: string) => context.render(`\${PREFIX}${value}\${SUFFIX}`) },
+  ].map(row => ({ ...row, group: 'shell-defaults' })))),
+  ...[
+    { label: 'K1 quoted JSON Cookie', value: 'a1b2c3d4e5f6g7h8', render: (value: string) => `{"Cookie":"custom_login=${value}"}` },
+    { label: 'K2 quoted password default', value: 'hunter2', render: (value: string) => `password="\${PASSWORD:-${value}}"` },
+    { label: 'K2 Bearer default', value: 'abc123def456ghi789', render: (value: string) => `Authorization: Bearer \${TOKEN:-${value}}` },
+  ].map(row => ({ ...row, group: 'reproductions' })),
+].map(row => ({ value: FORMAT_LITERAL, wrap: (value: string) => value, placeholder: undefined as string | undefined, ...row }));
+const CREDENTIAL_FORMAT_CASES = CREDENTIAL_FORMAT_CORPUS.flatMap(row => [
+  { ...row, variant: 'literal', text: row.render(row.value), secret: true },
+  ...[...FORMAT_PLACEHOLDERS, ...(row.placeholder ? [row.placeholder] : [])].map((value, i) => ({
+    ...row, variant: `placeholder ${i + 1}`, text: row.render(row.wrap(value)), secret: false,
+  })),
+]);
+
 describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('outbound text — %s credential screen', (_screen, looksSecret) => {
+  it.each(CREDENTIAL_FORMAT_CASES)('credential-format corpus | $group | $label | $variant', ({ text, secret }) => {
+    expect(looksSecret(text)).toBe(secret);
+  });
+
+  it.each([':-', '-', ':=', '=', ':?', ':+'])('K2: applies the existing key thresholds to %s operator text', operator => {
+    const reference = (value: string) => `\${PASSWORD${operator}${value}}`;
+    for (const [value, bare, quoted, generic] of [
+      ['hunter2', false, true, false], ['abcdefgh', true, true, false], ['canary123', true, true, true],
+      ['', false, false, false], ['<redacted>x', false, true, false],
+    ] as const) {
+      expect(looksSecret(`password=${reference(value)}`)).toBe(bare);
+      expect(looksSecret(`password="${reference(value)}"`)).toBe(quoted);
+      expect(looksSecret(`token="${reference(value)}"`)).toBe(generic);
+    }
+  });
+
+  it('K2: recursively screens nested operator text and preserves reference-only defaults', () => {
+    for (const [literal, secret] of [['canary123', true], ['${REFERENCE}', false]] as const) {
+      let value: string = literal;
+      for (let i = 0; i < 32; i++) value = `\${LEVEL${i}:-${value}}`;
+      expect(looksSecret(`password="${value}"`)).toBe(secret);
+      expect(looksSecret(`Authorization: Basic ${value}`)).toBe(secret);
+      expect(looksSecret(`postgres://u:${value}@host/db`)).toBe(secret);
+    }
+    // These nonempty defaults were previously accepted as references; their literals are now screened.
+    for (const text of ['password="${PASSWORD:-default}"', 'Authorization: Basic ${DB_USER:-user}:${DB_PASS:-default}']) {
+      expect(looksSecret(text)).toBe(true);
+    }
+  });
+
   it.each(EXCLUSION_CASES)('J1 exclusion: $context / $branch / $form', ({ text, secret }) => {
     expect(looksSecret(text), text).toBe(secret);
   });
 
-  it.each(['${DB_USER}:${DB_PASS}', '${DB_USER:-user}:${DB_PASS:-default}', '$HOST:$PORT', '$HOST.$PORT', '<user>:<password>', '<user>@<password>', '{{user}}:{password}', '[USER]:[PASSWORD]'])(
+  it.each(['${DB_USER}:${DB_PASS}', '${DB_USER:-}:${DB_PASS:-}', '$HOST:$PORT', '$HOST.$PORT', '<user>:<password>', '<user>@<password>', '{{user}}:{password}', '[USER]:[PASSWORD]'])(
     'J1: keeps separator-only reference combinations: %s', value => {
       for (const quote of ['', "'", '"', '`']) expect(looksSecret(`password=${quote}${value}${quote}`)).toBe(false);
       expect(looksSecret(`Authorization: Basic ${value}`)).toBe(false);
@@ -307,6 +446,13 @@ describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('
     '--api-key-env API_KEY',
     'const { password } = req.body;',
     'user.password = await hash(input.password)',
+    '"Cookie": cookieHeader',
+    'headers: { Cookie: jar.header() }',
+    'Set-Cookie handling in middleware',
+    'postgres://localhost:5432/db',
+    'postgres://user@localhost/db',
+    'redis://localhost:6379',
+    'https://github.com/org/repo.git',
     'type Config = { apiKey?: string; token: number }',
   ])('F1 false-positive fix: keeps ordinary prose and references: %s', text => {
     expect(looksSecret(text)).toBe(false);

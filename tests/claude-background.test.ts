@@ -74,14 +74,16 @@ describe('responsive native background contracts', () => {
 
   it.each([false, true].flatMap(direct => [
     { label: 'bare Jev key', text: 'jv_live_' + '0123456789abcdef'.repeat(4), canaries: ['jv_live_' + '0123456789abcdef'.repeat(4)] },
+    { label: 'K1 quoted JSON Cookie', text: '{"Cookie":"custom_login=a1b2c3d4e5f6g7h8"}', canaries: ['a1b2c3d4e5f6g7h8'] },
+    { label: 'K2 quoted password default', text: 'password="${PASSWORD:-hunter2}"', canaries: ['hunter2'] },
+    { label: 'K2 Bearer default', text: 'Authorization: Bearer ${TOKEN:-abc123def456ghi789}', canaries: ['abc123def456ghi789'] },
     { label: 'J1 literal interpolation marker', text: "password='s3cure${literal}'", canaries: ['s3cure${literal}'] },
     { label: 'JSON password only', text: '{"password":"canary-pw-123"}', canaries: ['canary-pw-123'] },
     { label: 'I1 prefixed JSON password', text: '{"DB_PASSWORD":"review-only-password"}', canaries: ['review-only-password'] },
     { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
     ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
       'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
-  ].map(test => ({ ...test, direct }))))('H1/F1/G1/I1/J1: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
-    expect(text).not.toMatch(/bearer/i);
+  ].map(test => ({ ...test, direct }))))('H1/F1/G1/I1/J1/K1/K2: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
     const fields = { status: 'blocked', summary: text, changed_files: ['src/result.ts', text], blockers: [text, 'Needs integration'], interfaces: ['integrate(): void', text] };
     const f = await fixture(direct, fields); await f.launch(); f.transcript();
     const terminal = await f.terminal();
