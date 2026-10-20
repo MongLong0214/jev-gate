@@ -523,6 +523,23 @@ describe('Codex write scope from native tool targets (#234)', () => {
   };
   const patch = (...lines: string[]) => ({ command: `*** Begin Patch\n${lines.join('\n')}\n*** End Patch\n` });
   const add = (path: string) => `*** Add File: ${path}\n+export const x = 1;`;
+  it('E1: checks root git grep pagers against an active worker reservation', async () => {
+    const f = await scoped();
+    const protectedFile = join(f.root, 'protected.txt'); writeFileSync(protectedFile, 'original');
+    updateJob(f.stateEnv, 'parent', prev => prev ? { ...prev, current: { ...prev.current, active: { ...prev.current.active,
+      dispatch: { ...prev.current.active['dispatch']!, deliverables: ['protected.txt'] } } } } : null);
+    for (const option of [`--open-files-in-pager='printf PAGER_EXECUTED'`, `-O'printf PAGER_EXECUTED'`, '-Oprintf',
+      `--open-files-in='printf PAGER_EXECUTED'`, `-nO'printf PAGER_EXECUTED'`]) {
+      const command = `git grep --no-textconv ${option} original -- ${protectedFile}`;
+      expect(await f.blocked('Bash', { command }), command).toBe(true);
+      expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other), command).toBe(true);
+      expect(await f.blocked('Bash', { command: `cd ${f.other} && ${command}` }), command).toBe(true);
+      expect(await f.blocked('exec_command', { cmd: `git grep --no-textconv ${option} original -- input.txt`, workdir: f.other }, f.other), option).toBe(true);
+    }
+    expect(f.traces('dispatch_denied')).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'write_conflict', reservation_id: 'worker' })]));
+    expect(f.job().current.active['dispatch']).toBeDefined();
+    expect(readFileSync(protectedFile, 'utf8')).toBe('original');
+  });
   it('treats repository-configured textconv as an unknown write target from unrelated directories (R2)', async () => {
     const f = await scoped();
     // The callback deliberately targets the protected reservation, outside the repository invoking it.
