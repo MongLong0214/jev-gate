@@ -1101,6 +1101,39 @@ describe('spawn model', () => {
         expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'resumed' }));
       }
     });
+    it('leaves a named Gate worker native when its resumption lookup times out', async () => {
+      const { router, f, e } = custom('inherit', { name: 'reviewer', subagentType: 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' } });
+      const pending = deferred<boolean>();
+      const pairs: string[] = [];
+      f.engine.resumes = () => pending.promise;
+      f.engine.dispatchPair = async id => { pairs.push(id); return { model: 'claude-sonnet-5-5' }; };
+      const n = spawnNext();
+      const run = router.agentSpawn(f.engine, e, n.next);
+      await settle();
+      f.expire();
+      await run;
+      pending.resolve(true);
+      await settle();
+      expect(n.calls).toEqual([e]);
+      expect(pairs).toEqual([]);
+      expect(f.sent).toHaveLength(0);
+      expect(f.logs).toEqual([{ event: 'spawn', tool_use_id: 'tu1', type: 'jev-gate:worker', skipped: 'resumed' }]);
+    });
+    it.each(['session', 'dispatch'] as const)('never forwards a resumption after its %s ends', async end => {
+      const { router, f, e } = custom('inherit', { name: 'reviewer' });
+      const pending = deferred<boolean>();
+      f.engine.resumes = () => pending.promise;
+      const n = spawnNext();
+      const run = router.agentSpawn(f.engine, e, n.next);
+      await settle();
+      if (end === 'session') router.sessionEnd();
+      else n.controller.abort();
+      await expect(run).rejects.toThrow('spawn dispatch abandoned');
+      pending.resolve(true);
+      await settle();
+      expect(n.calls).toEqual([]);
+      expect(f.sent).toHaveLength(0);
+    });
     it('sends nothing for a SendMessage resumption of a finished, unnamed agent (#290)', async () => {
       // SendMessage({ to: <agent id> }) of an agent spawned without a name: no list holds a finished agent.
       const { router, f, e } = custom('opus', { tool_use_id: 'send', resume: { agentId: 'a986b732adfdb860c' } });
@@ -2926,5 +2959,42 @@ describe('root baseline across a resume', () => {
     const inheriting = spawnNext();
     await resumed.router.agentSpawn(resumed.f.engine, custom('inherit', 'tu3'), inheriting.next);
     expect(inheriting.calls[0]?.model).toBe('claude-sonnet-5-5');
+  });
+
+  // #290: a resumption is no new spawn. Drift restoration patched an inheriting agent, and Gate patched a worker,
+  // though the host runs a resumed agent on the model it ran before.
+  it.each([
+    ['an inheriting agent the host names as resumed', { resume: { agentId: 'a986b732adfdb860c' } }, false],
+    ['an inheriting agent resumed by its running name', { name: 'reviewer' }, false],
+    ['a Gate worker the host names as resumed', { resume: { agentId: 'a986b732adfdb860c' } }, true],
+  ] as const)('leaves the resumption of %s as called, past a drift', async (_, over, gate) => {
+    const resumed = processOf(DRIFTED(), KEEP, undefined, { routeSubagentModel: true, routeSubagentEffort: true });
+    await turn(resumed, 't1', 'claude-haiku-5-5', 'medium', 40);
+    const pairs: string[] = [];
+    Object.assign(resumed.f.engine, {
+      agentModel: async () => 'inherit',
+      resumes: async () => 'name' in over,
+      childContext: async () => ({ messages: 0, coverage: 'available', tools: [] }),
+      dispatchPair: async (id: string) => { pairs.push(id); return { model: 'claude-sonnet-5-5' }; },
+    });
+    const sent = resumed.f.sent.length;
+    const logged = resumed.f.logs.length;
+    const e = spawn({ tool_use_id: 'send', parentModel: 'claude-haiku-5-5', ...over, ...gate
+      ? { subagentType: 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' } }
+      : { subagentType: 'guardian', provider: { plugin: 'user', tier: 'local' } } });
+    const n = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a986b732adfdb860c' }));
+    await resumed.router.agentSpawn(resumed.f.engine, e, n.next);
+    expect(n.calls).toEqual([e]);
+    expect(n.calls[0]).toBe(e);
+    expect(pairs).toEqual([]);
+    expect(resumed.f.sent).toHaveLength(sent);
+    expect(resumed.f.logs.slice(logged)).toEqual([{ event: 'spawn', tool_use_id: 'send', type: gate ? 'jev-gate:worker' : 'other', skipped: 'resumed' }]);
+    // No child is registered for it: its run stays native.
+    const run = step({ agentId: 'a986b732adfdb860c', turnId: 'resumed-run' });
+    const s = streamNext<TurnStepEvent>();
+    await drain(resumed.router.turnStep(resumed.f.engine, run, s.next));
+    expect(s.calls).toEqual([run]);
+    expect(resumed.f.sent).toHaveLength(sent);
+    expect(resumed.f.logs).toContainEqual(expect.objectContaining({ event: 'child_route', agent_id: 'a986b732adfdb860c', skipped: 'child_unregistered' }));
   });
 });

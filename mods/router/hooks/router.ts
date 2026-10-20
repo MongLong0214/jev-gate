@@ -1385,9 +1385,6 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const inheritance = declared ? null : builtIn;
     if (inheritance && (inheritance === 'baseline_unknown' || !config.routeSubagentEffort || childHistoryFull)) return spawnSkip(engine, e, inheritance);
     if (explicit && !config.routeExplicitSpawnModel && !config.routeSubagentEffort) return spawnSkip(engine, e, 'explicit_model');
-    // A resumed subagent continues its own conversation: another model or effort would re-read all of it uncached. The
-    // host names the resume on the event (#290); an agent that already finished is in no list, so a name alone misses it.
-    if (e.resume || e.name && engine.resumes && await within(engine.resumes(e.name).catch(() => true), live)) return spawnSkip(engine, e, 'resumed');
     const key = await keyFor(engine, live); if (key === ABORTED) throw ENDED;
     if (!('key' in key)) {
       const aliases = await within(aliasesOf(engine), live);
@@ -1476,6 +1473,16 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const deadline = startedAt + config.timeoutMs;
     const own = session.signal;
     const wait = budget(engine, deadline, own, next.signal);
+    // A resumed subagent continues its own conversation, on the model it ran (#290): another model or effort would re-read
+    // all of it uncached. It is no new spawn, so it goes out as called, with no assignment, native model or child. The host
+    // names the resume on the event; an agent that already finished is in no list, so a name alone misses it. An unread
+    // name, including a timed-out lookup, stays native too; cancellation is checked before next.
+    if (e.resume || e.name && engine.resumes && await within(engine.resumes(e.name).catch(() => true), wait.signal).catch(() => true)) {
+      wait.dispose();
+      if (next.signal.aborted || own.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
+      spawnSkip(engine, e, 'resumed');
+      return next(e);
+    }
     // A main-loop spawn inherits the main loop's model, which a drift left on the Router's own: it inherits the native one.
     const native = !e.parentAgentId && !e.fork && rootRecord?.drift && sameId(e.parentModel, rootRecord.drift.model) && !sameId(e.parentModel, rootRecord.native.model) ? rootRecord.native.model : null;
     const ev: E = native ? { ...e, parentModel: native } : e;
@@ -1534,8 +1541,6 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       (answers || perStep) &&
       result.deny === undefined &&
       result.agentId !== undefined &&
-      // A resumed run is a continuation, which runs native (ChildRouting.turnId), even once its agent is forgotten here.
-      !e.resume &&
       !own.aborted &&
       !childHistoryFull &&
       !nativeChildren.has(result.agentId)
