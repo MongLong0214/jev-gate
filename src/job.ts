@@ -244,6 +244,9 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
   };
 };
 
+/** #284: a prompt ID can be registered again as a new generation, so only the pair names the one a result belongs to. */
+export const sameGeneration = (a: JobGeneration, b: JobGeneration): boolean => a.prompt_id === b.prompt_id && a.generation_id === b.generation_id;
+
 /** Unsettled native executions are never evicted to satisfy a history count; the existing byte cap still applies. */
 export const retainHistory = (history: JobGeneration[]): JobGeneration[] => {
   let ordinary = 0;

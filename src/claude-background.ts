@@ -1,6 +1,6 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { humanInputText } from './recent-prompts.js';
+import { humanInputText, isHostNoticeRow } from './recent-prompts.js';
 import { subagentTranscriptPath } from './verify.js';
 import type { HookInput } from './types.js';
 
@@ -30,11 +30,7 @@ export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: N
       const content = (row['message'] as { content?: unknown } | undefined)?.content;
       return typeof content === 'string' ? content : Array.isArray(content) && content.every(c => c?.type === 'text' && typeof c.text === 'string') ? content.map(c => c.text).join('\n') : null;
     };
-    if (rows.some(row => {
-        const origin = row['origin'] as { kind?: unknown; producer?: unknown } | undefined;
-        if (row['type'] !== 'user' || row['sessionId'] !== input.session_id || row['promptSource'] !== 'system' || row['turnOrigin'] !== 'task_notification' || origin?.kind !== 'task-notification' || origin.producer !== 'session-task' || row['promptId'] !== input.prompt_id && row['uuid'] !== input.prompt_id) return false;
-        return textOf(row) === input.prompt;
-    })) return { notice: true, basis: 'transcript_row' };
+    if (rows.some(row => isHostNoticeRow(row) && row['sessionId'] === input.session_id && (row['promptId'] === input.prompt_id || row['uuid'] === input.prompt_id) && textOf(row) === input.prompt)) return { notice: true, basis: 'transcript_row' };
     // The host runs the notice hook before flushing its user row, and 2.1.30x payloads omit source (#281: all 237
     // notices that reached Gate A on 2026-10-17..20). The notice may reuse the running turn's ID or carry a fresh one.
     // Authenticate the host queue after the last human turn AND the launch receipt of the task it reports on, never XML alone.
@@ -50,12 +46,17 @@ export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: N
     const queuedIndex = rows.findLastIndex(row => row['type'] === 'queue-operation' && row['operation'] === 'enqueue' && row['sessionId'] === input.session_id && row['content'] === input.prompt);
     const at = (row: Record<string, unknown> | undefined): number => typeof row?.['timestamp'] === 'string' ? Date.parse(row['timestamp']) : NaN;
     if (queuedIndex <= humanIndex || !Number.isFinite(at(rows[queuedIndex])) || humanIndex >= 0 && !(at(rows[humanIndex]) <= at(rows[queuedIndex]))) return human('unproven');
-    return rows.slice(0, queuedIndex).some(row => {
+    const receiptIndex = rows.slice(0, queuedIndex).findLastIndex(row => {
       const result = row['toolUseResult'] as Record<string, unknown> | undefined;
       const content = (row['message'] as { content?: unknown } | undefined)?.content;
       return row['type'] === 'user' && row['sessionId'] === input.session_id && row['isSidechain'] !== true && !!result && [result['agentId'], result['backgroundTaskId'], result['taskId']].includes(tasks[0]) &&
         (result['outputFile'] === undefined || result['outputFile'] === outputs[0]) && Array.isArray(content) && content.some(c => c?.type === 'tool_result' && (tools.length === 0 || c.tool_use_id === tools[0]));
-    }) ? { notice: true, basis: 'host_queue' } : human('unproven');
+    });
+    // A person who spoke after the launch may have queued this text: their own prompt carries a fresh ID, while the
+    // host reuses that person's turn ID for a notice it delivers in it. 74 of 244 real notices (2026-10-17..20) still
+    // reach Gate A this way; without the ID, 128 would.
+    if (receiptIndex < 0 || humanIndex > receiptIndex && rows[humanIndex]!['promptId'] !== input.prompt_id) return human('unproven');
+    return { notice: true, basis: 'host_queue' };
   } catch { return human('unproven'); }
   finally { if (fd !== undefined) closeSync(fd); }
 };

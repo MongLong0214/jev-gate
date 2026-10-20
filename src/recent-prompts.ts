@@ -34,13 +34,20 @@ const textOnly = (content: unknown): string | null => {
 };
 
 /**
+ * #281: the one test for "the host wrote this task notification row", shared by Gate A's notice check and the human
+ * test below. 2.1.26-2.1.30 rows all carry these two fields; `turnOrigin` and `origin.producer` are missing on 84 of 727.
+ */
+export const isHostNoticeRow = (row: unknown): boolean =>
+  isRecord(row) && row['type'] === 'user' && row['promptSource'] === 'system' && isRecord(row['origin']) && row['origin']['kind'] === 'task-notification';
+
+/**
  * #281: the one test for "a person typed this transcript row", shared by Gate A's notice check, its `needs_context`
  * re-ask and Compact's current task. Host-authored turns say so in the row: a task notification or a scheduled fire
  * (`promptSource: "system"`, a non-human `origin`), a compact summary, meta and sidechain rows. Queued commands the host
  * delivers mid-turn are `attachment` and `queue-operation` rows, never `type: "user"`. The text is never read for this.
  */
 export const humanInputText = (row: unknown): string | null => {
-  if (!isRecord(row) || row['type'] !== 'user' || row['isSidechain'] === true || row['isMeta'] === true || row['isCompactSummary'] === true) return null;
+  if (!isRecord(row) || isHostNoticeRow(row) || row['type'] !== 'user' || row['isSidechain'] === true || row['isMeta'] === true || row['isCompactSummary'] === true) return null;
   if (row['promptSource'] !== undefined && !HUMAN_SOURCES.has(String(row['promptSource']))) return null;
   if (row['origin'] !== undefined && (!isRecord(row['origin']) || row['origin']['kind'] !== 'human')) return null;
   const message = row['message'];

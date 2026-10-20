@@ -17,7 +17,7 @@
 | `src/agents.ts` | 코어 | `OWNED_AGENT_PROFILES`(#48): file/role/tier/effort/tools 단일 테이블. `model`은 없음 -- `DEFAULT_CONFIG.models[tier]`를 읽는다. doctor·`gen-agents.mjs`가 이 테이블 하나를 읽는다 |
 | `src/config.ts` | 코어 | ConfigV5(version 5, 기본 off). `models.frontier` 기본값 opus(#48, 과거 fable). `workerIsolation`: 부재=`none`, `maxParallelWorkers>1`이면 `worktree` 필수, `worktree`면 `guardAllowTools`에 `Bash` 필수. V3·V4 레이아웃은 거부 + 마이그레이션 샘플 |
 | `src/jev.ts` | 코어 | 고정 endpoint POST 1회, headers+body 단일 deadline, retry 0, Choice 엄격 검증, tier 설명 텍스트 |
-| `src/recent-prompts.ts` | 어댑터 | (#115) Gate A가 `needs_context`를 내면 transcript 꼬리에서 사용자가 직접 입력한 최근 3턴(`humanInputText`: tool_result·meta·sidechain·커맨드·task notification·compact summary 제외, 비밀정보 의심 턴은 드롭. Gate A notice 판별·Compact 현재 작업도 같은 기준, #281)을 읽어 현재 프롬프트와 함께 1회 재판정. 두 번째 admission_result에 `context_turns` 기록 |
+| `src/recent-prompts.ts` | 어댑터 | (#115) Gate A가 `needs_context`를 내면 transcript 꼬리에서 사용자가 직접 입력한 최근 3턴(`humanInputText`: tool_result·meta·sidechain·커맨드·task notification·compact summary 제외, 비밀정보 의심 턴은 드롭. Gate A notice 판별·Compact 현재 작업도 같은 기준, #281; host notice 행은 `isHostNoticeRow` 하나로 판별)을 읽어 현재 프롬프트와 함께 1회 재판정. 두 번째 admission_result에 `context_turns` 기록 |
 | `src/admission.ts` | 코어 | Gate A 질문과 판정(direct/orchestrated/needs_context/abstain, floor 미달은 direct 보존) |
 | `src/allocation.ts` | 코어 | Gate B(planner tier, worker tier + upgrade_basis) 질문과 판정 |
 | `src/plan.ts` | 코어 | JSON 추출·검증, `contract_hash`, `[JEV_TASK rev=<n> id=<id> attempt=<n>]` 마커, 계약 합성, 결정적 수락 판정, `main_session_steps`(#48) 파싱: 부재=없음, 최대 16개, 알 수 없는 capability는 reply 전체 무효 |

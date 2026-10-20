@@ -100,6 +100,7 @@ import {
   retainHistory,
   release,
   reserve,
+  sameGeneration,
   updateJob,
 } from './job.js';
 import {
@@ -566,12 +567,15 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       gen = prev.current;
       return { ...prev, current: { ...current, interactive_prompt_id: input.prompt_id!, ...(idle ? { background_delivery: { result, prompt_id: input.prompt_id!, stalled_since: current.background_idle_since ?? deliveredAt } } : {}) } };
     });
-    if (written.ok && delivered) return skip();
+    if (written.ok && delivered) {
+      trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'task_notification', changed_default: false } });
+      return skip();
+    }
     if (!written.ok || gen === null) return null;
     const current: JobGeneration = gen;
     const active = Object.keys(current.active).length;
-    trace?.write('background_conversation', { ...base, active, execution_prompt_id: current.prompt_id });
-    if (!active && current.outcome === null) trace?.write('background_policy_delivery', { ...base, execution_prompt_id: current.prompt_id, reason: 'policy_delivered_no_active_execution', stalled_since: current.background_idle_since ?? deliveredAt, stalled_since_basis: current.background_idle_since ? 'reservation_release' : 'first_policy_delivery', admission_blocked: false });
+    trace?.write('background_conversation', { ...base, ...humanInput(), active, execution_prompt_id: current.prompt_id });
+    if (!active && current.outcome === null) trace?.write('background_policy_delivery', { ...base, ...humanInput(), execution_prompt_id: current.prompt_id, reason: 'policy_delivered_no_active_execution', stalled_since: current.background_idle_since ?? deliveredAt, stalled_since_basis: current.background_idle_since ? 'reservation_release' : 'first_policy_delivery', admission_blocked: false });
     if (current.outcome !== null) return emitContext('UserPromptSubmit', `Jev Gate: this background completion notice does not start or replace a job. The original job's recorded outcome is ${current.outcome}; use its stored policy result below. A notification is not new work or acceptance.\n${current.background_context ?? ''}`, null);
     return emitContext('UserPromptSubmit', `Jev Gate: answer the user's new message in the main session. The original background job and its contracts remain current; this message does not cancel or replace them. ${active ? `${active} owned execution(s) still have no terminal result. Do not wait synchronously, duplicate their work, or edit their files. Continue answering questions here; native permissions and explicit user cancellation remain authoritative.` : 'The previous execution has ended; use the policy result below before continuing the original job.'}\n${current.background_context ?? ''}`, null);
   };
@@ -605,12 +609,12 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const prompt = patched['prompt'] + dispatchMarker(token);
     const stdout = renderPreToolUseOutput({ kind: 'update', updatedInput: { ...patched, prompt, run_in_background: true } });
     if (Buffer.byteLength(prompt) > MAX_PROMPT_BYTES || stdout === null) {
-      updateJob(deps.env, input.session_id, prev => prev?.current.prompt_id === gen.prompt_id ? { ...prev, current: release(prev.current, input.tool_use_id!) } : null);
+      updateJob(deps.env, input.session_id, prev => prev && sameGeneration(prev.current, gen) ? { ...prev, current: release(prev.current, input.tool_use_id!) } : null);
       return emitDeny('dispatch_ineligible', 'Background dispatch identity exceeds the prompt size bound; no worker started.', null);
     }
     let registered = false;
     const saved = updateJob(deps.env, input.session_id, prev => {
-      const owner = prev?.current.prompt_id === gen.prompt_id ? own(prev.current.active, input.tool_use_id!) : undefined;
+      const owner = prev && sameGeneration(prev.current, gen) ? own(prev.current.active, input.tool_use_id!) : undefined;
       if (!prev || !owner) return null;
       registered = true;
       return { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_job: true, active: { ...prev.current.active, [input.tool_use_id!]: { ...owner, background_execution: { token, agent_id: null, subagent_type: String(patched['subagent_type']), resolved_model: null } } } } };
@@ -646,10 +650,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const sessionId = input.session_id!;
     const state = readJob(deps.env, sessionId);
     if (!state.ok || !state.value) return skip('no_state');
-    if (owner.gen.prompt_id !== state.value.current.prompt_id) {
+    if (!sameGeneration(owner.gen, state.value.current)) {
       updateJob(deps.env, sessionId, prev => prev ? { ...prev, history: prev.history.map(g => {
         const r = own(g.active, owner.id);
-        if (g.prompt_id !== owner.gen.prompt_id || !r?.background_execution || r.background_execution.token !== owner.r.background_execution?.token) return g;
+        if (!sameGeneration(g, owner.gen) || !r?.background_execution || r.background_execution.token !== owner.r.background_execution?.token) return g;
         const receipt: Receipt = { task_id: r.task_id ?? '', contract_hash: r.contract_hash ?? '', rev: r.rev ?? 0, attempt: r.attempt, tool_use_id: owner.id,
           provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed',
           requested_model: r.allocation_pair?.model ?? null, observed_model: observed.model, root_effort: null, recorded_at: new Date().toISOString() };
@@ -663,7 +667,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       tool_response: { status: observed.completed ? 'completed' : 'failed', agentId, resolvedModel: observed.model, content: [{ type: 'text', text: observed.text }] } };
     const result = await runHook({ ...deps, stdin: (async function* () { yield JSON.stringify(event); })() });
     const context = result.stdout ? JSON.parse(result.stdout)?.hookSpecificOutput?.additionalContext : null;
-    if (typeof context === 'string') updateJob(deps.env, sessionId, prev => prev?.current.prompt_id === owner.gen.prompt_id ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: context } } : null);
+    if (typeof context === 'string') updateJob(deps.env, sessionId, prev => prev && sameGeneration(prev.current, owner.gen) ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: context } } : null);
     trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, task_id: owner.r.task_id, status: observed.completed ? 'completed' : 'failed' });
     return skip();
   };
@@ -699,7 +703,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (owners.length !== 1) return skip();
     const owner = owners[0]!;
     const result = await backgroundResult(owner, { completed: false, text: '', model: owner.r.background_execution!.resolved_model }, taskId);
-    updateJob(deps.env, input.session_id, prev => prev?.current.prompt_id === owner.gen.prompt_id && Object.keys(prev.current.active).length === 0 ? { ...prev, current: { ...prev.current, outcome: 'incomplete' } } : null);
+    updateJob(deps.env, input.session_id, prev => prev && sameGeneration(prev.current, owner.gen) && Object.keys(prev.current.active).length === 0 ? { ...prev, current: { ...prev.current, outcome: 'incomplete' } } : null);
     return result;
   };
 
@@ -737,7 +741,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const promptId = input.prompt_id ?? null;
     // A2: without a prompt identity there is no generation to guard, so the turn stays native.
     if (promptId === null) {
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'prompt_id_absent', changed_default: false } });
+      trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'prompt_id_absent', changed_default: false } });
       // #48 P2: a host that never sends a prompt id would make Gate A unreachable on every turn, which is exactly
       // what liveness exists to catch, so this counts even though it is not the depth/admission branch below.
       if (mode === 'auto') appendLiveness(deps.env, { at: new Date().toISOString(), attempted: false, reason: 'prompt_id_absent' });
@@ -790,13 +794,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
      * scan for it. Native without the forced arm is the control arm and keeps its depth record, so it is not refused.
      */
     if (explicitlyForbidsDelegation(prompt)) {
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: true, reason: 'admission_forbids_delegation', changed_default: false } });
+      trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: true, reason: 'admission_forbids_delegation', changed_default: false } });
       if (mode === 'auto') appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'admission_forbids_delegation' });
       return emitContext('UserPromptSubmit', renderDirectGuidance(mode, true), 'admission_forbids_delegation');
     }
     if (blocker !== null && (mode === 'auto' || forcedRequested)) {
       trace?.write('admission_result', {
         ...base,
+        ...humanInput(),
         attempted: false,
         known_not_sent: true,
         forced: false,
@@ -809,7 +814,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'host_unsupported');
     }
     if (mode === 'auto' && !forced && !apiKey) {
-      trace?.write('admission_result', { ...base, attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'key_missing', changed_default: false } });
+      trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'key_missing', changed_default: false } });
       appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'key_missing' });
       return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'key_missing');
     }
@@ -824,6 +829,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     ) {
       trace?.write('admission_result', {
         ...base,
+        ...humanInput(),
         attempted: false,
         known_not_sent: true,
         decision: { shape: 'direct', decided: false, reason: 'admission_delivery_failed', changed_default: false },
@@ -857,6 +863,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       reason = mode === 'auto' ? 'admission_forced' : null;
       trace?.write('admission_result', {
         ...base,
+        ...humanInput(),
         ...depthFacts,
         attempted: false,
         known_not_sent: true,
@@ -868,7 +875,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // running bench control arm as an outage.
     } else if (mode === 'native') {
       // A9: the control arm initializes the same state and guard as auto; only the Jev calls differ.
-      trace?.write('admission_result', { ...base, ...depthFacts, attempted: false, known_not_sent: true, forced: false, decision: { shape, decided: false, reason: 'mode_native', changed_default: false } });
+      trace?.write('admission_result', { ...base, ...humanInput(), ...depthFacts, attempted: false, known_not_sent: true, forced: false, decision: { shape, decided: false, reason: 'mode_native', changed_default: false } });
       // Native is a deliberate configuration choice, not an auto-mode admission decision, so it is excluded too.
     } else {
       /**
@@ -890,6 +897,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         reason = belowFloor ? 'depth_below_floor' : 'depth_unknown';
         trace?.write('admission_result', {
           ...base,
+          ...humanInput(),
           ...depthFacts,
           attempted: false,
           known_not_sent: true,

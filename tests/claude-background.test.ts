@@ -5,6 +5,7 @@ import { runHook } from '../src/hook.js';
 import { newGeneration, readJob, updateJob } from '../src/job.js';
 import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
 import { isNativeTaskNotification } from '../src/claude-background.js';
+import { humanInputText } from '../src/recent-prompts.js';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true })));
@@ -88,7 +89,8 @@ describe('responsive native background contracts', () => {
     await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
     const records = readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8')));
     expect(records.filter(r => r.phase === 'background_stalled')).toHaveLength(0);
-    expect(records).toContainEqual(expect.objectContaining({ phase: 'background_policy_delivery', admission_blocked: false, stalled_since: idleSince, stalled_since_basis: 'reservation_release' }));
+    expect(records).toContainEqual(expect.objectContaining({ phase: 'background_policy_delivery', admission_blocked: false, stalled_since: idleSince, stalled_since_basis: 'reservation_release', human_input: { verdict: 'human', basis: 'not_notice' } }));
+    expect(records).toContainEqual(expect.objectContaining({ phase: 'background_conversation', prompt_id: 'delivery', human_input: { verdict: 'human', basis: 'not_notice' } }));
     const stopped = records.find(r => r.phase === 'stop' && r.prompt_id === 'delivery');
     expect(stopped?.outcome).toBe(accepted ? 'completed' : 'incomplete');
     if (!accepted) expect(stopped?.closed_reason).toBe('no_active_execution_after_policy_delivery');
@@ -119,7 +121,8 @@ describe('responsive native background contracts', () => {
     expect(await f.run({ hook_event_name: 'PreToolUse', prompt_id: 'delivery', tool_name: 'Agent', tool_use_id: 'replan-3', tool_input: planner })).toMatchObject({ kind: 'deny', code: 'bounds_exhausted' });
   });
   it.each(['system', undefined] as const)('delivers an idle incomplete policy once, closes on Stop, and admits unrelated prompts (source=%s)', async source => {
-    const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
+    const f = await fixture(); const trace = join(f.root, 'trace'); Object.assign(f.env, { JEV_GATE_TRACE_DIR: trace });
+    await f.launch(); f.transcript(true); await f.terminal();
     await f.run({ hook_event_name: 'Stop', prompt_id: 'original' });
     expect(f.job().current.outcome).toBeNull(); // Stop before delivery retains the policy.
     const delivered = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
@@ -128,6 +131,8 @@ describe('responsive native background contracts', () => {
     writeFileSync(f.parent, JSON.stringify({ type: 'user', sessionId: 's', promptId: 'duplicate', origin: { kind: 'task-notification', producer: 'session-task' }, promptSource: 'system', turnOrigin: 'task_notification', message: { content: prompt } }) + '\n');
     const notice = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'duplicate', source, prompt });
     expect(notice.stdout).toBeNull();
+    expect(readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8'))).filter(r => r.phase === 'admission_result' && r.prompt_id === 'duplicate')).toEqual([
+      expect.objectContaining({ human_input: { verdict: 'task_notification', basis: source ? 'source' : 'transcript_row' }, decision: expect.objectContaining({ reason: 'task_notification' }) })]);
     await f.run({ hook_event_name: 'Stop', prompt_id: 'delivery' });
     expect(f.job().current.outcome).toBe('incomplete');
     for (let i = 0; i < 3; i++) {
@@ -257,10 +262,19 @@ describe('responsive native background contracts', () => {
     const f = await fixture(); await f.launch(); f.transcript(true); await f.terminal();
     expect(f.job().current.receipts[0]?.verdict).not.toBe('accept'); expect(f.job().current.active).toEqual({});
   });
-  it('never applies a retired result to the new job', async () => {
+  // #284: the same prompt ID registered again is a new job too; only its generation tells them apart.
+  it.each(['replacement', 'original'])('never applies a retired result to the new job (new prompt ID %s)', async promptId => {
     const f = await fixture(); await f.launch(); f.transcript();
-    updateJob(f.env, 's', prev => newGeneration(prev, 's', 'replacement', 'direct').state);
-    await f.terminal(); expect(f.job().current.prompt_id).toBe('replacement'); expect(f.job().current.receipts).toHaveLength(0);
+    updateJob(f.env, 's', prev => newGeneration(prev, 's', promptId, 'direct').state);
+    await f.terminal(); expect(f.job().current.prompt_id).toBe(promptId); expect(f.job().current.receipts).toHaveLength(0);
+    expect(f.job().history[0]?.active).toEqual({});
+    expect(f.job().history[0]?.receipts[0]).toMatchObject({ verdict: 'unknown', verdict_reason: 'generation_changed' });
+  });
+  it('settles a native TaskStop into the retired generation, never the new one with the same prompt ID (#284)', async () => {
+    const f = await fixture(); await f.launch();
+    updateJob(f.env, 's', prev => newGeneration(prev, 's', 'original', 'direct').state);
+    await f.run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'TaskStop', tool_input: { task_id: 'worker' }, tool_response: { message: 'Successfully stopped task: worker (work)', task_id: 'worker', task_type: 'local_agent' } });
+    expect(f.job().current).toMatchObject({ prompt_id: 'original', outcome: null, receipts: [] });
     expect(f.job().history[0]?.active).toEqual({});
     expect(f.job().history[0]?.receipts[0]).toMatchObject({ verdict: 'unknown', verdict_reason: 'generation_changed' });
   });
@@ -307,8 +321,8 @@ describe('Gate A and host task notifications', () => {
     const transcript = (rows: unknown[]) => writeFileSync(parent, [depth, ...rows].map(r => JSON.stringify(r)).join('\n') + '\n');
     transcript([]);
     const env = { HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), JEV_GATE_TRACE_DIR: trace, TYPESAFE_API_KEY: 'fixture-key', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' };
-    const session = { env, transcript, calls: 0, run: (event: Record<string, unknown>) => runHook({ env, fetchImpl, stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() }),
-      admissions: (promptId: string) => readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8'))).filter(r => r.phase === 'admission_result' && r.prompt_id === promptId) };
+    const session = { env, parent, transcript, calls: 0, run: (event: Record<string, unknown>) => runHook({ env, fetchImpl, stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() }),
+      admissions: (promptId: string | null) => readdirSync(trace).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8'))).filter(r => r.phase === 'admission_result' && r.prompt_id === promptId) };
     const fetchImpl: typeof fetch = async (_url, init) => {
       session.calls++; const request = JSON.parse(String(init?.body));
       const answers = Object.fromEntries(Object.entries(request.questions as Record<string, any>).map(([name, q]) => [name,
@@ -356,6 +370,8 @@ describe('Gate A and host task notifications', () => {
     ['no host queue record', (prompt: string) => [human, shapes.bash.launch]],
     ['no launch receipt', (prompt: string) => [human, { type: 'queue-operation', operation: 'enqueue', sessionId: 's', timestamp: '2026-10-19T03:01:00.000Z', content: prompt }]],
     ['a receipt for another task', (prompt: string) => [human, receipt('toolu_bash', { backgroundTaskId: 'another' }), { type: 'queue-operation', operation: 'enqueue', sessionId: 's', timestamp: '2026-10-19T03:01:00.000Z', content: prompt }]],
+    // Queued while the session was busy after a later turn of theirs: the queue record is the person's, not the host's.
+    ['the queue while busy after a later turn', (prompt: string) => [human, shapes.bash.launch, { ...human, promptId: 'later', promptSource: 'queued', timestamp: '2026-10-19T03:00:30.000Z', message: { content: 'Also check the lint output.' } }, { type: 'queue-operation', operation: 'enqueue', sessionId: 's', timestamp: '2026-10-19T03:01:00.000Z', content: prompt }]],
   ] as const)('asks Gate A about notice XML a person sent with %s, and records why', async (_case, rows) => {
     const g = gateSession(); const { prompt } = shapes.bash;
     g.transcript(rows(prompt));
@@ -363,5 +379,26 @@ describe('Gate A and host task notifications', () => {
     expect(g.calls).toBeGreaterThan(0);
     const job = readJob(g.env, 's'); expect(job.ok && job.value?.current.prompt_id).toBe('pasted');
     expect(g.admissions('pasted').filter(r => r.attempted).map(r => r.human_input)).toEqual(expect.arrayContaining([{ verdict: 'human', basis: 'unproven' }]));
+  });
+  it('takes a 2.1.2x notice row without turnOrigin or producer as a notice in Gate A and Compact alike', async () => {
+    const g = gateSession(); const { prompt } = shapes.bash;
+    const row = { type: 'user', sessionId: 's', promptId: 'legacy', promptSource: 'system', origin: { kind: 'task-notification' }, timestamp: '2026-10-19T03:01:00.000Z', message: { content: prompt } };
+    g.transcript([human, row]);
+    expect(humanInputText(row)).toBeNull();
+    expect(await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'legacy', prompt })).toMatchObject({ stdout: null });
+    expect(g.calls).toBe(0);
+    expect(g.admissions('legacy').map(r => r.human_input)).toEqual([{ verdict: 'task_notification', basis: 'transcript_row' }]);
+  });
+  it('records the human verdict on the Gate A records that never ask', async () => {
+    const g = gateSession(); const verdict = { verdict: 'human', basis: 'not_notice' };
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt: 'A turn without an identity.' });
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'veto', prompt: 'Fix the parser. Do not delegate or use a subagent.' });
+    writeFileSync(g.parent, '');
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'no-depth', prompt: 'Fix the parser.' });
+    delete (g.env as Record<string, string>)['TYPESAFE_API_KEY'];
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'no-key', prompt: 'Fix the parser.' });
+    expect(g.calls).toBe(0);
+    expect([null, 'veto', 'no-depth', 'no-key'].flatMap(id => g.admissions(id)).map(r => [r.decision.reason, r.human_input])).toEqual(
+      ['prompt_id_absent', 'admission_forbids_delegation', 'depth_unknown', 'key_missing'].map(reason => [reason, verdict]));
   });
 });
