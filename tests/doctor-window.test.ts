@@ -7,9 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { LIVENESS_WINDOW, appendLiveness } from '../src/liveness.js';
 
 /**
- * #48 P0-1/P2: doctor's own resolution of the effective depth floor and the liveness ring, exercised as a real
+ * #48 P0-1/P2, #279: doctor's own resolution of the effective depth floor and its activity checks, exercised as a real
  * process against the compiled CLI -- the same way tests/hook.test.ts's "dist/hook.js (process)" block treats
- * hook.ts, and for the same reason: `checkConfig`/`checkLiveness` are not exported, so the only way to see their
+ * hook.ts, and for the same reason: `checkConfig` and the activity wiring are not exported, so the only way to see their
  * FAIL/WARN output is to run `doctor` itself.
  */
 let out: string;
@@ -113,35 +113,22 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
   });
 });
 
-describe('doctor: liveness (#48 P2)', () => {
-  it('reports no record yet on a fresh install', () => {
-    const stateDir = mktemp();
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(/\[info\] liveness: no record yet at .*liveness\.json/);
+describe('doctor: activity from trace records (#279)', () => {
+  it('warns 추적 불가 with no trace records, and keeps fixed reminders behind --verbose', () => {
+    const env = { PATH: '/nonexistent', HOME: mktemp(), JEV_GATE_TRACE_DIR: mktemp() };
+    const r = spawnSync(process.execPath, [join(out, 'cli.js'), 'doctor'], { cwd: mktemp(), encoding: 'utf8', env });
+    expect(r.stdout).toMatch(/\[warn\] activity: 추적 불가 \(untrackable\) -- no trace records in the last 24 h/);
+    expect(r.stdout).not.toMatch(/\/hooks should list|start: JEV_GATE_MODE=auto/);
+    expect(r.stdout).not.toMatch(/Local readiness only|missing observations do not establish/);
   });
 
-  it('reports counts without warning below a full window', () => {
-    const stateDir = mktemp();
-    for (let i = 0; i < LIVENESS_WINDOW - 1; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(new RegExp(`\\[info\\] liveness: ${LIVENESS_WINDOW - 1}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, 0 attempted`));
-    expect(stdout).not.toMatch(/liveness:.*\[warn\]/);
-  });
-
-  it('warns when a full window never attempted a call, matching SessionStart', () => {
-    const stateDir = mktemp();
+  it('folds the liveness ring into gate_a: a full window that never called Jev warns', () => {
+    const stateDir = mktemp(), traceDir = mktemp();
     for (let i = 0; i < LIVENESS_WINDOW; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(/\[warn\] liveness: the last 50 auto-mode admission decisions never attempted a Gate A call/);
-  });
-
-  it('does not warn when at least one of a full window attempted a call', () => {
-    const stateDir = mktemp();
-    for (let i = 0; i < LIVENESS_WINDOW - 1; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: 'last', attempted: true, reason: null });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(new RegExp(`liveness: ${LIVENESS_WINDOW}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, 1 attempted`));
-    expect(stdout).not.toMatch(/liveness:.*never attempted/);
+    writeFileSync(join(traceDir, 'admission_result-1.json'), JSON.stringify({ phase: 'admission_result', attempted: false, decision: { shape: 'direct', reason: 'depth_below_floor' }, written_at: new Date().toISOString() }));
+    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir, JEV_GATE_TRACE_DIR: traceDir });
+    expect(stdout).toMatch(/\[warn\] gate_a: 1 decisions, 0 Jev calls, 0 orchestrated; .*liveness 0\/50 recent auto-mode decisions called Jev/);
+    expect(stdout).not.toMatch(/\] liveness:/);
   });
 });
 

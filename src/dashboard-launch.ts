@@ -25,7 +25,7 @@ const healthy = async (state: Record<string, unknown> | null): Promise<boolean> 
     return reply.ok && body['service'] === 'jev-gate-dashboard' && body['token'] === state['token'];
   } catch { return false; }
 };
-const ownerAlive = (state: Record<string, unknown> | null): boolean => {
+export const ownerAlive = (state: Record<string, unknown> | null): boolean => {
   const pid = state?.['pid'];
   if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1) return false;
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }

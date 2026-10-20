@@ -20,7 +20,7 @@ const ACTIONS: Record<DoctorGroup, string> = {
   configuration: 'Correct the named setting or environment override; start a fresh native session to load it.',
   credentials: 'Enter a Jev API key in the local setup screen. Explicit key overrides take precedence over the saved key.',
   storage: 'Correct the named path or its permissions. Doctor does not create directories or change permissions.',
-  activity: 'Check the latest execution records in the dashboard; missing observations do not establish failure or success.',
+  activity: 'Act on the named feature; activity judges the last 24 h of local trace records, and a feature with no records is unverified.',
   version: 'Update the plugin through its marketplace. A fresh native session loads the new hooks.',
   models: 'Update the native CLI and inspect its /model list and model restrictions; correct the model or effort mapping.',
 };
@@ -36,7 +36,7 @@ export const finishDoctor = (host: DoctorReport['host'], root: string, checks: D
   return { host, checkedAt: new Date().toISOString(), ok: counts.fail === 0, status: counts.fail ? 'blocked' : counts.warn ? 'attention' : 'ready', version: { package: packageVersion(root, host), release }, checks, counts };
 };
 export const renderDoctor = (report: DoctorReport, verbose = false): string => {
-  const out = [`Jev Gate ${report.version.package ? `v${report.version.package}` : '(version unknown)'} · ${report.host} · ${report.status.toUpperCase()}`, `${report.counts.fail} failures · ${report.counts.warn} warnings · ${report.counts.ok} local checks passed`, 'Local readiness only; active hook trust, provider application and savings need observed execution records.'];
+  const out = [`Jev Gate ${report.version.package ? `v${report.version.package}` : '(version unknown)'} · ${report.host} · ${report.status.toUpperCase()}`, `${report.counts.fail} failures · ${report.counts.warn} warnings · ${report.counts.ok} local checks passed`, 'Install checks are local; activity judges each feature from the last 24 h of trace records (no inference, no network).'];
   for (const group of ['runtime', 'package', 'host', 'configuration', 'models', 'credentials', 'storage', 'activity', 'version'] as const) {
     const all = report.checks.filter(c => c.group === group); if (!all.length) continue;
     const visible = all.filter(c => verbose || c.level === 'fail' || c.level === 'warn' || ['runtime', 'host', 'models', 'version', 'credentials', 'activity'].includes(group));

@@ -18,7 +18,8 @@ import { recordingCommand, recordingStatus } from './recording.js';
 import { explainDir } from './explain.js';
 import { HOST_WINDOW_MAX, HOST_WINDOW_MIN, measuredCompactPoint, readHostCompactWindow, readHostWorktreeBaseRef, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
-import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
+import { readLiveness } from './liveness.js';
+import { activityChecks, activityTraces, codexOwnerFacts } from './doctor-activity.js';
 import { OWNED_AGENTS, type Mode, type Tier } from './types.js';
 import { doctorChecks, finishDoctor, renderDoctor, readableFile, storageIssue, moduleIssues, dashboardDiagnostic, versionDiagnostic, type DoctorReport } from './doctor.js';
 import { checkRelease, unknownRelease, packageVersion } from './release-info.js';
@@ -293,6 +294,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     else say('warn', `Compact: host ${hostVersion} (>=2.1.299) + ${seat} -> function compact unavailable (the built-in security default passes it over for an installed plugin); classic path active (PreCompact steering, SessionStart restore, PostCompact record). It guides and supplements the native compaction and cannot replace it, so native summarization time remains. Gate and Router still run. If an administrator can enable jev-gate@<marketplace> in managed settings ("enabledPlugins"), the full function compact runs; see mods/compact/README.md`);
   };
 
+  let keyPresent = false;
   const checkEnv = (mode: Mode | null): void => {
     const conflicts = AUTH_CONFLICT_ENV.filter((k) => env[k]);
     say(conflicts.length ? 'warn' : 'ok', conflicts.length ? `auth-related env set: ${conflicts.join(', ')} (may replace subscription OAuth; jev-gate does not change it)` : 'no API-key/gateway/cloud env overrides detected');
@@ -330,7 +332,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const keyEnv = { ...env, TYPESAFE_API_KEY: launch('TYPESAFE_API_KEY') };
     const overrideKey = apiKeyOverride(keyEnv);
     if (overrideKey?.trim() && !validApiKey(overrideKey)) say('fail', 'Jev API key override has an invalid format (value hidden)', 'Correct or remove the explicit key override; it takes precedence over the private credential store.');
-    const key = resolveApiKey(keyEnv);
+    const key = resolveApiKey(keyEnv); keyPresent = !!key;
     say('info', 'Router automatic Fable default: off; active routerAllowFable is controlled by the host plugin options. Capabilities do not establish account access; missing response model/effort remains unknown.');
     say('info', `Router launch pins: model=${launch('ANTHROPIC_MODEL')?.trim() ? 'present' : 'absent'}; effort=${launch('CLAUDE_CODE_EFFORT_LEVEL')?.trim() ? 'present' : 'absent'} (values hidden; injector source unknown). Starting with /model or --model establishes a baseline, not a permanent routing pin.`);
     let installed = 'unknown'; try { const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')); if (typeof manifest.version === 'string' && /^\d+\.\d+\.\d+$/.test(manifest.version)) installed = manifest.version; } catch { /* metadata unknown */ }
@@ -352,23 +354,6 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       if (risky.length) say('warn', `settings.json env sets ${risky.join(', ')} (names only; not modified)`);
     } catch {
       say('warn', 'cannot parse ~/.claude/settings.json');
-    }
-  };
-
-  /**
-   * #48 P2: the same ring SessionStart reads, surfaced in doctor so `jev-gate doctor` alone answers "is Gate A ever
-   * firing" without waiting for a session to start (or for the warning's own 50-decision window to fill first).
-   */
-  const checkLiveness = (): void => {
-    const state = readLiveness(env);
-    if (state === null) {
-      say('info', `liveness: no record yet at ${livenessPath(env)} (written by the first auto-mode admission decision)`);
-      return;
-    }
-    const attempted = state.recent.filter((e) => e.attempted).length;
-    say('info', `liveness: ${state.recent.length}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, ${attempted} attempted a Gate A call`);
-    if (state.recent.length >= LIVENESS_WINDOW && attempted === 0) {
-      say('warn', `liveness: the last ${state.recent.length} auto-mode admission decisions never attempted a Gate A call -- same condition SessionStart's systemMessage warns about`);
     }
   };
 
@@ -395,13 +380,14 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   inspect('environment', () => checkEnv(loaded.ok ? loaded.config.mode : null));
   report.group('configuration');
   inspect('host settings', checkUserSettings);
-  report.group('activity');
-  inspect('liveness', checkLiveness);
+  // Fixed reminders, not observations: shown with --verbose only, by the package group's detail visibility.
+  report.group('package');
   say('info', `in Claude Code: /hooks should list seven jev-gate lifecycle entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^(Agent|TaskStop)$, PostToolUseFailure on ^Agent$, Stop, SessionStart, owned SubagentStop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
   say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
   report.group('storage');
   inspect('storage', () => { for (const path of [jobsDir(env), claudeTraceDir(env)]) { const issue = storageIssue(path); say(issue ? 'fail' : 'ok', `storage: ${path}: ${issue ?? 'readable/writable or creatable (not created by doctor)'}`); } });
   report.group('activity');
+  inspect('activity', () => { for (const c of activityChecks({ traces: activityTraces(env), now: Date.now(), installed: packageVersion(root, 'claude'), recording: recordingStatus(env).enabled, keyPresent, codexOwner: codexOwnerFacts(env), liveness: readLiveness(env) })) say(c.level, c.message, c.action ?? undefined); });
   const dashboard = await dashboardDiagnostic(env); say(dashboard.level, dashboard.message);
   report.group('version');
   const release = options.checkUpdate ? await checkRelease() : unknownRelease();
