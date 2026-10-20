@@ -20,6 +20,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
   const reply = (id: unknown, result: Obj) => input.write(JSON.stringify({ id, result }) + '\n');
   const notify = (method: string, params: Obj) => input.write(JSON.stringify({ method, params }) + '\n');
   let start: Obj | undefined;
+  let collectedTurn: Obj | undefined;
   const env = { HOME: root, JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_GATE_STATE_DIR: join(root, 'state'), ...(scenario !== 'adhoc' ? { JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' } : {}) };
   const stateEnv = { JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') };
   const policy = new CodexPolicy(rpc, env, undefined, { 'jev-gate:worker': 'Return a result' }, true);
@@ -43,7 +44,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
         else reply(m['id'], { model: 'gpt-6.1-sol', cwd: root, sandbox: { type: 'dangerFullAccess' }, thread: { id: 'worker' } });
       }
       if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (['normal', 'adhoc'].includes(scenario)) reply(m['id'], { turn: { id: 'turn-w' } }); }
-      if (m['method'] === 'thread/read') reply(m['id'], { thread: { id: 'worker', turns: [] } });
+      if (m['method'] === 'thread/read') reply(m['id'], { thread: { id: 'worker', turns: collectedTurn ? [collectedTurn] : [] } });
       if (m['method'] === 'turn/interrupt' || m['method'] === 'thread/archive') reply(m['id'], {});
     }
   });
@@ -61,8 +62,85 @@ const setup = async (scenario = 'uncertain', started = true) => {
   const returned = () => sent.find(m => m['id'] === 'call') as Obj | undefined;
   const traces = (phase: string) => { try { return readdirSync(env.JEV_CODEX_TRACE_DIR).filter(f => f.startsWith(`${phase}-`)).map(f => JSON.parse(readFileSync(join(env.JEV_CODEX_TRACE_DIR, f), 'utf8')) as Obj); } catch { return []; } };
   const status = async (id: string) => { await rpc.onRequest({ id, method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } }); return JSON.stringify(sent.find(m => m['id'] === id)); };
-  return { policy, rpc, parent, sent, launch, terminal, job, stateEnv, root, returned, traces, status, unlock: () => unlock?.(), started: () => start !== undefined, lateResponse: () => { if (start) reply(start['id'], { turn: { id: 'turn-w' } }); } };
+  return { policy, rpc, parent, sent, launch, terminal, job, stateEnv, root, returned, traces, status, collect: (turn: Obj) => { collectedTurn = turn; }, unlock: () => unlock?.(), started: () => start !== undefined, lateResponse: () => { if (start) reply(start['id'], { turn: { id: 'turn-w' } }); } };
 };
+describe('Codex status collection and deny tracing (#293)', () => {
+  type F = Awaited<ReturnType<typeof setup>>;
+  const write = (f: F) => f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_use_id: 'root-write', cwd: f.root, tool_name: 'Write', tool_input: { file_path: join(f.root, 'src/file'), content: 'PRIVATE_CONTENT' } });
+  it.each(['done', 'blocked', 'failed'])('collects terminal %s after a missed notification, releases the scope and returns the same result twice', async status => {
+    const f = await setup('normal'); await f.launch(true);
+    const text = JSON.stringify({ status, summary: 'collected terminal result', changed_files: [], interfaces: [], checks: [], blockers: status === 'blocked' ? ['blocked'] : [] });
+    f.collect({ id: 'turn-w', status: status === 'failed' ? 'failed' : 'completed', items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text }] });
+    expect(JSON.stringify(await write(f))).toContain('deny');
+    const first = await f.status('collected-1');
+    expect(first).toContain(status === 'failed' ? 'native_failed_turn' : 'collected terminal result');
+    expect(await f.status('collected-2')).toBe(first.replace('collected-1', 'collected-2'));
+    expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts).toHaveLength(1);
+    expect(await write(f)).toEqual({});
+    expect(await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', cwd: f.root, tool_name: 'Bash', tool_input: { command: 'node -e "console.log(1)"' } })).toEqual({});
+    expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
+    expect(f.sent.filter(m => m['method'] === 'thread/read')).toHaveLength(1);
+  });
+  it('keeps a genuinely running worker protected and records the reservation and reason for every deny', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    f.collect({ id: 'turn-w', status: 'inProgress', items: [] });
+    expect(await f.status('running')).toContain('still running');
+    for (let i = 0; i < 2; i++) {
+      const output = JSON.stringify(await write(f));
+      expect(output).toContain('worker'); expect(output).toContain('terminal_not_observed');
+    }
+    expect(f.job().current.active['dispatch']).toBeDefined();
+    expect(f.sent.some(m => m['method'] === 'turn/interrupt')).toBe(false);
+    const rows = f.traces('dispatch_denied'); expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row).toMatchObject({ host: 'codex', session_id: 'parent', prompt_id: 'p', tool_use_id: 'root-write', tool_name: 'Write', reason: 'write_conflict', agent_id: 'worker', reservation_id: 'worker', settlement_reason: 'terminal_not_observed' });
+    expect(JSON.stringify(rows)).not.toContain('PRIVATE_CONTENT');
+  });
+  it('does not collect a different turn or release protection after collection fails', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    f.collect({ id: 'another-turn', status: 'completed', items: [] });
+    expect(await f.status('wrong-turn')).toContain('still running');
+    expect(JSON.stringify(await write(f))).toContain('terminal_not_observed');
+    vi.spyOn(f.rpc, 'request').mockRejectedValueOnce(new Error('PRIVATE_EXCEPTION'));
+    expect(await f.status('failed-read')).toContain('collection_failed');
+    expect(JSON.stringify(await write(f))).toContain('collection_failed');
+    expect(f.job().current.active['dispatch']).toBeDefined();
+    expect(JSON.stringify(f.traces('dispatch_denied'))).not.toContain('PRIVATE_EXCEPTION');
+  });
+  it.each(['completed', 'failed'])('names a %s settlement commit failure and retries it without re-execution', async status => {
+    const f = await setup('normal'); await f.launch(true);
+    const path = jobPath(f.stateEnv, 'parent'); mkdirSync(`${path}.lock`); writeFileSync(join(`${path}.lock`, 'owner'), String(process.pid));
+    f.collect({ id: 'turn-w', status, items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text: 'terminal result kept' }] });
+    const pending = await f.status('pending');
+    expect(pending).toContain('Reservation worker: state_locked'); expect(pending).not.toContain('terminal result kept');
+    expect(JSON.stringify(await write(f))).toContain('Reservation worker: state_locked');
+    expect(f.job().current.active['dispatch']).toBeDefined(); expect(f.job().current.receipts).toHaveLength(0);
+    expect(f.traces('failure')).toContainEqual(expect.objectContaining({ reservation_id: 'worker', settlement_reason: 'state_locked', release_unconfirmed: true }));
+    expect(f.traces('dispatch_denied')).toMatchObject([{ reservation_id: 'worker', settlement_reason: 'state_locked' }]);
+    rmSync(`${path}.lock`, { recursive: true });
+    expect(await f.status('retry')).toContain(status === 'failed' ? 'native_failed_turn' : 'terminal result kept');
+    expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts).toHaveLength(1);
+    expect(await write(f)).toEqual({});
+    expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
+  });
+  it('identifies a different live reservation when the collected worker is already done', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    const state = f.job(); const held = state.current.active['dispatch']!;
+    updateJob(f.stateEnv, 'holder', () => ({ ...state, session_id: 'holder', history: [], current: { ...state.current, active: { held: { ...held, codex_execution: { ...held.codex_execution!, thread_id: 'other-worker', host_pid: process.pid } } } } }));
+    f.collect({ id: 'turn-w', status: 'completed', items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text: '{"status":"done"}' }] });
+    expect(await f.status('done-1')).toContain('done'); expect(await f.status('done-2')).toContain('done');
+    expect(f.job().current.active).toEqual({});
+    expect(JSON.stringify(await write(f))).toContain('Reservation other-worker: host_process_running');
+    expect(f.traces('dispatch_denied')).toMatchObject([{ reservation_id: 'other-worker', settlement_reason: 'host_process_running' }]);
+  });
+  it.each([
+    ['jev-gate:worker', 'jev_agent', 'owned_child_dispatch'],
+  ])('records the %s %s policy denial', async (role, tool, reason) => {
+    const f = await setup('normal');
+    f.parent.role = role; f.parent.settings['activePermissionProfile'] = { id: 'custom-profile' };
+    expect(JSON.stringify(await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_use_id: 'denied-tool', tool_name: tool, tool_input: {} }))).toContain('deny');
+    expect(f.traces('dispatch_denied')).toMatchObject([{ host: 'codex', session_id: 'parent', tool_use_id: 'denied-tool', tool_name: tool, reason }]);
+  });
+});
 describe('Codex genuine terminal settlement (#139)', () => {
   it('does not start a new owned worker on a catalog-declared previous generation', async () => {
     const f = await setup('normal');
@@ -247,7 +325,7 @@ describe('Codex dispatch failure reason (#233)', () => {
     expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts).toHaveLength(1);
     expect(await f.status('s2')).toContain('Worker not started: reservation_unavailable at reservation.');
     expect(f.sent.some(m => m['method'] === 'turn/start')).toBe(false);
-    expect(f.traces('failure').at(-1)).toMatchObject({ failure_category: 'reservation_unavailable', failure_stage: 'reservation', not_executed: true });
+    expect(f.traces('failure')).toContainEqual(expect.objectContaining({ failure_category: 'reservation_unavailable', failure_stage: 'reservation', not_executed: true }));
   });
   it.each([['failed', 'native_failed_turn', 'error', 'Codex 워커 턴 실패'], ['interrupted', 'interrupted', 'interrupted', '워커 중단']])('reports an observed %s turn as a terminal, not as non-execution', async (status, category, state, label) => {
     const f = await setup('normal'); const run = f.launch(); await vi.waitFor(() => expect(f.started()).toBe(true)); f.terminal(status); await run;

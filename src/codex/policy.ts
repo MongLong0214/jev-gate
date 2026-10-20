@@ -3,7 +3,7 @@ import { join, isAbsolute, resolve } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { runHook, type HookDeps } from '../hook.js';
 import { stateRoot, readJob, updateJob, own, codexExecutions, hostExited, pendingBackgroundPolicy } from '../job.js';
-import { OWNED_AGENTS, agentForTier, type CodexFailure, type HookInput } from '../types.js';
+import { OWNED_AGENTS, agentForTier, type CodexFailure, type HookInput, type Reservation } from '../types.js';
 import { OWNED_AGENT_PROFILES } from '../agents.js';
 import type { Env } from '../config.js';
 import { codexTraceDir } from '../codex-paths.js';
@@ -35,6 +35,7 @@ interface WorkerDispatch {
   background?: boolean;
   /** Definite pre-send evidence; a native terminal turn has none. */
   failure?: CodexFailure; unconfirmed?: string;
+  pendingReason?: string;
 }
 interface Session {
   id: string; settings: Obj; baseline: { model: string; effort: string | null }; policy: CodexPolicyConfig;
@@ -556,9 +557,23 @@ export class CodexPolicy {
     const session = this.sessions.get(String(input['session_id']));
     if (!session) return {};
     const event = input['hook_event_name'];
+    const emitDeny = (reason: string, text: string, metadata: Obj = {}): Obj => {
+      this.trace?.write('dispatch_denied', { host: 'codex', session_id: session.id, prompt_id: session.prompt,
+        caller: { agent_id: input['agent_id'] ?? null, agent_type: session.role ?? null }, tool_use_id: input['tool_use_id'] ?? null,
+        tool_name: input['tool_name'] ?? null, reason, ...metadata });
+      return deny(text);
+    };
     await this.retrySettlements();
     if (!session.role) await this.settleOrphans(session);
-    if (!session.role && event === 'PreToolUse' && this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {})) return deny('A managed Codex worker in this write scope has not completed terminal settlement. Read/status commands (git status/diff/log/show/blame/rev-parse/ls-files and other git reads, rg, grep, find, ls, cat, nl, head, tail, `sed -n` line prints, wc, sort, uniq, cut, tr, jq, diff, stat, ps, which, `command -v`, a lone --version, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with `cd <absolute dir> &&` and name its paths without variables.');
+    if (!session.role && event === 'PreToolUse') {
+      const conflict = this.writeConflict(String(input['cwd'] ?? session.settings['cwd']), String(input['tool_name']), obj(input['tool_input']) ?? {});
+      if (conflict) {
+        const e = conflict.codex_execution!; const dispatch = this.sessions.get(e.thread_id)?.dispatch;
+        const reason = dispatch?.pendingReason ?? (dispatch ? dispatch.ended ? 'settlement_pending' : 'terminal_not_observed' : e.host_pid === undefined ? 'host_identity_unavailable' : 'host_process_running');
+        return emitDeny('write_conflict', `A managed Codex worker in this write scope has not completed terminal settlement. Reservation ${e.thread_id}: ${reason}. Read/status commands (git status/diff/log/show/blame/rev-parse/ls-files and other git reads, rg, grep, find, ls, cat, nl, head, tail, \`sed -n\` line prints, wc, sort, uniq, cut, tr, jq, diff, stat, ps, which, \`command -v\`, a lone --version, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with \`cd <absolute dir> &&\` and name its paths without variables.`,
+          { reservation_id: e.thread_id, agent_id: e.thread_id, settlement_reason: reason, host_pid: e.host_pid ?? null });
+      }
+    }
     if (event === 'PreToolUse' && input['tool_name'] === 'Bash' && typeof input['tool_use_id'] === 'string' && typeof obj(input['tool_input'])?.['command'] === 'string') {
       session.commands.set(input['tool_use_id'], String(obj(input['tool_input'])!['command']));
     }
@@ -566,7 +581,7 @@ export class CodexPolicy {
     if (session.role) {
       if (event === 'PreToolUse') {
         const name = String(input['tool_name']);
-        if (/^(Agent|spawn_agent|send_input|SendMessage|jev_agent)$/.test(name)) return deny('Jev owned workers cannot create or coordinate child agents.');
+        if (/^(Agent|spawn_agent|send_input|SendMessage|jev_agent)$/.test(name)) return emitDeny('owned_child_dispatch', 'Jev owned workers cannot create or coordinate child agents.');
       }
       return {};
     }
@@ -624,7 +639,8 @@ export class CodexPolicy {
         return settled?.parent === session.id ? settled.output : this.heldElsewhere(session.id, id) ?? 'No owned execution with this identity.';
       }
       if (original['action'] === 'cancel') { this.interruptWorker(worker); return 'Cancellation requested. Acceptance and release still require an observed terminal event.'; }
-      return worker.dispatch.ended ? this.settleWorker(worker) : worker.dispatch.unconfirmed ?? 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.';
+      if (!worker.dispatch.ended) await this.collectWorkerTurn(worker, 1000);
+      return worker.dispatch.ended ? this.settleWorker(worker) : `${worker.dispatch.unconfirmed ?? 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.'} Reservation ${worker.id}: ${worker.dispatch.pendingReason ?? 'terminal_not_observed'}.`;
     }
     if (!session || session.role || session.eligible === false || this.env['JEV_CODEX_ENABLED'] === '0' || !session.prompt || !session.controller || session.controller.signal.aborted || !original) return 'No active root Jev job.';
     if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || original['run_in_background'] !== undefined && typeof original['run_in_background'] !== 'boolean' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model', 'run_in_background'].includes(k))) return `Invalid owned Agent input. Pass subagent_type (one of ${Object.keys(this.profiles).join(', ')}) and prompt (the task, starting unchanged with any [JEV_TASK ...] marker); optional: description, model, run_in_background. action is only status|cancel with agent_id.`;
@@ -768,19 +784,27 @@ export class CodexPolicy {
     const deadline = Date.now() + 1000;
     const left = () => Math.max(1, deadline - Date.now());
     // Read only the exact known turn; never infer a latest turn when start identity is unknown.
-    if (worker.turn && !worker.dispatch?.ended) {
-      try {
-        const read = await this.rpc.request('thread/read', { threadId: worker.id, includeTurns: true }, left());
-        const turns = obj(read['thread'])?.['turns'];
-        const turn = Array.isArray(turns) ? turns.map(obj).find(t => t?.['id'] === worker.turn && ['completed', 'interrupted', 'failed'].includes(String(t['status']))) : null;
-        if (turn) this.notification({ method: 'turn/completed', params: { threadId: worker.id, turn } });
-      } catch { /* The single recovery deadline still owns the following wait. */ }
-    }
+    if (worker.turn && !worker.dispatch?.ended) await this.collectWorkerTurn(worker, left());
     if (worker.dispatch?.ended || Date.now() >= deadline) return;
     this.interruptWorker(worker, left());
     let timer: NodeJS.Timeout | undefined;
     try { await Promise.race([terminal, new Promise<void>(resolve => { timer = setTimeout(resolve, left()); })]); }
     finally { if (timer) clearTimeout(timer); }
+  }
+  /** Status collection shares start recovery's exact native turn lookup, without interrupting a live worker. */
+  private async collectWorkerTurn(worker: Session, timeoutMs: number): Promise<void> {
+    const d = worker.dispatch; if (!d || d.ended) return;
+    if (!worker.turn) { d.pendingReason = 'turn_identity_unavailable'; return; }
+    try {
+      const read = await this.rpc.request('thread/read', { threadId: worker.id, includeTurns: true }, timeoutMs);
+      if (d.ended) return;
+      const thread = obj(read['thread']); const turns = thread?.['turns'];
+      const turn = thread?.['id'] === worker.id && Array.isArray(turns) ? turns.map(obj).find(t => t?.['id'] === worker.turn && ['completed', 'interrupted', 'failed'].includes(String(t['status']))) : null;
+      if (!turn) { d.pendingReason = 'terminal_not_observed'; return; }
+      if (Array.isArray(turn['items'])) for (const item of turn['items']) this.notification({ method: 'item/completed', params: { threadId: worker.id, turnId: worker.turn, item } });
+      delete d.pendingReason;
+      this.notification({ method: 'turn/completed', params: { threadId: worker.id, turn } });
+    } catch { if (!d.ended) d.pendingReason = 'collection_failed'; }
   }
   private async settleWorker(worker: Session): Promise<string> {
     const d = worker.dispatch;
@@ -793,15 +817,21 @@ export class CodexPolicy {
       let guidance = '';
       const status = d.ended!['status'];
       const failure: CodexFailure | null = status === 'completed' ? null : d.failure ?? { category: status === 'interrupted' ? 'interrupted' : 'native_failed_turn', stage: 'turn', not_executed: false };
-      if (!failure) {
-        const response = { status: 'completed', agentId: worker.id, resolvedModel: worker.requestModel ?? worker.settings['model'], content: [{ type: 'text', text: String(final?.['text'] ?? '') }], totalDurationMs: Date.now() - d.startedAt };
-        const post = await this.hook(d.parent, { hook_event_name: 'PostToolUse', session_id: d.parent.id, prompt_id: d.prompt, tool_name: 'Agent', tool_use_id: d.tool, tool_input: d.input, tool_response: response, cwd: String(d.parent.settings['cwd']) });
-        guidance = codexGuidance(contextOf(post));
-      } else await this.failure(d.parent, d.prompt, d.tool, d.input, failure, failure.category, d.startedAt);
+      const response = { status: 'completed', agentId: worker.id, resolvedModel: worker.requestModel ?? worker.settings['model'], content: [{ type: 'text', text: String(final?.['text'] ?? '') }], totalDurationMs: Date.now() - d.startedAt };
+      const post = !failure
+        ? await this.hook(d.parent, { hook_event_name: 'PostToolUse', session_id: d.parent.id, prompt_id: d.prompt, tool_name: 'Agent', tool_use_id: d.tool, tool_input: d.input, tool_response: response, cwd: String(d.parent.settings['cwd']) })
+        : await this.failure(d.parent, d.prompt, d.tool, d.input, failure, failure.category, d.startedAt);
+      if (!failure) guidance = codexGuidance(contextOf(post));
+      if (post.code) d.pendingReason = post.code; else delete d.pendingReason;
       const state = readJob(this.env, d.parent.id);
       const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
       const committed = gen?.receipts.some(r => r.tool_use_id === d.tool);
-      if (!gen || own(gen.active, d.tool) || !committed) return `${failure ? failureHead(failure) : 'Worker terminal observed'}; settlement pending. Internal execution identity: ${worker.id}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
+      if (!gen || own(gen.active, d.tool) || !committed) {
+        d.pendingReason ??= !state.ok ? state.code : !gen ? 'generation_unavailable' : own(gen.active, d.tool) ? 'reservation_active' : 'receipt_uncommitted';
+        this.trace?.write('failure', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id,
+          reservation_id: worker.id, error_first_line: 'settlement_pending', settlement_reason: d.pendingReason, release_unconfirmed: true });
+        return `${failure ? failureHead(failure) : 'Worker terminal observed'}; settlement pending. Internal execution identity: ${worker.id}. Reservation ${worker.id}: ${d.pendingReason}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
+      }
       d.output = !failure
         ? `${final?.['text'] ?? 'No worker final output.'}\n\n${guidance}`
         : `${failureHead(failure)}. ${FAILURE_ADVICE[failure.category]} No completion or acceptance is claimed.`;
@@ -864,10 +894,10 @@ export class CodexPolicy {
     this.sessions.delete(worker.id); this.hooked.delete(worker.id);
     try { await this.rpc.request('thread/archive', { threadId: worker.id }, 1000); } catch { /* Files are preserved. */ }
   }
-  private writeConflict(cwd: string, tool: string, input: Obj, deliverables?: string[]): boolean {
+  private writeConflict(cwd: string, tool: string, input: Obj, deliverables?: string[]): Reservation | undefined {
     const targets = deliverables ? (deliverables.length ? deliverables.map(p => resolve(cwd, p)) : [cwd]) : writeTargets(cwd, tool, input);
-    if (!targets) return false;
-    return codexExecutions(this.env).some(r => {
+    if (!targets) return undefined;
+    return codexExecutions(this.env).find(r => {
       if (hostExited(r)) return false;
       const e = r.codex_execution!;
       // A worktree worker writes its deliverables in its own checkout and later into the root, so both copies are its scope.
@@ -875,8 +905,8 @@ export class CodexPolicy {
       return writesInto(targets, r.deliverables.length ? bases.flatMap(b => r.deliverables.map(q => resolve(b, q))) : bases);
     });
   }
-  private async failure(session: Session, prompt: string, tool: string, input: Obj, failure: CodexFailure, error: string = failure.category, startedAt?: number): Promise<void> {
-    await this.hook(session, { hook_event_name: 'PostToolUseFailure', session_id: session.id, prompt_id: prompt, tool_name: 'Agent', tool_use_id: tool, tool_input: input, error,
+  private failure(session: Session, prompt: string, tool: string, input: Obj, failure: CodexFailure, error: string = failure.category, startedAt?: number): ReturnType<typeof runHook> {
+    return this.hook(session, { hook_event_name: 'PostToolUseFailure', session_id: session.id, prompt_id: prompt, tool_name: 'Agent', tool_use_id: tool, tool_input: input, error,
       codex_failure: failure, is_interrupt: failure.category === 'interrupted', ...(startedAt === undefined ? {} : { duration_ms: Date.now() - startedAt }) });
   }
   /** Possibly still running: recorded without PostToolUseFailure, whose release would drop write protection. */
