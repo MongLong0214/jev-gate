@@ -46,10 +46,13 @@ describe('paths', () => {
 });
 
 describe('updateJob', () => {
-  it('C4: projects legacy current/history receipts and rebuilds raw background context on read and rewrite', () => {
-    const env = freshEnv(), original = seed(env), canary = 'sessionid=canary123';
+  it.each([
+    { label: 'cookie', canary: 'sessionid=canary123' },
+    { label: 'JSON', canary: '{"password":"canary-pw-123","api_key":"canary-key-456"}' },
+  ])('C4/F1: projects legacy current/history receipts and rebuilds raw background context on read and rewrite ($label)', ({ canary }) => {
+    const env = freshEnv(), original = seed(env);
     const receipt = { task_id: 'single', contract_hash: '', rev: 0, attempt: 1, tool_use_id: 'call', provenance: 'worker_reported',
-      reply: { status: 'blocked', summary: 'Legacy functional result', changed_files: ['src/legacy.ts'], interfaces: ['legacy(): void'], blockers: ['Needs integration'],
+      reply: { status: 'blocked', summary: 'Legacy functional result', changed_files: ['src/legacy.ts'], interfaces: ['legacy(): void'], blockers: ['Needs integration', canary],
         checks: [1, 2, 3].map(i => ({ check_id: `echo ${i} ${canary}`, result: 'pass', note: canary })) }, verdict: 'invalid', verdict_reason: `check echo ${canary}: result malformed`,
       verification: { transcript: 'read', contradicted: [`echo 1 ${canary}`], unobserved: [`legacy ${canary}`, `other ${canary}`], stale: [] }, observed_model: null, root_effort: null, recorded_at: '', advisory: canary };
     const gen = { ...original.current, receipts: [receipt], background_job: true, background_context: `raw failure ${canary}`, legacy_report: canary,
@@ -60,7 +63,9 @@ describe('updateJob', () => {
     expect(read.ok && read.value?.current.background_context).toContain('confirmed command pass 0');
     const rewritten = updateJob(env, 's1', prev => prev);
     expect(rewritten.ok).toBe(true);
-    expect(readFileSync(jobPath(env, 's1'), 'utf8')).not.toContain(canary);
+    for (const value of [JSON.stringify(read), readFileSync(jobPath(env, 's1'), 'utf8')]) {
+      for (const sentinel of [canary, 'canary-pw-123', 'canary-key-456']) expect(value).not.toContain(sentinel);
+    }
     expect(JSON.stringify(read)).toContain('#1');
   });
 

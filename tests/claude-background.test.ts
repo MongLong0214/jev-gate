@@ -72,6 +72,30 @@ describe('responsive native background contracts', () => {
     }
   });
 
+  it.each([false, true])('F1: removes JSON credentials from Claude settlement and replay (direct=%s)', async direct => {
+    const text = '{"password":"canary-pw-123","api_key":"canary-key-456"}';
+    const fields = { status: 'blocked', summary: text, blockers: [text, 'Needs integration'], interfaces: ['integrate(): void'] };
+    const f = await fixture(direct, fields); await f.launch(); f.transcript();
+    const terminal = await f.terminal();
+    expect(f.job().current.receipts).toHaveLength(1);
+    const receipt = f.job().current.receipts[0]!;
+    expect(receipt.reply).toMatchObject({ status: 'blocked', blockers: ['Needs integration'], interfaces: ['integrate(): void'] });
+    expect(receipt.reply).not.toHaveProperty('summary');
+    const disk = readFileSync(jobPath(f.env, 's'), 'utf8');
+    const context = f.job().current.background_context!;
+    const replay = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    const foreground = await fixture(direct, fields); foreground.transcript();
+    const post = await foreground.run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_input: foreground.input,
+      tool_response: { status: 'completed', agentId: 'worker', content: [{ type: 'text', text: foreground.report }] } });
+    expect(JSON.parse(post.stdout!).hookSpecificOutput.additionalContext).toBe(context);
+    const persisted = JSON.parse(disk);
+    for (const output of [JSON.stringify(persisted.current.receipts[0]), disk, JSON.stringify(f.job()), context, JSON.stringify(terminal), JSON.stringify(replay),
+      readFileSync(jobPath(foreground.env, 's'), 'utf8'), JSON.stringify(post)]) {
+      for (const canary of ['canary-pw-123', 'canary-key-456']) expect(output).not.toContain(canary);
+    }
+    for (const output of [context, JSON.stringify(replay), JSON.stringify(post)]) expect(output).toContain('Needs integration');
+  });
+
   it.each([false, true])('B3: strips report prose from Claude background settlement and replay (direct=%s)', async direct => {
     const sentinel = 'B3_SYNTHETIC_CLAUDE_BACKGROUND_SENTINEL';
     const text = `echo ${sentinel}; Bearer synthetic-${sentinel}`;

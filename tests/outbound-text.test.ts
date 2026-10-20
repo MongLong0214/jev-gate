@@ -1,8 +1,150 @@
 import { describe, expect, it } from 'vitest';
 
 import { estimateTokens, looksSecret } from '../src/outbound-text.js';
+import { looksSecret as routerLooksSecret } from '../src/router-secret.js';
 
-describe('outbound text — credential screen', () => {
+describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('outbound text — %s credential screen', (_screen, looksSecret) => {
+  it.each([
+    'password', 'passwd', 'pwd', 'secret', 'client_secret', 'client-secret', 'clientSecret',
+    'api_key', 'apikey', 'api-key', 'access_key', 'secret_key', 'private_key', 'token',
+    'access_token', 'refresh_token', 'id_token', 'auth', 'authorization', 'credential', 'credentials',
+    'aws_access_key_id', 'aws_secret_access_key', 'aws_session_token',
+    'sessionid', 'session', 'sid', 'connect.sid', 'PHPSESSID', 'JSESSIONID', '_session',
+    'authentication', 'authToken', 'auth_cookie',
+  ])('F1: detects credential assignments for %s in every quote/separator form', key => {
+    for (const keyQuote of ['', "'", '"', '`']) for (const valueQuote of ['', "'", '"', '`']) {
+      for (const separator of ['=', ':', ': ', '=>']) {
+        const text = `  ${keyQuote}${key}${keyQuote} \t ${separator} \t ${valueQuote}canary-pw-123${valueQuote}  `;
+        expect(looksSecret(text), text).toBe(true);
+      }
+    }
+  });
+
+  it.each([
+    { label: 'quoted JSON credentials', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}' },
+    { label: 'short quoted password', text: 'password="u:p"' },
+    { label: 'hunter2 password', text: "password: 'hunter2'" },
+    { label: 'quoted password with spaces', text: "'password': 'canary phrase 123'" },
+    { label: 'Bearer header', text: 'Authorization: Bearer canary123' },
+    { label: 'Basic header', text: 'Authorization: Basic dTpw' },
+    { label: 'URL userinfo', text: 'https://user:pass@host' },
+    { label: 'PEM private key', text: '-----BEGIN PRIVATE KEY-----\nsynthetic\n-----END PRIVATE KEY-----' },
+    { label: 'AWS access key ID', text: 'AKIAIOSFODNN7EXAMPLE' },
+    { label: 'AWS temporary access key ID', text: 'ASIAIOSFODNN7EXAMPLE' },
+    { label: 'AWS secret assignment', text: 'aws_secret_access_key=canary/secret+12345678901234567890123456789' },
+    ...['ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_'].map(prefix => ({ label: `GitHub ${prefix}`, text: prefix + 'a1'.repeat(20) })),
+    ...['xoxa-', 'xoxb-', 'xoxp-', 'xoxr-', 'xoxs-'].map(prefix => ({ label: `Slack ${prefix}`, text: prefix + '1234567890-canary' })),
+    ...['sk_live_', 'rk_live_', 'sk-', 'sk-ant-'].map(prefix => ({ label: `API key ${prefix}`, text: prefix + 'a1'.repeat(20) })),
+    { label: 'Google API key', text: 'AIza' + 'a'.repeat(35) },
+    { label: 'JWT', text: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJjYW5hcnkifQ.c3ludGhldGlj' },
+    { label: 'JWT short payload', text: 'eyJhbGciOiJIUzI1NiJ9.e30.c3ludGhldGlj' },
+    { label: 'npm token', text: 'npm_' + 'a1'.repeat(18) },
+    { label: 'netrc password line', text: 'machine host\n  login user\n  password canary-pw-123\n' },
+    { label: 'Cookie header', text: 'Cookie: preference=canary123' },
+    { label: 'Set-Cookie header', text: 'Set-Cookie: preference=canary123; HttpOnly' },
+    { label: 'curl cookie', text: "curl -b 'other=canary123' host" },
+    { label: 'session cookie', text: 'connect.sid=s:canary123' },
+  ])('F1: detects $label', ({ text }) => {
+    expect(looksSecret(text)).toBe(true);
+  });
+
+  it.each([
+    { label: 'password prose', text: 'password reset flow' },
+    { label: 'token prose', text: 'the token budget' },
+    { label: 'secret prose', text: 'secret sauce' },
+    { label: 'TypeScript token type', text: 'type Options = { token: number }' },
+    { label: 'TypeScript optional key', text: 'apiKey?: string' },
+    { label: 'TypeScript quoted key', text: 'type Options = { "password": string }' },
+    { label: 'computed password', text: 'password = readPassword();' },
+    { label: 'computed token', text: 'token = readToken();' },
+    ...['', '<redacted>', '***', 'xxx', 'xxxxxxxxxxxxxxxx', 'changeme', '${PASSWORD}', '$API_KEY', '{{password}}', '%PASSWORD%', '%DB_PASS%'].map(value => ({ label: `placeholder ${value || 'empty'}`, text: JSON.stringify({ password: value }) })),
+    { label: 'placeholder followed by credential', text: '{"password":"<redacted>","token":number}' },
+    { label: 'Bearer reference', text: 'Authorization: Bearer $API_KEY' },
+    { label: 'Basic placeholder', text: 'Authorization: Basic <credentials>' },
+    { label: 'URL reference', text: 'https://user:${PASSWORD}@host' },
+    { label: 'URL without password', text: 'https://user@host/path' },
+    { label: 'PEM public key', text: '-----BEGIN PUBLIC KEY-----' },
+    { label: 'AWS prefix only', text: 'AKIA is an AWS prefix' },
+    { label: 'AWS secret reference', text: 'aws_secret_access_key=$AWS_SECRET_ACCESS_KEY' },
+    ...['ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'xoxa-', 'xoxb-', 'xoxp-', 'xoxr-', 'xoxs-', 'sk_live_', 'rk_live_', 'sk-', 'sk-ant-', 'AIza', 'npm_'].map(prefix => ({ label: `prefix only ${prefix}`, text: `the ${prefix} prefix` })),
+    { label: 'incomplete JWT', text: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJjYW5hcnkifQ' },
+    { label: 'netrc reference', text: 'machine host\npassword $PASSWORD\n' },
+    { label: 'netrc empty password', text: 'machine host\npassword\n' },
+    { label: 'cookie prose', text: 'cookie banner; the session ended' },
+    { label: 'cookie file', text: 'curl --cookie cookies.txt host' },
+    { label: 'session reference', text: 'sessionid=$SESSION' },
+  ])('F1: leaves $label alone', ({ text }) => {
+    expect(looksSecret(text)).toBe(false);
+  });
+
+  it.each([
+    'max token: 4000',
+    'input token: 1234, output token: 99',
+    'password: hash',
+    'secret: foo',
+    'pwd: /Users/isaac',
+    'credentials: include',
+    "fetch(url, { credentials: 'include' })",
+    'token=abc',
+    'auth: none',
+    'the token: budget is tight',
+    'Gate A auth: ok',
+    'headers: { authorization: authValue }',
+    '{ token: newToken }',
+    'pass token: tokenValue to helper',
+    'id_token: decoded.sub',
+    'set token: process.env.API_TOKEN',
+  ])('F1 false-positive fix: keeps ordinary prose and references: %s', text => {
+    expect(looksSecret(text)).toBe(false);
+  });
+
+  it.each([
+    { text: 'token=1234567', secret: false },
+    { text: 'token=12345678', secret: true },
+    { text: 'secret=AbC9xYz12345', secret: true },
+    { text: '"token":"canary-key-456"', secret: true },
+    { text: "credentials: 'same-origin'", secret: false },
+    { text: "token: 'abc-defg'", secret: false },
+    { text: "token: 'abc-defghijklmn'", secret: false },
+    { text: "token: 'abc-defghijklmno'", secret: true },
+    { text: "token: 'abcdefghijklmnop'", secret: false },
+    { text: 'password=abcdefghijklmnop', secret: false },
+    { text: 'password=Namespace1.password', secret: false },
+    { text: 'password=/tmp/canary123', secret: false },
+    { text: 'password=~/canary123', secret: false },
+    { text: 'token=process.env.API_TOKEN123', secret: false },
+    { text: 'sessionid=newToken', secret: false },
+    { text: "sessionid='tokenValue'", secret: false },
+    { text: 'sessionid=decoded.sub', secret: false },
+    { text: 'sessionid=/tmp/canary123', secret: false },
+    { text: 'sessionid=abc-def', secret: false },
+    { text: 'sessionid=abc-defg', secret: true },
+    { text: 'sessionid=canary123', secret: true },
+  ])('F1 false-positive fix: applies credential value thresholds: $text', ({ text, secret }) => {
+    expect(looksSecret(text)).toBe(secret);
+  });
+
+  it('F1 false-positive fix: keeps short strong literals in every quote style', () => {
+    for (const key of ['password', 'passwd', 'api_key', 'client_secret', 'secret_key', 'private_key', 'access_key', 'access_token', 'refresh_token', 'id_token', 'aws_secret_access_key']) {
+      for (const quote of ["'", '"', '`']) {
+        expect(looksSecret(`${key}: ${quote}p${quote}`)).toBe(true);
+        expect(looksSecret(`${key}: ${quote}hunter2${quote}`)).toBe(true);
+      }
+    }
+  });
+
+  it('F1: leaves placeholders alone for every assignment quote and separator', () => {
+    for (const key of ['password', 'api_key', 'token', 'auth', 'sessionid']) {
+      for (const keyQuote of ['', "'", '"', '`']) for (const valueQuote of ['', "'", '"', '`']) {
+        for (const separator of ['=', ':', ': ', '=>']) for (const value of ['<redacted>', '***', 'xxx', 'changeme', '${PASSWORD}', '$API_KEY']) {
+          const text = `${keyQuote}${key}${keyQuote} ${separator} ${valueQuote}${value}${valueQuote}`;
+          expect(looksSecret(text), text).toBe(false);
+        }
+      }
+    }
+    expect(looksSecret('password="<redacted>"; api_key="canary-key-456"')).toBe(true);
+  });
+
   it('screens the conventional credential shapes and leaves ordinary text alone', () => {
     expect(looksSecret('-----BEGIN RSA PRIVATE KEY-----')).toBe(true);
     expect(looksSecret('ghp_012345678901234567890123456789')).toBe(true);
