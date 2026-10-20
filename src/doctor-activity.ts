@@ -186,9 +186,10 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     }
     const restores = compacts.filter(r => r['stage'] === 'restore').length, posted = compacts.filter(r => r['stage'] === 'post').length;
     const skipped = input.keyPresent ? started.filter(r => r['selection'] === 'disabled').length : 0, invalid = compacts.filter(r => r['stage'] === 'jev' && r['selection'] === 'invalid_answers').length;
+    const selections = tally(compacts.filter(r => r['stage'] === 'pre').flatMap(r => str(r['selection']) ? [str(r['selection'])!] : []));
     const sessionsOf = (rows: Rec[]): string => [...new Set(rows.map(r => short(r['session_id'])))].join(', ');
     say(missing.length ? 'fail' : skipped || invalid || unrestored.length ? 'warn' : started.length ? 'ok' : 'info',
-      `compact: ${started.length} pre / ${restores} restore / ${posted} post${missing.length ? `; ${missing.length} pre without post (sessions ${sessionsOf(missing)})` : ''}${unrestored.length ? `; ${unrestored.length} without restore (sessions ${sessionsOf(unrestored)})` : ''}; Jev recorded disabled with a key present ${skipped}; invalid_answers ${invalid}`,
+      `compact: ${started.length} pre / ${restores} restore / ${posted} post${missing.length ? `; ${missing.length} pre without post (sessions ${sessionsOf(missing)})` : ''}${unrestored.length ? `; ${unrestored.length} without restore (sessions ${sessionsOf(unrestored)})` : ''}; Jev recorded disabled with a key present ${skipped}; invalid_answers ${invalid}${selections ? `; selections ${selections}` : ''}`,
       missing.length ? 'A compaction started but its PostCompact never recorded; check /hooks for the PostCompact entry and the host log.' : 'Some compactions ran without a restore or Jev selection; check the key and the classic hooks in /hooks.');
   }
 

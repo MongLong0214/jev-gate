@@ -80,6 +80,17 @@ describe('dashboard live interactions', () => {
     expect(opened(p)).toContain('후보 8/16 · 필수 근거 3'); expect(text(p, 'trace')).not.toContain('호스트 훅에서 결과 이벤트가 빠진');
     p.click('.node[data-feature=compact]'); expect(text(p, 'circuit-inspector')).toContain('220ms');
   });
+  it.each([
+    ['no_current_task', '사람이 입력한 현재 작업 없음', 'No current human task'],
+    ['no_prior_assistant', '이전 assistant 메시지 없음', 'No prior assistant message'],
+  ] as const)('renders classic Compact reason %s in both languages', (selection, ko, en) => {
+    const p = page();
+    const operations = buildOperations([], [{ at: stamp, component: 'compact', rec: { event: 'compact', path: 'classic', session_id: 's', stage: 'pre', guided: true, selection } }], new Date(stamp), { trace: true });
+    p.push({ ...snapshot([]), operations });
+    expect(opened(p)).toContain(ko);
+    p.click('#language');
+    expect(opened(p)).toContain(`Jev selection · ${en}`);
+  });
   it('renders all five real feature states and never invents traffic on first load', () => {
     const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 70 })]), run('x', 'codex', [step('l', 'workers', 'host', { lifecycle: true })])]));
     expect(p.w.document.querySelectorAll('#pipeline .node')).toHaveLength(5);

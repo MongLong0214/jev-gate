@@ -137,6 +137,7 @@ PHRASES.push(['위임 이득 부족','Delegation not worth it'],['앞선 대화 
   ['세션 설정','Session settings'],['루트 턴 판단','Root turn decision'],['루트 응답 모델 확인','Root response model check'],['루트 판단 중단','Root decision stopped'],['Agent 생성 판단','Agent spawn decision'],['Agent 응답 모델 확인','Agent response model check'],['Agent 판단 중단','Agent decision stopped'],['Agent 생성 거부','Agent spawn denied'],['Agent 항목 미적용','Agent dimension not applied'],['하위 실행 등록','Child run registered'],['하위 단계 판단','Child step decision'],['하위 단계 응답 모델 확인','Child response model check'],['하위 단계 판단 중단','Child decision stopped'],['캐시 기준 복원 생략','Cache baseline restore skipped'],['캐시 기준 복원','Cache baseline restored'],['effort 캐시 유지','Effort kept for cache'],['문맥 초기화','Context reset'],['판단 시간 초과','Assessment timed out'],['늦은 응답','Late response'],
   ['최종 배정 선택 · 실제 전송과 응답 모델은 별도 관측','Final allocation selected · submission and response model observed separately'],['최종 배정','Final allocation'],['기존 모델 유지','Previous model kept'],['effort 필드 생략','Effort field omitted'],['effort 유지','Effort kept'],['Router 변경 ','Router changed to ']);
 PHRASES.push(['설정 변경','Setting changed'],['기존 설정 유지','Previous setting kept']);
+PHRASES.push(['사람이 입력한 현재 작업 없음','No current human task'],['이전 assistant 메시지 없음','No prior assistant message'],['Jev 선별','Jev selection']);
 PHRASES.sort((a,b)=>b[0].length-a[0].length);
 PHRASES.push(['연결 중','Connecting']);PHRASES.sort((a,b)=>b[0].length-a[0].length);
 let lang='ko';

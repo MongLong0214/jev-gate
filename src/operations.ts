@@ -207,6 +207,7 @@ const traceTitle = (phase: string, r: Rec): string => ({
 
 const compactSelectionReason = (value: unknown): string | null => ({
   current_dependencies: '현재 작업에 필요한 근거 선택', recency_kept: '기존 최근순 유지', no_candidates: '선별할 과거 결과 없음',
+  no_current_task: '사람이 입력한 현재 작업 없음', no_prior_assistant: '이전 assistant 메시지 없음',
   no_key: 'Jev API 키 없음', disabled: 'Jev 선별 꺼짐', not_eligible: '로컬 추출 조건 미충족 · Jev 선별 미실행', input_secret: '민감정보 감지 · 로컬 유지', input_too_large: '판정 입력 한도 초과 · 로컬 유지', context_exceeded: 'Jev 컨텍스트 길이 초과 · 로컬 유지', rejected_input: 'Jev가 입력을 거절 · 로컬 유지',
   timeout: 'Jev 응답 시간 초과 · 로컬 유지', invalid_answers: '유효하지 않은 판정 · 로컬 유지', aborted: '중단 · 판정 미적용',
   superseded: '새 턴으로 변경 · 판정 미적용', unauthorized: 'Jev 인증 실패 · 로컬 유지', payment_required: 'Jev 크레딧 소진 · 로컬 유지', credential_refused: 'Jev 인증 확인 필요 · 로컬 유지',
@@ -603,6 +604,7 @@ const modStep = (row: ModRecord, closed: Set<string>, responses: Map<string, str
       if (number(r['dependencies']) !== null) choice = `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}`;
       details.push(text(`후보 ${n(number(r['candidates']))}/${n(number(r['available']))}`, `필수 근거 ${n(number(r['dependencies']))}`, number(r['jev_ms']) === null ? null : `${n(number(r['jev_ms']))}ms`));
     } else summary = started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['skipped'] ? text('호스트 사전 요약 생략 · 이 시점 대화로 로컬 digest 구성 가능', token(r['skipped'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
+    if (r['stage'] !== 'jev' && r['selection']) details.push(text('Jev 선별', compactSelectionReason(r['selection'])));
     details.push(text(`모드 ${token(r['mode']) ?? '?'}`, `트리거 ${token(r['trigger']) ?? '?'}`, r['subagent'] === true ? '서브에이전트' : '루트', `메시지 ${n(number(r['messages']))}개`));
     details.push(text(number(r['digestChars']) === null ? null : `digest ${n(number(r['digestChars']))}자`, number(r['tailChars']) === null ? null : `tail ${n(number(r['tailChars']))}자`, number(r['buildMs']) === null ? null : `빌드 ${n(number(r['buildMs']))}ms`));
     if (number(r['tokensBefore']) !== null || number(r['tokensAfter']) !== null) details.push(`호스트 보고 압축 전 ${n(number(r['tokensBefore']))} / 후 ${n(number(r['tokensAfter']))} 토큰`);

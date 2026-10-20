@@ -82,16 +82,9 @@ export const readTail = (path: string, bytes = TAIL_BYTES): string | null => {
   }
 };
 
-/**
- * Up to `max` earlier user prompts, oldest first, excluding `current` (the host may already have appended it).
- * Empty when the transcript is missing, unreadable, or holds nothing the user typed.
- */
-export const readRecentPrompts = (path: string | null | undefined, current: string, max = RECENT_PROMPTS_MAX): string[] => {
-  if (typeof path !== 'string' || path.length === 0) return [];
-  const tail = readTail(path);
-  if (tail === null) return [];
+const promptTexts = (text: string): string[] => {
   const found: string[] = [];
-  for (const line of tail.split('\n')) {
+  for (const line of text.split('\n')) {
     if (line.length === 0 || !line.includes('"user"')) continue;
     let entry: unknown;
     try {
@@ -102,8 +95,53 @@ export const readRecentPrompts = (path: string | null | undefined, current: stri
     const text = humanInputText(entry);
     if (text !== null) found.push(text);
   }
+  return found;
+};
+
+/**
+ * Up to `max` earlier user prompts, oldest first, excluding `current` (the host may already have appended it).
+ * Empty when the transcript is missing, unreadable, or holds nothing the user typed.
+ */
+export const readRecentPrompts = (path: string | null | undefined, current: string, max = RECENT_PROMPTS_MAX): string[] => {
+  if (typeof path !== 'string' || path.length === 0) return [];
+  const tail = readTail(path);
+  if (tail === null) return [];
+  const found = promptTexts(tail);
   if (found.length > 0 && found[found.length - 1] === current.trim()) found.pop();
   return selectRecentPrompts(found, max);
+};
+
+/**
+ * Compact needs the latest human task even when tool output has filled the tail. Read backwards in 2 MiB chunks
+ * until a usable prompt is found or the file starts. Keep a split JSONL row as bytes until it is complete, including
+ * a split UTF-8 character. Only that row can exceed a chunk; no whole-transcript read or non-human fallback.
+ * Gate A's recent-context read above deliberately stays limited to its one tail.
+ */
+export const readCurrentTaskPrompts = (path: string | null | undefined): string[] => {
+  if (typeof path !== 'string' || path.length === 0) return [];
+  let fd: number;
+  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { return []; }
+  try {
+    const stat = fstatSync(fd); if (!stat.isFile()) return [];
+    let end = stat.size;
+    let fragment: Buffer = Buffer.alloc(0);
+    while (end > 0) {
+      const len = Math.min(end, TAIL_BYTES);
+      const buf = Buffer.allocUnsafe(len);
+      end -= len;
+      if (readSync(fd, buf, 0, len, end) !== len) return [];
+      const joined = fragment.length ? Buffer.concat([buf, fragment]) : buf;
+      const newline = joined.indexOf(10);
+      if (end > 0 && newline < 0) { fragment = joined; continue; }
+      const start = end === 0 ? 0 : newline + 1;
+      const found = selectRecentPrompts(promptTexts(joined.subarray(start).toString('utf8')));
+      if (found.length) return found;
+      fragment = joined.subarray(0, start);
+    }
+    return [];
+  } catch { return []; } finally {
+    try { closeSync(fd); } catch { /* nothing to recover */ }
+  }
 };
 
 /** Native adapters provide only observed human requests; the same bounds and secret filtering apply. */

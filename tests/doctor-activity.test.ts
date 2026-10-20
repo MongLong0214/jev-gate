@@ -258,6 +258,14 @@ describe('activity: compact', () => {
     expect(level([pre({ selection: 'disabled' }), rec('mod_compact', { stage: 'restore' }, 29), rec('mod_compact', { stage: 'post' }, 29)], 'compact')).toBe('warn');
     expect(level([pre(), rec('mod_compact', { stage: 'jev', selection: 'invalid_answers' }, 30), rec('mod_compact', { stage: 'restore' }, 29), rec('mod_compact', { stage: 'post' }, 29)], 'compact')).toBe('warn');
   });
+  it.each(['no_current_task', 'no_prior_assistant', 'no_key', 'no_candidates', 'disabled'])('shows the recorded Compact selection reason %s', selection => {
+    const c = check(run([pre({ selection }), rec('mod_compact', { stage: 'restore' }, 29), rec('mod_compact', { stage: 'post' }, 29)]), 'compact');
+    expect(c.message).toContain(`selections ${selection} 1`);
+    expect(c.level).toBe(selection === 'disabled' ? 'warn' : 'ok');
+  });
+  it('shows no_current_task on a deferred pre without inventing a missing restore', () => {
+    expect(check(run([pre({ deferred: 'nothing_to_restore', selection: 'no_current_task' })]), 'compact')).toMatchObject({ level: 'info', message: expect.stringContaining('selections no_current_task 1') });
+  });
 });
 
 describe('activity: codex_connection', () => {
