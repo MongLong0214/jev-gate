@@ -11,6 +11,8 @@ import { appendLiveness, LIVENESS_WINDOW, readLiveness } from '../src/liveness.j
 import { composeSingleWorkerPrompt, MAX_COMPOSED_BYTES } from '../src/plan.js';
 import { ADMISSION_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type WorkerReply } from '../src/types.js';
 import { costModelFloor, delegationModel } from '../src/admission.js';
+import { explainRecords, readTraceRecords } from '../src/explain.js';
+import { loadActivity } from '../src/activity.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
 
 /** The atomic Gate A's shipped pre-filter: the shallowest depth at which any tool-call answer could pay. */
@@ -794,6 +796,28 @@ describe('SessionStart liveness warning (#48 P2)', () => {
  * first and not the second, so a pre-registered run can attribute the saving instead of observing it.
  */
 describe('single executor (A19)', () => {
+  it.each(['none', 'worktree'] as const)('B1: carries configured %s isolation on the single-worker patch', async workerIsolation => {
+    const cfg = join(tmp, `isolation-${workerIsolation}.json`);
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', workerIsolation }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_MODE: 'native', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' });
+    const guidance = await run(env, promptEvent());
+    const pre = await run(env, preEvent('Agent', agentInput()));
+    expect(pre.kind).toBe('patch');
+    expect(updatedInput(pre)['isolation']).toBe(workerIsolation === 'worktree' ? 'worktree' : undefined);
+    if (workerIsolation === 'worktree') expect(context(guidance)).toContain('worktree');
+  });
+
+  it('B1: preserves the called model while isolating an ad-hoc native worker', async () => {
+    const cfg = join(tmp, 'isolation-adhoc.json');
+    writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', workerIsolation: 'worktree' }));
+    const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_MODE: 'native' });
+    await run(env, promptEvent());
+    const original = agentInput();
+    const pre = await run(env, preEvent('Agent', original));
+    expect(pre.kind).toBe('patch');
+    expect(updatedInput(pre)).toEqual({ ...original, isolation: 'worktree' });
+  });
+
   const singleEnv = (): Env => {
     const cfg = join(tmp, `single-${Math.random().toString(36).slice(2)}.json`);
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', ...SERIAL_POLICY }));
@@ -871,7 +895,7 @@ describe('single executor (A19)', () => {
     expect(gen.receipts).toHaveLength(1);
     // There is no contract hash; the report keeps check results under positions, never shell commands.
     expect(gen.receipts[0]).toMatchObject({ task_id: 'single', contract_hash: '', verdict: 'accept', provenance: 'worker_reported' });
-    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: '#1', result: 'pass', note: 'all passed' }]);
+    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: '#1', result: 'pass' }]);
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).toBe('completed');
   });
@@ -927,7 +951,7 @@ describe('single executor (A19)', () => {
     const receipt = state(env).current.receipts[0];
     expect(receipt).toMatchObject({ task_id: 'single', verdict: 'accept' });
     // Free command names are matched in memory and stored by position.
-    expect(receipt?.reply?.checks).toEqual([{ check_id: '#1', result: 'pass', note: 'no errors' }]);
+    expect(receipt?.reply?.checks).toEqual([{ check_id: '#1', result: 'pass' }]);
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).toBe('completed');
   });
@@ -1117,6 +1141,20 @@ describe('worker check verification (0.4.0)', () => {
   };
   const ACCEPTED = 'The worker reported done with no blockers';
 
+  it('B3: persists only positional check facts, never report prose or observed output', async () => {
+    const dir = join(tmp, 'trace-private-report');
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir }); await dispatched(env);
+    const sentinel = 'B3_SYNTHETIC_REPORT_SENTINEL';
+    const text = `echo ${sentinel}; Bearer synthetic-${sentinel}`;
+    const reply = workerReply({ summary: text, changed_files: [text], interfaces: [text], blockers: [text],
+      checks: [{ check_id: 'npm test', result: 'pass', note: text, observed_output: text, output: text, error: text } as WorkerReply['checks'][number]] });
+    const post = await run(env, postWith(reply, workerTranscript([{ command: 'npm test', failed: false }])));
+    const receipt = state(env).current.receipts[0];
+    expect.soft(receipt?.reply).toEqual({ status: 'done', checks: [{ check_id: '#1', result: 'pass' }] });
+    for (const output of [JSON.stringify(receipt), readFileSync(jobPath(env, 's1'), 'utf8'), context(post), JSON.stringify(readTraceRecords(dir))]) expect.soft(output).not.toContain(sentinel);
+  });
+
+
   it.each(['result', 'note'])('keeps malformed check %s commands out of receipts, coordinator context and traces (R1)', async field => {
     const dir = join(tmp, `trace-malformed-${field}`);
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
@@ -1140,7 +1178,7 @@ describe('worker check verification (0.4.0)', () => {
     const reply = workerReply({ checks: result === 'duplicate' ? [check, check] : [check] });
     await run(env, postWith(reply, workerTranscript([{ command, failed: false }])));
     const receipt = state(env).current.receipts[0];
-    expect(receipt?.reply?.checks).toEqual(reply.checks.map((c, i) => ({ ...c, check_id: `#${i + 1}` })));
+    expect(receipt?.reply?.checks).toEqual(reply.checks.map((c, i) => ({ check_id: `#${i + 1}`, result: c.result })));
     expect(JSON.stringify(receipt)).not.toContain('REVIEW_RECEIPT_SENTINEL');
     expect(receipt?.verdict).toBe(result === 'pass' ? 'accept' : 'incomplete');
     if (result === 'duplicate') expect(receipt?.verdict_reason).toBe('worker_check_duplicate');
@@ -2039,5 +2077,19 @@ describe('final allocation execution receipts', () => {
     const records = readdirSync(dir).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(join(dir, name), 'utf8')));
     expect(state(env).current.receipts.at(-1)?.requested_model).toBe('claude-sonnet-5-5');
     expect(records.find(r => r.phase === (role === 'failure' ? 'failure' : 'post'))?.requested_model).toBe('claude-sonnet-5-5');
+  });
+});
+
+
+describe('failure privacy', () => {
+  it.each([false, true])('B2: never persists Agent failure text (reservation=%s)', async reserved => {
+    const dir = mkdtempSync(join(tmp, 'trace-private-failure-'));
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    if (reserved) await seedDispatched(env, fakeJev());
+    const sentinel = 'B2_SYNTHETIC_FAILURE_SENTINEL';
+    await run(env, { ...preEvent('Agent', agentInput()), hook_event_name: 'PostToolUseFailure', error: `echo ${sentinel}; Bearer synthetic-${sentinel}` });
+    const read = readTraceRecords(dir);
+    expect.soft(read.records.find(r => r['phase'] === 'failure')).toMatchObject({ verdict_reason: 'worker_failed' });
+    for (const output of [JSON.stringify(read), explainRecords(read).join('\n'), JSON.stringify(loadActivity({ traceDir: dir, env }))]) expect.soft(output).not.toContain(sentinel);
   });
 });

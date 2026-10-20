@@ -186,7 +186,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     let ignored: string[] = [];
     try { const raw: unknown = JSON.parse(readFileSync(loaded.source, 'utf8')); if (isRecord(raw)) ignored = Object.keys(raw).filter((k) => IGNORED_KEYS.has(k)); } catch { /* defaults or env: no file */ }
     if (ignored.length) say('info', `config ${loaded.source}: ${ignored.join(', ')} ${ignored.length === 1 ? 'is a withdrawn key' : 'are withdrawn keys'}: loaded, never read, and safe to delete`);
-    say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} models=${JSON.stringify(c.models)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} verifyWorkerChecks=${c.verifyWorkerChecks}`);
+    say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} models=${JSON.stringify(c.models)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} verifyWorkerChecks=${c.verifyWorkerChecks} workerIsolation=${c.workerIsolation}`);
     if (c.admissionQuestionShape === 'atomic') {
       say(
         'info',
@@ -235,9 +235,10 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
     }
     if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state when orchestration starts, no Jev request');
-    if (c.mode === 'auto') say('info', 'mode=auto: admission and allocation gates send the request, the planned task and summaries of earlier worker replies to TypeSafe (may include source excerpts and prior constraints)');
+    if (c.mode === 'auto') say('info', 'mode=auto: Gate A sends the current request; Gate B sends the composed single-worker packet to TypeSafe');
     say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
     if (env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation is unaffected`);
+    say('info', `workerIsolation=${c.workerIsolation}: ${c.workerIsolation === 'worktree' ? 'owned Agent patches request isolated worktrees; integrate their changes before final checks' : "workers share the caller's working tree"}`);
   };
 
   const checkClaude = (): string | null => {

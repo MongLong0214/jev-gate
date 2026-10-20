@@ -34,7 +34,7 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
   if (versionError === 'ETIMEDOUT' || versionError === 'ENOBUFS' || version.status === 0 && !v) say('warn', 'Codex version unverified: version probe timed out or returned an unrecognized response; this does not establish an unsupported CLI');
   else check(version.status === 0 && !!v && (Number(v[1]) > 0 || Number(v[2]) >= 158), `Codex ${v ? v.slice(1).join('.') : 'unavailable'} (minimum native integration version 0.158.0; detected version does not prove hook trust or policy application)`);
   diagnosis.group('package');
-  for (const path of ['.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json', 'dist/cli.mjs', 'dist/hook.mjs', 'dist/server.mjs', 'skills/jev-gate/SKILL.md']) check(readableFile(join(root, path)), `${path}: readable regular file required`);
+  for (const path of ['.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json', 'dist/cli.mjs', 'dist/hook.mjs', 'dist/server.mjs', 'dist/worktree.mjs', 'skills/jev-gate/SKILL.md']) check(readableFile(join(root, path)), `${path}: readable regular file required`);
   const obj = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
   try {
     const manifest: unknown = JSON.parse(readFileSync(join(root, '.codex-plugin/plugin.json'), 'utf8'));
@@ -72,6 +72,7 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
       }
     } catch { /* defaults or environment-only policy */ }
     check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}`);
+    say('info', `workerIsolation=${policy.gate.workerIsolation}: ${policy.gate.workerIsolation === 'worktree' ? 'workers use a snapshot worktree; integrate their diff before final checks' : 'workers share the caller checkout'}`);
     say('info', `Router automatic Astra: ${policy.router.allowAstra ? 'opted in' : 'off (default)'}; model/effort: ${policy.router.model ? 'on' : 'off'}/${policy.router.effort ? 'on' : 'off'}`);
     say('info', 'Account model candidates: unknown until native model/list is observed. Submitted request values do not confirm response model or actual effort.');
   } catch { check(false, 'policy: invalid Codex policy configuration'); }

@@ -25,6 +25,14 @@ const write = (name: string, value: unknown): string => {
 };
 
 describe('validateConfig', () => {
+  it('B1: restores single-worker isolation with none as the absent default', () => {
+    expect(validateConfig({ version: 5 })).toMatchObject({ ok: true, config: { workerIsolation: 'none' } });
+    expect(validateConfig({ version: 5, workerIsolation: 'worktree' })).toMatchObject({ ok: true, config: { workerIsolation: 'worktree' } });
+    expect(IGNORED_KEYS.has('workerIsolation')).toBe(false);
+    for (const workerIsolation of ['branch', null, 1]) expect(validateConfig({ version: 5, workerIsolation })).toMatchObject({ ok: false });
+    expect(validateConfig({ version: 5, workerIsolation: 'worktree', maxParallelWorkers: 10, guardAllowTools: [] })).toMatchObject({ ok: true, config: { workerIsolation: 'worktree' } });
+  });
+
   it('accepts a full V5 file and a partial file over the defaults', () => {
     // Every key past the sample is optional in a file and defaulted; 0.4.0 moved Gate B to atomic and the shape to auto.
     expect(validateConfig(V5)).toEqual({
@@ -33,6 +41,7 @@ describe('validateConfig', () => {
         ...V5,
         mode: 'auto',
         frontierEnabled: false,
+        workerIsolation: 'none',
         routeQuestionShape: 'atomic',
         delegationDepthFloor: 0,
         delegationDepthFraction: 0.6,
@@ -75,8 +84,8 @@ describe('validateConfig', () => {
     }
     expect(MIGRATION_SAMPLE).not.toContain('resultConfidenceFloor');
     expect(DEFAULT_CONFIG).not.toHaveProperty('resultConfidenceFloor');
-    // #289: a deployed file that still sets a removed planner, guard or isolation key loads, whatever its value, and drops it.
-    const removed = { plannerDefaultTier: 'standard', maxParallelWorkers: 0, guardAllowTools: ['rm -rf'], guardAllowMcp: 'yes', maxTasksPerPlan: 65, admittedShape: 'hierarchy', planInterpretation: null, workerIsolation: 'branch' };
+    // #289: a deployed file that still sets a removed planner or guard key loads, whatever its value, and drops it.
+    const removed = { plannerDefaultTier: 'standard', maxParallelWorkers: 0, guardAllowTools: ['rm -rf'], guardAllowMcp: 'yes', maxTasksPerPlan: 65, admittedShape: 'hierarchy', planInterpretation: null };
     expect(Object.keys(removed).every((k) => IGNORED_KEYS.has(k))).toBe(true);
     const legacy = validateConfig({ ...V5, ...removed });
     expect(legacy).toMatchObject({ ok: true, config: { mode: 'auto' } });

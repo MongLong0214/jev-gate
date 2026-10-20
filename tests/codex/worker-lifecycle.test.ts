@@ -1,8 +1,8 @@
 import { PassThrough } from 'node:stream';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexRpc, RpcRequestError } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
@@ -10,19 +10,27 @@ import { AGENT_TOOL } from '../../src/codex/profiles.js';
 import { readOnlyCommand, writeTargets } from '../../src/codex/write-scope.js';
 import { readJob, updateJob, newGeneration, cleanupJobs, jobPath } from '../../src/job.js';
 import { buildOperations } from '../../src/operations.js';
+import { loadActivity } from '../../src/activity.js';
+import { explainRecords, readTraceRecords } from '../../src/explain.js';
 import type { Obj } from '../../src/codex/source.js';
 const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach(f => f()); vi.restoreAllMocks(); });
-const setup = async (scenario = 'uncertain', started = true) => {
+const setup = async (scenario = 'uncertain', started = true, workerIsolation?: 'none' | 'worktree') => {
   const root = mkdtempSync(join(tmpdir(), 'jev-worker-')); const config = join(root, 'config.json');
-  writeFileSync(config, JSON.stringify({ gate: { mode: scenario === 'adhoc' ? 'auto' : 'native', models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
+  writeFileSync(config, JSON.stringify({ gate: { ...(workerIsolation ? { workerIsolation } : {}), mode: scenario === 'adhoc' ? 'auto' : 'native', models: { fast: 'gpt-6.1-sol', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' } }, router: { enabled: false } }));
+  if (workerIsolation === 'worktree') {
+    for (const args of [['init'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'fixture']]) {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' }); expect(r.status, r.stderr).toBe(0);
+    }
+    writeFileSync(join(root, 'working-input.txt'), 'uncommitted input');
+  }
   const input = new PassThrough(); const output = new PassThrough();
   const rpc = new CodexRpc(input, output); const sent: Obj[] = [];
   const reply = (id: unknown, result: Obj) => input.write(JSON.stringify({ id, result }) + '\n');
   const notify = (method: string, params: Obj) => input.write(JSON.stringify({ method, params }) + '\n');
   let start: Obj | undefined;
   let collectedTurn: Obj | undefined;
-  const env = { HOME: root, JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_GATE_STATE_DIR: join(root, 'state'), ...(scenario !== 'adhoc' ? { JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' } : {}) };
+  const env = { HOME: root, ...(workerIsolation === 'worktree' ? { PATH: `${root}:/usr/bin:/bin:${dirname(process.execPath)}` } : {}), JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_GATE_STATE_DIR: join(root, 'state'), ...(scenario !== 'adhoc' ? { JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' } : {}) };
   const stateEnv = { JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') };
   const policy = new CodexPolicy(rpc, env, undefined, { 'jev-gate:worker': 'Return a result' }, true);
   const nativeRequest = rpc.request.bind(rpc);
@@ -42,7 +50,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
           if (state && held) updateJob(stateEnv, 'holder', () => ({ ...state, session_id: 'holder', history: [], current: { ...state.current, active: { held: { ...held, codex_execution: { thread_id: 'held', turn_id: 'held-turn', cwd: root, root_cwd: root } } } } }));
         }
         if (scenario === 'pre-failure') input.write(JSON.stringify({ id: m['id'], error: { code: -1 } }) + '\n');
-        else reply(m['id'], { model: 'gpt-6.1-sol', cwd: root, sandbox: { type: 'dangerFullAccess' }, thread: { id: 'worker' } });
+        else reply(m['id'], { model: 'gpt-6.1-sol', cwd: (m['params'] as Obj)['cwd'], sandbox: { type: 'dangerFullAccess' }, thread: { id: 'worker' } });
       }
       if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (['normal', 'adhoc'].includes(scenario)) reply(m['id'], { turn: { id: 'turn-w' } }); }
       if (m['method'] === 'thread/read') reply(m['id'], { thread: { id: 'worker', turns: collectedTurn ? [collectedTurn] : [] } });
@@ -54,7 +62,7 @@ const setup = async (scenario = 'uncertain', started = true) => {
   const parent = policy.sessions.get('parent')!; parent.prompt = 'p'; parent.controller = new AbortController(); parent.tokens = 500000;
   await policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Investigate and return a result' });
   cleanups.push(() => { rpc.close(); input.destroy(); output.destroy(); rmSync(root, { recursive: true, force: true }); });
-  const launch = (background = false) => rpc.onRequest({ id: 'call', method: 'item/tool/call', params: { threadId: 'parent', callId: 'dispatch', tool: 'jev_agent', arguments: { run_in_background: background, subagent_type: 'jev-gate:worker', prompt: 'Investigate and return a result' } } });
+  const launch = (background = false, nativeMeta?: Obj) => rpc.onRequest({ id: 'call', method: 'item/tool/call', params: { threadId: 'parent', callId: 'dispatch', tool: 'jev_agent', ...(nativeMeta ? { nativeMeta } : {}), arguments: { run_in_background: background, subagent_type: 'jev-gate:worker', prompt: 'Investigate and return a result' } } });
   const terminal = (status = 'completed', text = 'worker observation kept') => {
     notify('item/completed', { threadId: 'worker', item: { id: 'final', type: 'agentMessage', phase: 'final_answer', text } });
     notify('turn/completed', { threadId: 'worker', turn: { id: 'turn-w', status } });
@@ -66,6 +74,69 @@ const setup = async (scenario = 'uncertain', started = true) => {
   return { policy, rpc, parent, sent, launch, terminal, job, stateEnv, root, returned, traces, status, collect: (turn: Obj) => { collectedTurn = turn; }, unlock: () => unlock?.(), started: () => start !== undefined, lateResponse: () => { if (start) reply(start['id'], { turn: { id: 'turn-w' } }); } };
 };
 describe('Codex status collection and deny tracing (#293)', () => {
+  it('B2: drops native Codex failure prose from diagnostics and replay', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    const sentinel = 'B2_SYNTHETIC_CODEX_FAILURE_SENTINEL';
+    const text = `echo ${sentinel}; Bearer synthetic-${sentinel}`;
+    f.collect({ id: 'turn-w', status: 'failed', error: { message: text }, items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text }] });
+    const status = await f.status('failed-private-result');
+    expect(status).toContain('native_failed_turn');
+    const traceDir = join(f.root, 'trace'); const read = readTraceRecords(traceDir);
+    expect(read.records.some(row => row['phase'] === 'failure')).toBe(true);
+    f.parent.prompt = 'next';
+    const replay = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
+    for (const output of [status, JSON.stringify(f.job()), JSON.stringify(replay), JSON.stringify(read), explainRecords(read).join('\n'), JSON.stringify(loadActivity({ traceDir, env: { HOME: f.root } }))]) expect.soft(output).not.toContain(sentinel);
+  });
+
+  it.each([undefined, 'none', 'worktree'] as const)('B1: starts the single worker with %s isolation', async workerIsolation => {
+    const f = await setup('normal', true, workerIsolation); await f.launch(true);
+    const child = f.sent.find(m => m['method'] === 'thread/start')!['params'] as Obj;
+    const cwd = String(child['cwd']);
+    if (workerIsolation === 'worktree') {
+      expect(cwd).not.toBe(f.root);
+      expect(readFileSync(join(cwd, 'working-input.txt'), 'utf8')).toBe('uncommitted input');
+    } else expect(cwd).toBe(f.root);
+    expect(f.job().current.active['dispatch']?.codex_execution?.cwd).toBe(cwd);
+    f.terminal('completed', JSON.stringify({ status: 'done', checks: [] }));
+    await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
+    if (workerIsolation === 'worktree') expect(await f.status('isolated-result')).toContain('Snapshot baseline:');
+  });
+
+  it.each([true, false])('B1: creates the native snapshot through captured permissions or refuses dispatch (available=%s)', async available => {
+    const f = await setup('normal', true, 'worktree'); f.parent.external = true;
+    // Fake native sandbox CLI validates the captured metadata and reuses the actual snapshot helper.
+    const cli = join(f.root, 'codex');
+    writeFileSync(cli, `#!${process.execPath}\nconst a=process.argv;const m=JSON.parse(a[4]);if(a[2]!=='sandbox'||a[3]!=='--sandbox-state-json'||m.permissionProfile.type!=='disabled'||a[5]!=='--'||a[8]!=='--codex'||!a[7].endsWith('/worktree.mjs'))process.exit(2);if(!${available})process.exit(1);import(${JSON.stringify(new URL('../../src/worktree.ts', import.meta.url).href)}).then(m=>process.stdout.write(JSON.stringify(m.createWorkerWorktree(a[9],a[10]))));\n`);
+    chmodSync(cli, 0o700);
+    const nativeMeta = { threadId: 'parent', 'codex/sandbox-state-meta': { sandboxCwd: new URL(`file://${f.root}`).href, permissionProfile: { type: 'disabled' } } };
+    await f.launch(true, nativeMeta);
+    if (!available) {
+      expect(JSON.stringify(f.returned())).toContain('worktree_unavailable');
+      expect(f.sent.some(m => m['method'] === 'thread/start')).toBe(false);
+      return;
+    }
+    const child = f.sent.find(m => m['method'] === 'thread/start')!['params'] as Obj;
+    expect(child['cwd']).not.toBe(f.root);
+    expect(readFileSync(join(String(child['cwd']), 'working-input.txt'), 'utf8')).toBe('uncommitted input');
+    expect(child['permissions']).toBe(':danger-full-access');
+    f.terminal('completed', JSON.stringify({ status: 'done', checks: [] }));
+    await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
+  });
+
+  it('B3: strips all worker report prose from Codex receipts and background replay', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    const sentinel = 'B3_SYNTHETIC_CODEX_REPORT_SENTINEL';
+    const text = `echo ${sentinel}; Bearer synthetic-${sentinel}`;
+    f.rpc.onNotification({ method: 'item/completed', params: { threadId: 'worker', item: { id: 'check', type: 'commandExecution', command: 'npm test', status: 'completed', exitCode: 0, aggregatedOutput: text } } });
+    f.terminal('completed', JSON.stringify({ status: 'done', summary: text, changed_files: [text], interfaces: [text], blockers: [text],
+      checks: [{ check_id: 'npm test', result: 'pass', note: text, observed_output: text, output: text, error: text }] }));
+    await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
+    expect.soft(f.job().current.receipts[0]?.reply).toEqual({ status: 'done', checks: [{ check_id: '#1', result: 'pass' }] });
+    f.parent.prompt = 'next';
+    const next = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
+    for (const output of [JSON.stringify(f.job()), readFileSync(jobPath(f.stateEnv, 'parent'), 'utf8'), f.job().current.background_context, JSON.stringify(next), await f.status('private-result'), JSON.stringify(f.traces('post'))]) expect.soft(output).not.toContain(sentinel);
+  });
+
   type F = Awaited<ReturnType<typeof setup>>;
   const write = (f: F) => f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_use_id: 'root-write', cwd: f.root, tool_name: 'Write', tool_input: { file_path: join(f.root, 'src/file'), content: 'PRIVATE_CONTENT' } });
   it.each(['result', 'note'])('keeps malformed check %s commands out of Codex diagnostics (R1)', async field => {
@@ -93,8 +164,9 @@ describe('Codex status collection and deny tracing (#293)', () => {
     f.terminal('completed', JSON.stringify({ status: 'done', summary: 'verified result', checks: [{ check_id: command, result: 'pass', note: 'reported' }] }));
     await vi.waitFor(() => expect(f.job().current.receipts[0]?.verdict).toBe('accept'));
     const receipt = f.job().current.receipts[0]!;
-    expect(receipt).toMatchObject({ reply: { checks: [{ check_id: '#1', result: 'pass', note: 'reported' }] }, verification: { transcript: 'read', contradicted: [], unobserved: [], stale: [] } });
-    expect(f.job().current.background_context).toContain('verified result');
+    expect(receipt).toMatchObject({ reply: { checks: [{ check_id: '#1', result: 'pass' }] }, verification: { transcript: 'read', contradicted: [], unobserved: [], stale: [] } });
+    expect(f.job().current.background_context).toContain('"check_id":"#1"');
+    expect(f.job().current.background_context).not.toContain('verified result');
     for (const value of [JSON.stringify(receipt), f.job().current.background_context]) expect(value).not.toContain('REVIEW_RECEIPT_SENTINEL');
   });
   it.each(['done', 'blocked', 'failed'])('collects terminal %s after a missed notification, releases the scope and returns the same result twice', async status => {
@@ -201,7 +273,8 @@ describe('Codex genuine terminal settlement (#139)', () => {
     expect(f.job().current.outcome).toBeNull(); expect(f.sent.some(m => m['method'] === 'turn/interrupt')).toBe(false);
     f.terminal('completed', JSON.stringify({ status: 'done', summary: 'original result', changed_files: [], interfaces: [], checks: [], blockers: [] }));
     await vi.waitFor(() => expect(f.job().current.receipts[0]?.verdict).toBe('accept'));
-    expect(f.job().current.active).toEqual({}); expect(f.job().current.background_context).toContain('original result');
+    expect(f.job().current.active).toEqual({}); expect(f.job().current.background_context).toContain('"status":"done"');
+    expect(f.job().current.background_context).not.toContain('original result');
     await f.rpc.onRequest({ id: 'status', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
     expect(JSON.stringify(f.sent.find(m => m['id'] === 'status'))).toContain('original result');
     f.terminal(); expect(f.job().current.receipts).toHaveLength(1);

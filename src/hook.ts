@@ -48,6 +48,7 @@ import {
   renderSingleGuidance,
   renderSingleResult,
   renderAdhocResult,
+  WORKTREE_REMINDER,
   renderSingleRouteNote,
   renderRouteNote,
 } from './coordinator.js';
@@ -68,7 +69,7 @@ import {
   sameGeneration,
   updateJob,
 } from './job.js';
-import { composeSingleWorkerPrompt, MAX_COMPOSED_BYTES, parseWorkerReply, reportedSingleVerdict, SINGLE_TASK_ID } from './plan.js';
+import { composeSingleWorkerPrompt, MAX_COMPOSED_BYTES, parseWorkerReply, reportedSingleVerdict, workerReceiptReply, SINGLE_TASK_ID } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
 import { evidenceFormatOnly, nearestFormatCommands, readWorkerObservation, refusalReason, subagentTranscriptPath, verifyChecks } from './verify.js';
@@ -314,6 +315,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     caller,
     tool_use_id: input.tool_use_id ?? null,
     mode: rawMode,
+    worker_isolation: config.workerIsolation,
   };
   const apiKey = deps.env['TYPESAFE_API_KEY'];
 
@@ -942,7 +944,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
     if (stale) return currentAdmission() ? skip('deadline_exhausted') : skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
     if (!applied.ok) return skip(applied.code);
-    return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, preferFastWorker }), reason);
+    return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, preferFastWorker, workerIsolation: config.workerIsolation }), reason);
   };
 
   // ---------------------------------------------------------------- PreToolUse
@@ -1073,10 +1075,13 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
     // Only the single shape carries a request block for the note to rank.
     const note = (tier: Tier): string => (carriedRequest === null ? renderRouteNote(tier) : renderSingleRouteNote(tier));
-    const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult => emitPatch(eligibility.input, patch, code);
+    const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult =>
+      emitPatch(eligibility.input, { ...patch, ...(config.workerIsolation === 'worktree' ? { isolation: 'worktree' as const } : {}) }, code);
     /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
     const preserveAdhoc = (code: ErrorCode | null, tier: Tier = eligibility.tier): HookResult =>
-      carriedRequest === null ? preserve(code) : emitWorkerPatch({ prompt: composed + note(tier) }, code);
+      carriedRequest === null
+        ? config.workerIsolation === 'worktree' ? emitWorkerPatch({}, code) : preserve(code)
+        : emitWorkerPatch({ prompt: composed + note(tier) }, code);
     // Direct conversations may still delegate a bounded subtask. Track that dispatch without
     // converting the entire user request into an orchestrated job or a single-worker contract.
     let adhocTracked = false;
@@ -1321,7 +1326,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         attempt,
         tool_use_id: toolUseId,
         provenance: 'worker_reported',
-        reply: parsed && parsed.ok ? { ...parsed.value, checks: parsed.value.checks.map((c, i) => ({ ...c, check_id: `#${i + 1}` })) } : null,
+        reply: parsed && parsed.ok ? workerReceiptReply(parsed.value) : null,
         verdict: finalVerdict,
         verdict_reason: reason,
         observed_model: observedModel(input.tool_response),
@@ -1348,6 +1353,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       context = isSingle
         ? renderSingleResult(finalVerdict, reason ?? '', { formatHint, rootFallback, rootFallbackReason, checks })
         : renderAdhocResult(finalVerdict, reason ?? '', checks);
+      if (config.workerIsolation === 'worktree') context += `\n${WORKTREE_REMINDER}`;
       trace?.write('post', {
         ...base,
         task_id: taskId,
@@ -1454,7 +1460,6 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (input.tool_name !== 'Agent') return skip('not_agent_tool');
     const sessionId = input.session_id;
     const toolUseId = input.tool_use_id;
-    const error = input.error ?? '';
     let requestedModel = requestedModelFor(input.tool_input);
     if (sessionId && toolUseId) {
       const old = readJob(deps.env, sessionId);
@@ -1495,8 +1500,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       subagent_type: str(isRecord(input.tool_input) ? input.tool_input['subagent_type'] : null),
       requested_model: requestedModel,
       resolved_model: observedModel(input.tool_response),
-      error_first_line: error.split('\n')[0]?.slice(0, 200) ?? null,
-      error_len: error.length,
+      // Native error prose may echo a command or credential. Persist only closed failure codes.
+      error_first_line: input.codex_failure?.category ?? (input.is_interrupt ? 'worker_cancelled' : 'worker_failed'),
       verdict_reason: input.is_interrupt ? 'worker_cancelled' : 'worker_failed',
       is_interrupt: input.is_interrupt ?? null,
       duration_ms: input.duration_ms ?? null,

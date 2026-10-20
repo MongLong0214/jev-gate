@@ -27,7 +27,10 @@ export const singleRules = (preferFastWorker = false): string[] => [
   'Report what was implemented, what was checked, and what was reported but not verified, separately.',
 ];
 
+export const WORKTREE_REMINDER = 'The worker runs in an isolated worktree. Apply only its changes relative to its initial snapshot baseline to the main checkout before final checks and reporting; do not merge the snapshot commit.';
+
 export interface SingleGuidanceOptions {
+  workerIsolation?: 'none' | 'worktree';
   preferFastWorker?: boolean;
   mode: RoutingMode;
   confidence: number | null;
@@ -39,6 +42,7 @@ export const renderSingleGuidance = (opts: SingleGuidanceOptions): string =>
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
     ...singleRules(opts.preferFastWorker),
+    ...(opts.workerIsolation === 'worktree' ? [WORKTREE_REMINDER] : []),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 

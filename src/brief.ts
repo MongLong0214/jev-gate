@@ -87,6 +87,7 @@ export const checkEligibility = (hook: HookInput, env: Env, config: ConfigV5): E
 };
 
 export interface AgentPatch {
+  isolation?: 'worktree';
   subagent_type?: string;
   model?: string;
   prompt?: string;
@@ -95,6 +96,7 @@ export interface AgentPatch {
 /** New object; only the named fields differ, and the original prompt stays an exact prefix of a patched prompt. */
 export const patchAgentInput = (original: AgentInput, patch: AgentPatch): AgentInput => {
   const out: AgentInput = { ...original };
+  if (patch.isolation !== undefined) out['isolation'] = patch.isolation;
   if (patch.subagent_type !== undefined) out['subagent_type'] = patch.subagent_type;
   if (patch.model !== undefined) out['model'] = patch.model;
   if (patch.prompt !== undefined) {

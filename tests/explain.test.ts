@@ -25,6 +25,17 @@ const post = (at: number, toolUseId: string, resolvedModel: string | null, extra
 const render = (records: Rec[]): string => explainRecords({ records, unreadable: 0 }).join('\n');
 
 describe('explain (2026-09-20)', () => {
+  it('B2: screens credentials in legacy failure prose before rendering', () => {
+    const sentinel = 'B2_SYNTHETIC_LEGACY_FAILURE_SENTINEL';
+    const out = render([base('failure', 1, { error_first_line: `echo ${sentinel}; Bearer synthetic-${sentinel}` })]);
+    expect(out).not.toContain(sentinel);
+    expect(out).toContain('no message recorded');
+  });
+
+  it.each(['none', 'worktree'])('B1: reports the configured %s isolation on dispatch', worker_isolation => {
+    expect(render([dispatch(1, 'tool', { worker_isolation })])).toContain(`isolation ${worker_isolation}`);
+  });
+
   it('reuses unchanged records while noticing replacements, deletion, malformed writes and symlink substitution', () => {
     const dir = mkdtempSync(join(tmp, 'cached-')), path = join(dir, 'event.json'), cache: TraceCache = new Map();
     writeFileSync(path, JSON.stringify(base('admission_intent', 1)));

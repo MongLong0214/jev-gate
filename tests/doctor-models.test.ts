@@ -134,8 +134,8 @@ describe('Doctor reports', () => {
     expect(rows.find(c => c.model === 'unavailable-legacy-fast')?.state).toBe('incompatible');
   });
   it.each([
-    ['workerIsolation', 'worktree'], ['maxParallelWorkers', 3], ['plannerDefaultTier', 'fast'],
-    ['guardAllowTools', []], ['workerIsolation', 42], ['maxParallelWorkers', 'many'], ['plannerDefaultTier', false], ['guardAllowTools', 'invalid'],
+    ['maxParallelWorkers', 3], ['plannerDefaultTier', 'fast'],
+    ['guardAllowTools', []], ['maxParallelWorkers', 'many'], ['plannerDefaultTier', false], ['guardAllowTools', 'invalid'],
   ])('reports withdrawn Codex Gate key %s even when its value is malformed', async (key, value) => {
     const fake = fixture('codex', [codexModel()]), config = join(fake.dir, 'codex.json');
     writeFileSync(config, JSON.stringify({ gate: { [key]: value } }));
@@ -151,9 +151,11 @@ describe('Doctor reports', () => {
   it.each(['home', 'xdg'])('reports withdrawn Codex Gate keys from the default %s config path', async location => {
     const fake = fixture('codex', [codexModel()]), base = location === 'home' ? join(fake.dir, '.config') : join(fake.dir, 'xdg');
     const dir = join(base, 'jev-gate'); mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'codex.json'), JSON.stringify({ gate: { workerIsolation: null, guardAllowTools: [] } }));
+    writeFileSync(join(dir, 'codex.json'), JSON.stringify({ gate: { workerIsolation: 'worktree', guardAllowTools: [] } }));
     const result = await codexDoctor(join(__dirname, '../plugins/codex'), { ...fake.env, ...(location === 'xdg' ? { XDG_CONFIG_HOME: base } : {}) }, fake.dir);
-    expect(result.lines.some(line => line.startsWith('[info]') && line.includes('workerIsolation, guardAllowTools are withdrawn keys'))).toBe(true);
+    expect(result.lines.some(line => line.startsWith('[info]') && line.includes('guardAllowTools is a withdrawn key'))).toBe(true);
+    expect(result.lines).toContain('[info] workerIsolation=worktree: workers use a snapshot worktree; integrate their diff before final checks');
+    expect(result.lines.some(line => line.includes('workerIsolation') && line.includes('withdrawn key'))).toBe(false);
   });
   it.each(['hooks/register.ts', 'mods/router/hooks/config.ts', 'src/provider-prices-data.ts', 'plugins/evidence/dist/server.mjs'])('rejects a missing declared package dependency: %s', async missing => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);
