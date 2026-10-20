@@ -11,6 +11,9 @@ export type RouteQuestionShape = 'composite' | 'atomic';
 export type AdmissionQuestionShape = RouteQuestionShape;
 export const ROUTE_QUESTION_SHAPES: readonly RouteQuestionShape[] = ['composite', 'atomic'];
 
+export type WorkerIsolation = 'none' | 'worktree';
+export const WORKER_ISOLATIONS: readonly WorkerIsolation[] = ['none', 'worktree'];
+
 export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abstain';
 export type RouteAnswer = Tier | 'abstain';
 export type UpgradeBasis = 'unresolved_contract_reasoning' | 'observed_reasoning_failure' | 'no_specific_basis' | 'unknown';
@@ -53,6 +56,8 @@ export interface ConfigV5 {
   admissionConfidenceFloor: number;
   routeConfidenceFloor: number;
   models: Record<Tier, string>;
+  /** Optional in a config file; absent means workers share the caller's checkout. */
+  workerIsolation: WorkerIsolation;
   /**
    * How Gate B asks. `composite` is the shipped five-way choice; `atomic` fans the same judgement out into read-off
    * questions and composes them in code. Optional in a config file and defaulted to `composite`, so a deployed file
@@ -225,6 +230,11 @@ export interface CheckVerification {
   stale: string[];
 }
 
+export interface WorkerReceiptReply {
+  status: WorkerReply['status'];
+  checks: Pick<WorkerCheckResult, 'check_id' | 'result'>[];
+}
+
 export interface Receipt {
   task_id: string;
   contract_hash: string;
@@ -232,7 +242,7 @@ export interface Receipt {
   attempt: number;
   tool_use_id: string;
   provenance: 'worker_reported';
-  reply: WorkerReply | null;
+  reply: WorkerReceiptReply | null;
   verdict: ReceiptVerdict;
   verdict_reason: string | null;
   observed_model: string | null;

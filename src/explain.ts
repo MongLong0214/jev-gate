@@ -1,5 +1,6 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, type Stats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
+import { looksSecret } from './outbound-text.js';
 import { dirname, join } from 'node:path';
 
 /**
@@ -13,7 +14,7 @@ import { dirname, join } from 'node:path';
 type Rec = Record<string, unknown>;
 
 const isRecord = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
-const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 && !looksSecret(v) ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const sub = (r: Rec, k: string): Rec | null => (isRecord(r[k]) ? (r[k] as Rec) : null);
 
@@ -297,7 +298,7 @@ const dispatchLine = (r: Rec, post: Rec | null): string => {
       : model !== null && !observed.toLowerCase().includes(model.toLowerCase())
         ? `  → ran ${observed}, which is not the ${model} it asked for`
         : `  → ran ${observed}`;
-  return `dispatch ${who}${attempt === null ? '' : ` attempt ${attempt}`}  called ${called} → ${target}  ${jevCall(r)}${because(reason)}${ran}`;
+  return `dispatch ${who}${attempt === null ? '' : ` attempt ${attempt}`}  called ${called} → ${target}  ${jevCall(r)}${because(reason)}${ran}${r['worker_isolation'] === 'worktree' || r['worker_isolation'] === 'none' ? `  isolation ${r['worker_isolation']}` : ''}`;
 };
 
 /** The model the host resolved for a dispatch, carried verbatim from the worker's tool response. */

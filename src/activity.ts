@@ -5,6 +5,7 @@ import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './
 import { readLiveness } from './liveness.js';
 import { buildOperations, traceFeature, type ModRecord, type OperationStep, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
+import { looksSecret } from './outbound-text.js';
 import { memo, memoGeneration } from './memo.js';
 import { activityChecks, type ActivityCheck, type ActivityInput } from './doctor-activity.js';
 import { recordingStatus } from './recording.js';
@@ -124,7 +125,7 @@ const sub = (r: Rec, k: string): Rec | null => (isRecord(r[k]) ? r[k] : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /** A recorded token. Spaces and long text stay out, so a prompt cannot ride along in a reason field. */
-const safeToken = memo((v: string): string | null => TOKEN.test(v) && !v.toLowerCase().includes('sk-') ? v : null);
+const safeToken = memo((v: string): string | null => TOKEN.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null);
 const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 
 const iso = (v: unknown): string => (typeof v === 'string' && ISO.test(v) ? v : '');

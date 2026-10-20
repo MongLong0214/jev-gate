@@ -35,7 +35,7 @@ describe('Codex ordered routing and recorded application', () => {
     const serial = join(tmp, 'serial-policy.json'); writeFileSync(serial, JSON.stringify({ gate: { maxParallelWorkers: 1, guardAllowTools: [], workerIsolation: 'worktree' } }));
     // #289: a deployed file that still sets the removed keys loads, and they are dropped unread.
     const old = loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate;
-    expect(old).not.toHaveProperty('guardAllowTools'); expect(old).not.toHaveProperty('workerIsolation');
+    expect(old).not.toHaveProperty('guardAllowTools'); expect(old.workerIsolation).toBe('worktree');
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
   });

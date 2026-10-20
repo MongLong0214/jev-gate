@@ -26,7 +26,7 @@ afterEach(() => {
   renameFailure.file = ''; renameFailure.claim = ''; renameFailure.calls = 0;
   roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true }));
 });
-const fixture = async (direct = false) => {
+const fixture = async (direct = false, reportFields: Record<string, unknown> = {}) => {
   const root = mkdtempSync('/tmp/jev-bg-unit-'); roots.push(root);
   const cfg = join(root, 'config.json');
   writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native' }));
@@ -39,7 +39,7 @@ const fixture = async (direct = false) => {
   expect(pre.kind, JSON.stringify(pre)).toBe('patch');
   const input = JSON.parse(pre.stdout!).hookSpecificOutput.updatedInput;
   const path = join(root, 's', 'subagents', 'agent-worker.jsonl'); mkdirSync(join(root, 's', 'subagents'), { recursive: true });
-  const report = JSON.stringify({ status: 'done', summary: 'original result', changed_files: [], interfaces: [], checks: [], blockers: [] });
+  const report = JSON.stringify({ status: 'done', summary: 'original result', changed_files: [], interfaces: [], checks: [], blockers: [], ...reportFields });
   const transcript = (error = false) => writeFileSync(path, [
     { type: 'user', agentId: 'worker', sessionId: 's', message: { content: input.prompt } },
     { type: 'assistant', agentId: 'worker', sessionId: 's', isApiErrorMessage: error, message: { model: 'claude-sonnet-5', stop_reason: 'end_turn', content: [{ type: 'text', text: report }] } },
@@ -51,6 +51,24 @@ const fixture = async (direct = false) => {
 };
 
 describe('responsive native background contracts', () => {
+  it.each([false, true])('B3: strips report prose from Claude background settlement and replay (direct=%s)', async direct => {
+    const sentinel = 'B3_SYNTHETIC_CLAUDE_BACKGROUND_SENTINEL';
+    const text = `echo ${sentinel}; Bearer synthetic-${sentinel}`;
+    const f = await fixture(direct, { summary: text, changed_files: [text], interfaces: [text], blockers: [text],
+      checks: [{ check_id: 'npm test', result: 'pass', note: text, observed_output: text, output: text, error: text }] });
+    await f.launch(); f.transcript();
+    const rows = readFileSync(f.path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    rows.splice(1, 0,
+      { type: 'assistant', agentId: 'worker', sessionId: 's', message: { content: [{ type: 'tool_use', id: 'check', name: 'Bash', input: { command: 'npm test' } }] } },
+      { type: 'user', agentId: 'worker', sessionId: 's', message: { content: [{ type: 'tool_result', tool_use_id: 'check', content: text }] } });
+    writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    const terminal = await f.terminal();
+    expect(f.job().current.receipts[0]?.reply).toEqual({ status: 'done', checks: [{ check_id: '#1', result: 'pass' }] });
+    const replay = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+    const trace = readdirSync(join(f.root, 'trace')).map(file => readFileSync(join(f.root, 'trace', file), 'utf8')).join('\n');
+    for (const output of [readFileSync(jobPath(f.env, 's'), 'utf8'), f.job().current.background_context, JSON.stringify(terminal), JSON.stringify(replay), trace]) expect.soft(output).not.toContain(sentinel);
+  });
+
   it('absorbs a native cancellation notice by its host row, never by the queue record a person\'s input gets too', async () => {
     const f = await fixture(); await f.launch();
     updateJob(f.env, 's', prev => prev ? { ...prev, current: { ...prev.current, active: {}, outcome: 'incomplete' } } : null);

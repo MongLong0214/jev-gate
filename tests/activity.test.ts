@@ -43,6 +43,15 @@ it('omits retired feature records from the live board and operation counters', (
   expect(result.operations.requests).toBe(0);
 });
 
+it.each(['claude', 'codex'])('B2: screens credential-shaped tokens in legacy %s failure dashboard data', host => {
+  const trace = make();
+  const synthetic = 'ghp_B2SYNTHETICDASHBOARDSENTINEL123456789';
+  write(trace, 'failure.json', { phase: 'failure', host, session_id: 'legacy-failure', error_first_line: synthetic, verdict_reason: synthetic, written_at: new Date().toISOString() });
+  const result = loadActivity({ traceDir: trace, env: { HOME: make() } });
+  expect(result.operations.feed).toHaveLength(1);
+  expect(JSON.stringify(result)).not.toContain(synthetic);
+});
+
 it('returns doctor facts without its free-form messages, and keeps the latest root model separate from a later child', () => {
   const trace = make(), env = { HOME: make() }, now = new Date('2026-10-20T06:00:00Z');
   const records = [

@@ -44,6 +44,21 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 }, 60_000);
 
 describe('installed Codex archive', () => {
+  it('B1: ships and executes the isolated worker snapshot helper', () => {
+    const cwd = join(tmp, 'snapshot project'); mkdirSync(cwd);
+    for (const args of [['init', '-q'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'fixture']]) {
+      const run = spawnSync('git', args, { cwd, env: shellEnv, encoding: 'utf8' }); expect(run.status, run.stderr).toBe(0);
+    }
+    writeFileSync(join(cwd, 'uncommitted.txt'), 'snapshot input');
+    const run = spawnSync(process.execPath, [join(installed, 'dist/worktree.mjs'), '--codex', cwd, join(cwd, '.jev-gate-worktrees')], { cwd, env: shellEnv, encoding: 'utf8' });
+    expect(run.status, run.stderr).toBe(0);
+    const result = JSON.parse(run.stdout);
+    expect(result.path).not.toBe(cwd);
+    expect(readFileSync(join(result.path, 'uncommitted.txt'), 'utf8')).toBe('snapshot input');
+    expect(readFileSync(join(cwd, 'uncommitted.txt'), 'utf8')).toBe('snapshot input');
+    expect(result.baseline).toMatch(/^[a-f0-9]{40}$/);
+  });
+
   it('automatically offers key entry from the installed MCP with no environment key', async () => {
     const client = new Client({ name: 'codex-onboarding-test', version: '0' });
     const keyEnv = { ...shellEnv, XDG_CONFIG_HOME: join(tmp, 'onboarding config'), JEV_GATE_ONBOARDING: '1', JEV_GATE_NO_BROWSER: '1' };

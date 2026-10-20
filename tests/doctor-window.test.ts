@@ -109,7 +109,7 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
   it('prints delegationDepthFraction alongside the raw config summary', () => {
     const stdout = doctor({});
     expect(stdout).toMatch(/delegationDepthFloor=0 delegationDepthFraction=0\.6/);
-    expect(stdout).toMatch(/delegationCoordinatorTurns=11 delegationWorkerTokensPerCall=40000 verifyWorkerChecks=true$/m);
+    expect(stdout).toMatch(/delegationCoordinatorTurns=11 delegationWorkerTokensPerCall=40000 verifyWorkerChecks=true workerIsolation=none$/m);
   });
 });
 
@@ -157,7 +157,8 @@ describe('doctor: mentions all seven lifecycle hooks', () => {
 describe('doctor: withdrawn config keys', () => {
   it('names a withdrawn key as loaded and unread, without saying which change withdrew it', () => {
     const stdout = doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto', resultConfidenceFloor: 0.8, workerIsolation: 'worktree' }) });
-    expect(stdout).toMatch(/\[info\] config .*: resultConfidenceFloor, workerIsolation are withdrawn keys: loaded, never read, and safe to delete/);
+    expect(stdout).toMatch(/\[info\] config .*: resultConfidenceFloor is a withdrawn key: loaded, never read, and safe to delete/);
+    expect(stdout).toContain('workerIsolation=worktree');
     expect(stdout).not.toContain('#289');
   });
 });

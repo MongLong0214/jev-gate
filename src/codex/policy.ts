@@ -1,6 +1,11 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { join, isAbsolute, resolve } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { createWorkerWorktree, type WorkerWorktree } from '../worktree.js';
+import { looksSecret } from '../outbound-text.js';
+import { workerReceiptReply } from '../plan.js';
 import { runHook, type HookDeps } from '../hook.js';
 import { stateRoot, readJob, updateJob, own, codexExecutions, hostExited, pendingBackgroundPolicy } from '../job.js';
 import { OWNED_AGENTS, agentForTier, type CodexFailure, type HookInput, type Reservation } from '../types.js';
@@ -30,7 +35,7 @@ import type { RoutingCache } from '../../mods/router/hooks/context.ts';
 export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null }
 interface WorkerDispatch {
   parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
-  startedAt: number; attempted: boolean;
+  worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
   ended?: Obj; settling?: Promise<string>; settled?: boolean; output?: string; interruptSent?: boolean; cancel?: () => void;
   background?: boolean;
   /** Definite pre-send evidence; a native terminal turn has none. */
@@ -65,6 +70,7 @@ const contextOf = (result: { stdout: string | null }): string => {
   return String(obj(obj(JSON.parse(result.stdout))?.['hookSpecificOutput'])?.['additionalContext'] ?? '');
 };
 const deny = (reason: string): Obj => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
+const safeGitEnv = (env: Env): Env => Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
 // Fixed text per closed category: the original exception can carry paths, prompts or host payloads.
 const FAILURE_ADVICE: Record<CodexFailure['category'], string> = {
   preflight_conflict: 'Another managed worker still holds this write scope. Retry after that worker settles, or continue in the main session.',
@@ -661,7 +667,7 @@ export class CodexPolicy {
     const role = String(applied['subagent_type']); const profile = OWNED_AGENTS[role];
     const model = typeof applied['model'] === 'string' ? applied['model'] : parent.policy.gate.models[profile?.tier ?? 'standard'];
     if (!this.catalog.some(m => m.model === model)) { await this.failure(parent, promptId, toolId, applied, preflight('allocation_unavailable'), 'requested_model_unavailable'); return 'The requested worker model is absent from Codex model/list. Native execution remains available; configure accessible tier models.'; }
-    const cwd = String(parent.settings['cwd']);
+    let cwd = String(parent.settings['cwd']); let worktree: WorkerWorktree | null = null;
     let worker: Session | null = null;
     let dispatch: WorkerDispatch | undefined;
     // The stage in progress when anything below throws; the exception itself is never reported.
@@ -670,6 +676,17 @@ export class CodexPolicy {
     try {
       const captured = parent.external ? capturedPermissions(p['nativeMeta']) : null;
       if (parent.external && !captured) throw new Error('parent permissions unavailable');
+      if (applied['isolation'] === 'worktree') {
+        failed = preflight('worktree_unavailable');
+        const root = parent.external ? join(cwd, '.jev-gate-worktrees') : join(stateRoot(this.env), 'jev-gate', 'worktrees');
+        if (!parent.external) mkdirSync(root, { recursive: true, mode: 0o700 });
+        if (parent.external) {
+          const added = spawnSync('codex', ['sandbox', '--sandbox-state-json', JSON.stringify(obj(p['nativeMeta'])?.['codex/sandbox-state-meta']), '--', process.execPath, fileURLToPath(new URL('./worktree.mjs', import.meta.url)), '--codex', cwd, root], { cwd, env: safeGitEnv(this.env), encoding: 'utf8', timeout: 120_000 });
+          if (added.status !== 0) throw new Error('worktree unavailable');
+          worktree = JSON.parse(added.stdout) as WorkerWorktree;
+        } else worktree = createWorkerWorktree(cwd, root, this.env);
+        cwd = worktree.path;
+      }
       const sandbox = obj(parent.settings['sandboxPolicy']);
       const permissions = obj(parent.settings['activePermissionProfile'])?.['id'];
       const customPermissions = typeof permissions === 'string' && !permissions.startsWith(':');
@@ -697,7 +714,7 @@ export class CodexPolicy {
       if (!worker) throw new Error('worker unavailable');
       worker.role = role; worker.parent = session.id; worker.prompt = promptId;
       const terminal = new Promise<Obj>(resolve => { worker!.done = resolve; });
-      dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: background ? new AbortController().signal : parentSignal, startedAt: t0, attempted: false, background };
+      dispatch = { parent, prompt: promptId, tool: toolId, input: { ...applied }, signal: background ? new AbortController().signal : parentSignal, worktree, startedAt: t0, attempted: false, background };
       worker.dispatch = dispatch;
       failed = preflight('cancelled');
       if (parentSignal.aborted || session.prompt !== conversationPrompt) throw new Error('cancelled');
@@ -728,7 +745,7 @@ export class CodexPolicy {
         try {
           const turn = await this.rpc.request('turn/start', { threadId: worker.id, input: [{ type: 'text', text: String(applied['prompt']), text_elements: [] }], model,
             ...(effort ? { effort } : {}),
-            ...(sandbox && !customPermissions && typeof permissions !== 'string' ? { sandboxPolicy: sandbox } : {}) });
+            ...(sandbox && !customPermissions && (typeof permissions !== 'string' || worktree) ? { sandboxPolicy: worktree && sandbox['type'] === 'workspaceWrite' ? { ...sandbox, writableRoots: [cwd] } : sandbox } : {}) });
           if (!worker.terminal) { worker.turn = String(obj(turn['turn'])?.['id'] ?? worker.turn ?? ''); this.persistWorkerTurn(worker); }
         } catch (error) {
           if (error instanceof RpcRequestError && !error.attempted && !worker.turn && !dispatch.ended) { dispatch.attempted = false; throw error; }
@@ -832,8 +849,10 @@ export class CodexPolicy {
           reservation_id: worker.id, error_first_line: 'settlement_pending', settlement_reason: d.pendingReason, release_unconfirmed: true });
         return `${failure ? failureHead(failure) : 'Worker terminal observed'}; settlement pending. Internal execution identity: ${worker.id}. Reservation ${worker.id}: ${d.pendingReason}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
       }
+      const report = String(final?.['text'] ?? 'No worker final output.');
+      const integration = d.worktree ? `\nWorker worktree: ${d.worktree.path}\nBranch: ${d.worktree.branch}\nSnapshot baseline: ${d.worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : '';
       d.output = !failure
-        ? `${final?.['text'] ?? 'No worker final output.'}\n\n${guidance}`
+        ? `${looksSecret(report) ? 'Worker report text omitted by the secret screen.' : report}\n\n${guidance}${integration}`
         : `${failureHead(failure)}. ${FAILURE_ADVICE[failure.category]} No completion or acceptance is claimed.`;
       d.settled = true;
       // An uncertain foreground call also needs its terminal output available by the returned identity.
@@ -841,7 +860,7 @@ export class CodexPolicy {
       while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
       if (d.background) {
         // Replayed coordinator context uses the stored positional report, never raw check commands or invalid JSON.
-        const context = failure ? d.output! : `${receipt?.reply ? JSON.stringify(receipt.reply) : 'No usable worker report.'}\n\n${guidance}`;
+        const context = failure ? d.output! : `${receipt?.reply ? JSON.stringify(workerReceiptReply(receipt.reply)) : 'No usable worker report.'}\n\n${guidance}${integration}`;
         updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: context, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
         this.trace?.write('background_terminal', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, status: String(d.ended!['status']),
           ...(failure ? { failure_category: failure.category, failure_stage: failure.stage, not_executed: failure.not_executed } : {}) });

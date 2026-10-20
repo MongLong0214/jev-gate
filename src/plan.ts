@@ -1,5 +1,11 @@
-import type { DeterministicVerdict, PlannedTask, Receipt, WorkerCheckResult, WorkerReply } from './types.js';
+import type { DeterministicVerdict, PlannedTask, Receipt, WorkerCheckResult, WorkerReply, WorkerReceiptReply } from './types.js';
 import { TIERS } from './types.js';
+
+// Explicit projection also strips free text from older receipts before coordinator replay.
+export const workerReceiptReply = (reply: WorkerReceiptReply): WorkerReceiptReply => ({
+  status: reply.status,
+  checks: reply.checks.map((check, i) => ({ check_id: `#${i + 1}`, result: check.result })),
+});
 
 export const MAX_REPLY_BYTES = 64 * 1024;
 export const MAX_COMPOSED_BYTES = 64 * 1024;

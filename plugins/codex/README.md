@@ -48,7 +48,7 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 | Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. Acceptance is owned by code on both hosts. |
 | Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |
 
-Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Workers run in the caller's working directory.
+Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Workers run in the caller's working directory by default (`gate.workerIsolation: "none"`). Set `gate.workerIsolation: "worktree"` to run the single worker in a snapshot worktree under those same native permissions. Integrate only the diff from its reported snapshot baseline; do not merge the snapshot commit. Worktree creation failure refuses dispatch.
 
 The defaults run one worker per admitted request with no depth floor. Code acceptance is followed by root integration and reporting.
 
