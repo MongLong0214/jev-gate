@@ -13,7 +13,7 @@ import { loadConfig, type ConfigLoad } from './source.js';
 import { LIMITS, MODES, type EvidenceConfig } from './types.js';
 import { CODEX_SANDBOX_META, codexCallerWorkspace } from '../codex/workspace.js';
 import { AGENT_TOOL } from '../codex/profiles.js';
-import { connectionRequest, ensureConnection } from '../codex/connection.js';
+import { connectionRequest, ensureConnection, recordConnectionFailure } from '../codex/connection.js';
 import { dirname } from 'node:path';
 import type { Env } from '../config.js';
 import { resolveApiKey, saveApiKey } from '../credentials.js';
@@ -188,7 +188,7 @@ export const connectionDispatch = (env: Env, trace?: TraceWriter) => async (argu
   const result = await connectionRequest(env, '/agent', { arguments: arguments_, meta }, signal);
   if (result.ok && typeof result.value['output'] === 'string') return result.value['output'];
   const reason = result.ok ? 'invalid_reply' : result.reason; const session = codexCallerWorkspace(meta)?.session;
-  trace?.write('failure', { host: 'codex', ...(session ? { session_id: session } : {}), tool_name: 'jev_agent', error_first_line: `connection_${reason}`, connection_failure: reason });
+  recordConnectionFailure(trace, reason, { ...(session ? { session_id: session } : {}), tool_name: 'jev_agent' });
   return `Native connection unavailable or interrupted (${reason}). No completion is claimed.`;
 };
 

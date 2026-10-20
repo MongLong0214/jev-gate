@@ -343,6 +343,15 @@ describe('Codex write scope from native tool targets (#234)', () => {
       expect(await f.blocked('Bash', { command }), command).toBe(true);
     }
   });
+  it('counts a dash-led operand after `--` or after the first operand as a file, and an abbreviated writing option as that option (#287)', async () => {
+    const f = await scoped();
+    for (const command of ['uniq -c -- a', 'uniq -- a', 'uniq -d a', 'sort -r -- a', 'file -b a']) expect(await f.hook('Bash', { command }), command).toEqual({});
+    // BSD uniq (macOS) stops options at its first operand and GNU at `--`, so `-out` is the output file; getopt_long takes any unique prefix.
+    for (const command of ['uniq -- package.json -out', 'uniq package.json -out', 'uniq -c a -', 'uniq - out', 'sort --out=x a', 'sort --o=x a', 'sort --temp=d a', 'sort --compress=gzip a',
+      'file --comp -m magic', 'rg --hostname-bin=x foo']) {
+      expect(await f.blocked('Bash', { command }), command).toBe(true);
+    }
+  });
   it('confines an unknown shell command by its reported workdir, a leading absolute cd or the session cwd, and the paths it names', async () => {
     const f = await scoped();
     expect(await f.hook('exec_command', { cmd: 'npx vitest run tests/a.test.ts', workdir: f.other })).toEqual({});
@@ -432,6 +441,17 @@ describe('Codex reservation across a host restart (#239)', () => {
   });
 });
 describe('Codex owned dispatch input guidance (#287)', () => {
+  it('records a thrown native dispatch by its closed category where it is caught, never its message (#287 R2)', async () => {
+    const f = await setup('normal');
+    const agent = vi.spyOn(f.policy as unknown as { agent: (p: Obj) => Promise<string> }, 'agent');
+    agent.mockRejectedValueOnce(new RpcRequestError('closed', true)).mockRejectedValueOnce(new Error('EACCES /secret/path'));
+    for (const id of ['a', 'b']) await f.rpc.onRequest({ id, method: 'item/tool/call', params: { threadId: 'parent', callId: id, tool: 'jev_agent', arguments: {} } });
+    expect(JSON.stringify(f.sent.filter(m => m['id'] === 'a' || m['id'] === 'b'))).toContain('Jev dispatch failed or was interrupted');
+    const rows = f.traces('failure');
+    expect(rows.map(r => r['dispatch_failure']).sort()).toEqual(['exception', 'rpc_closed']);
+    for (const row of rows) expect(row).toMatchObject({ host: 'codex', session_id: 'parent', tool_name: 'jev_agent', error_first_line: `dispatch_${String(row['dispatch_failure'])}` });
+    expect(JSON.stringify(rows)).not.toMatch(/EACCES|secret|disconnected/);
+  });
   it('names the real jev_agent fields in the tool, the session instructions and the refusal, so a retry can succeed', async () => {
     const f = await setup('normal');
     await f.rpc.onRequest({ id: 'wrong', method: 'item/tool/call', params: { threadId: 'parent', callId: 'wrong', tool: 'jev_agent', arguments: { action: 'start', profile: 'jev-gate:worker-fast', marker: '[JEV_TASK rev=1 id=a attempt=1]', task: 'Investigate' } } });

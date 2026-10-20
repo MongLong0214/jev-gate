@@ -120,7 +120,7 @@ export class CodexPolicy {
       const p = obj(m['params'])!;
       let output: string;
       try { output = await this.agent(p); }
-      catch { output = DISPATCH_FAILED; }
+      catch (e) { output = this.failedDispatch(p['threadId'], e); }
       try { rpc.send({ id: m['id'], result: { contentItems: [{ type: 'inputText', text: output }], success: true } }); }
       catch { /* A closed local transport cannot deliver output and does not prove remote termination. */ }
       return true;
@@ -400,6 +400,12 @@ export class CodexPolicy {
     try { if (realpathSync(String(session.settings['cwd'])) !== realpathSync(caller.cwd)) return 'Native workspace changed. No worker was started.'; }
     catch { return 'Native workspace unavailable. No worker was started.'; }
     return this.agent({ threadId: caller.session, callId: obj(meta)?.['callId'] ?? randomUUID(), arguments: arguments_, nativeMeta: meta });
+  }
+  /** #287: a thrown dispatch is recorded where it is caught, by a closed category; the exception can carry paths, prompts or host payloads. */
+  failedDispatch(session: unknown, e: unknown): string {
+    const category = e instanceof RpcRequestError ? `rpc_${e.kind}` : (e as Error | null)?.name === 'AbortError' ? 'aborted' : (e as Error | null)?.name === 'TimeoutError' ? 'timeout' : 'exception';
+    this.trace?.write('failure', { host: 'codex', ...(typeof session === 'string' ? { session_id: session } : {}), tool_name: 'jev_agent', error_first_line: `dispatch_${category}`, dispatch_failure: category });
+    return DISPATCH_FAILED;
   }
   cancelCaller(meta: unknown): void {
     const caller = codexCallerWorkspace(meta); const session = caller && this.sessions.get(caller.session);

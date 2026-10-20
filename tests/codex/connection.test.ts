@@ -2,8 +2,10 @@ import { createServer, type Server } from 'node:http';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installConnection, restoreConnection, type Connection } from '../../src/codex/connection.js';
+import { runCodexHook } from '../../src/codex/hook.js';
 import { startCodexSession } from '../../src/codex/launch.js';
 import { DISPATCH_FAILED } from '../../src/codex/policy.js';
 import { CODEX_SANDBOX_META } from '../../src/codex/workspace.js';
@@ -112,8 +114,29 @@ describe('connection failures are named, not collapsed (#287)', () => {
     const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace') }, connection: { token: 't'.repeat(64), marker: 'compact-marker', port: 0 } });
     try {
       vi.spyOn(session.policy, 'dispatch').mockRejectedValue(new Error('EACCES /secret/path'));
-      const response = await fetch(session.url.replace('ws:', 'http:') + '/agent', { method: 'POST', headers: { authorization: `Bearer ${'t'.repeat(64)}`, 'content-type': 'application/json' }, body: JSON.stringify({ arguments: {}, meta: {} }) });
+      const response = await fetch(session.url.replace('ws:', 'http:') + '/agent', { method: 'POST', headers: { authorization: `Bearer ${'t'.repeat(64)}`, 'content-type': 'application/json' }, body: JSON.stringify({ arguments: {}, meta: { [CODEX_SANDBOX_META]: { sandboxCwd: pathToFileURL(root).href }, threadId: 'root-thread' } }) });
       expect(response.status).toBe(200); expect(await response.json()).toEqual({ output: DISPATCH_FAILED });
+      // #287 R2: the helper records the closed category where it caught the exception, since the MCP server sees an ordinary answer.
+      const rows = readdirSync(join(root, 'trace')).filter(f => f.startsWith('failure-')).map(f => JSON.parse(readFileSync(join(root, 'trace', f), 'utf8')) as Obj);
+      expect(rows).toEqual([expect.objectContaining({ host: 'codex', session_id: 'root-thread', tool_name: 'jev_agent', error_first_line: 'dispatch_exception', dispatch_failure: 'exception' })]);
+      expect(JSON.stringify(rows)).not.toMatch(/EACCES|secret/);
     } finally { vi.restoreAllMocks(); await session.close(); }
+  });
+  it('records why a hook did not reach the helper, on both the automatic connection and the managed bridge (#287 R2)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-connect-hook-')); temps.push(home);
+    const trace = join(home, 'trace'); const event = { hook_event_name: 'PreToolUse', session_id: 'root-thread', turn_id: 'turn', tool_use_id: 'call', tool_name: 'Bash', tool_input: { command: 'ls' } };
+    async function* stdin(): AsyncIterable<string> { yield JSON.stringify(event); }
+    const run = (env: Record<string, string>) => runCodexHook({ stdin: stdin(), env: { CODEX_HOME: home, HOME: home, JEV_CODEX_TRACE_DIR: trace, ...env } });
+    expect(await run({})).toEqual({});
+    const failing = await helper(res => { res.writeHead(502); res.end('Error: /secret/path'); }); const port = (failing.address() as { port: number }).port; owner(home, port);
+    expect(await run({})).toEqual({});
+    expect(await run({ JEV_CODEX_BRIDGE_URL: `http://127.0.0.1:${port}`, JEV_CODEX_BRIDGE_TOKEN: 'b'.repeat(64) })).toEqual({});
+    await new Promise<void>(r => failing.close(() => r()));
+    expect(await run({ JEV_CODEX_BRIDGE_URL: `http://127.0.0.1:${port}`, JEV_CODEX_BRIDGE_TOKEN: 'b'.repeat(64) })).toEqual({});
+    const rows = readdirSync(trace).filter(f => f.startsWith('failure-')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
+    expect(rows.map(r => r['connection_failure']).sort()).toEqual(['http_error', 'http_error', 'state_missing', 'unreachable']);
+    for (const row of rows) expect(row).toMatchObject({ host: 'codex', session_id: 'root-thread', event: 'PreToolUse', tool_name: 'Bash', error_first_line: `connection_${String(row['connection_failure'])}` });
+    expect(readdirSync(trace).filter(f => f.startsWith('codex_event-'))).toHaveLength(4);
+    expect(JSON.stringify(rows)).not.toMatch(/secret|"ls"/);
   });
 });

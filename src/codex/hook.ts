@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
-import { connectionRequest, ensureConnection } from './connection.js';
+import { connectionRequest, ensureConnection, helperRequest, recordConnectionFailure } from './connection.js';
 
 type Rec = Record<string, unknown>;
 const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Rec : null;
@@ -68,22 +68,22 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined);
     const bridge = deps.env['JEV_CODEX_BRIDGE_URL'];
     const secret = deps.env['JEV_CODEX_BRIDGE_TOKEN'];
-    if (!bridge || !secret) {
+    const automatic = !bridge || !secret;
+    if (automatic) {
       if (deps.env['JEV_CODEX_AUTO_CONNECT'] === '0') return recorded;
       if (input['hook_event_name'] === 'SessionStart' && typeof input['model'] === 'string' && typeof input['cwd'] === 'string') await ensureConnection(dirname(dirname(fileURLToPath(import.meta.url))), deps.env);
-      const reply = await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200)); const policy = reply.ok ? reply.value : null;
-      if (policy && Object.keys(policy).length) return policy;
-      if (input['hook_event_name'] === 'SessionStart' && policy) return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' } };
+    } else {
+      const url = new URL(bridge);
+      if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return recorded;
+    }
+    const reply = automatic ? await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200)) : await helperRequest(new URL('/hook', bridge).href, secret, input, AbortSignal.timeout(4200));
+    if (!reply.ok) {
+      recordConnectionFailure(opened.ok ? opened.writer : undefined, reply.reason, { session_id: token(input['session_id']), event: token(input['hook_event_name']), tool_name: token(input['tool_name']) });
       return recorded;
     }
-    const url = new URL(bridge);
-    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return recorded;
-    try {
-      const response = await fetch(new URL('/hook', url), { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` }, body: JSON.stringify(input), signal: AbortSignal.timeout(4200) });
-      if (!response.ok) return recorded;
-      const policy = record(await response.json());
-      return policy && Object.keys(policy).length ? policy : recorded;
-    } catch { return recorded; }
+    if (Object.keys(reply.value).length) return reply.value;
+    if (automatic && input['hook_event_name'] === 'SessionStart') return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' } };
+    return recorded;
   } catch {
     // Hook failures preserve native behavior. No exception messages containing input reach stdout/stderr.
     return {};

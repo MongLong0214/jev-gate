@@ -62,19 +62,28 @@ const printOnlySed = (args: string[]): boolean => {
   if (!scripts.length && files.length) scripts.push(files.shift()!);
   return quiet && scripts.length > 0 && scripts.every(s => s.split(/[;\n]/).every(c => /^\s*(?:\d+|\$)(?:,(?:\d+|\$))?p\s*$/.test(c)));
 };
+/**
+ * Operands as getopt reads them on either host: everything after `--`, or from the first non-option on (BSD and POSIXLY_CORRECT
+ * stop there, so a later `-out` is a file). A lone `-` is an operand. An option's separate value counts too, which only over-counts.
+ */
+const operands = (args: string[]): string[] => {
+  const i = args.findIndex(a => a === '--' || !/^-./.test(a));
+  return i < 0 ? [] : args.slice(args[i] === '--' ? i + 1 : i);
+};
 const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   if (READ_ONLY.has(command ?? '')) return true;
   // A lone --version on a program found by name, as in `node --version`. Short -v/-V can start an interpreter (python -v, bash -v).
   if (command && !command.includes('/') && args.length === 1 && args[0] === '--version') return true;
-  if (command === 'rg') return !args.some(a => /^--pre(?:=|$)/.test(a));
+  if (command === 'rg') return !args.some(a => /^--(?:pre|hostname-bin)(?:=|$)/.test(a));
   if (command === 'find') return !args.some(a => /^-(?:delete|exec|execdir|ok|okdir|fls|fprint|fprint0|fprintf)$/.test(a));
   if (command === 'gh') return /^(?:issue|pr)$/.test(args[0] ?? '') && /^(?:view|list|status|diff|checks)$/.test(args[1] ?? '');
   if (command === 'sed') return printOnlySed(args);
   if (command === 'command') return /^-[vV]$/.test(args[0] ?? '') && args.length > 1;
-  if (command === 'file') return !args.some(a => a === '--compile' || /^-[^-]*C/.test(a));
-  // An output file (`-o`), a temporary directory (`-T`) or a compressor program; a second uniq operand is its output file.
-  if (command === 'sort') return !args.some(a => /^--(?:output|temporary-directory|compress-program)(?:=|$)|^-[^-]*[oT]/.test(a));
-  if (command === 'uniq') return args.filter(a => !a.startsWith('-')).length <= 1;
+  // getopt_long takes any unique prefix of a long option: `--co` is --compile, and for sort `--o`, `--t` and `--co` are its
+  // output file, temporary directory and compressor program (`-o`, `-T`). A second uniq operand is its output file.
+  if (command === 'file') return !args.some(a => /^--co|^-[^-]*C/.test(a));
+  if (command === 'sort') return !args.some(a => /^--(?:o|t|co)|^-[^-]*[oT]/.test(a));
+  if (command === 'uniq') return operands(args).length <= 1;
   if (command === 'printf') return args[0] !== '-v';
   if (command === 'date') return args.every(a => /^(?:\+.*|-u|--utc|-R|-I\w*|--iso-8601(?:=\w+)?|--rfc-3339=\w+)$/.test(a));
   if (command !== 'git') return false;
