@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import type { OperationRun, OperationStep } from './operations.js';
 import { operationState } from './operation-state.js';
 import { memo } from './memo.js';
+import { looksSecret } from './outbound-text.js';
 
 type Rec = Record<string, unknown>;
-const safeToken = memo((v: string): string | null => /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !/(sk-|jv_live_)/i.test(v) ? v : null);
+// Metadata identifiers reject even truncated/embedded sk- fragments. Prose screening keeps prefix mentions and task-id usable.
+const safeToken = memo((v: string): string | null => /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null);
 const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 const hash = memo((v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12));
 const at = (r: Rec): string => typeof r['written_at'] === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(r['written_at']) ? r['written_at'] : '';

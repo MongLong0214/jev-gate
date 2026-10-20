@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildOperations, operationsStableUntil, type ModRecord } from '../src/operations.js';
 import { parseWorkerReply, reportedSingleVerdict } from '../src/plan.js';
 import { refusalReason } from '../src/verify.js';
+import { codexSpanKey } from '../src/codex-operations.js';
 import type { WorkerReply } from '../src/types.js';
 
 const at = '2026-09-29T06:00:00.000Z';
@@ -11,6 +12,10 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: ModRecord['component'], rec: Record<string, unknown>, time = at): ModRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it.each(['jv_live_' + '0123456789abcdef'.repeat(4), 'sk-canary', 'ghp_' + 'a1'.repeat(20), 'AKIAIOSFODNN7EXAMPLE'])('H1: applies the shared credential screen to Codex operation identities: %s', secret => {
+    expect(codexSpanKey({ session_id: 'session', agent_id: secret }, 'SubagentStop')).toBeNull();
+  });
+
   it('names plain Agent results without Gate acceptance and retains exact Jev call identities', () => {
     const view = buildOperations([
       { ...base, phase: 'post', tool_use_id: 'native', subagent_type: 'general-purpose' },

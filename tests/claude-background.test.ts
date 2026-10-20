@@ -73,16 +73,19 @@ describe('responsive native background contracts', () => {
   });
 
   it.each([false, true].flatMap(direct => [
+    { label: 'bare Jev key', text: 'jv_live_' + '0123456789abcdef'.repeat(4), canaries: ['jv_live_' + '0123456789abcdef'.repeat(4)] },
+    { label: 'JSON password only', text: '{"password":"canary-pw-123"}', canaries: ['canary-pw-123'] },
     { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
     ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
       'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
-  ].map(test => ({ ...test, direct }))))('F1/G1: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
-    const fields = { status: 'blocked', summary: text, blockers: [text, 'Needs integration'], interfaces: ['integrate(): void'] };
+  ].map(test => ({ ...test, direct }))))('H1/F1/G1: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
+    expect(text).not.toMatch(/bearer/i);
+    const fields = { status: 'blocked', summary: text, changed_files: ['src/result.ts', text], blockers: [text, 'Needs integration'], interfaces: ['integrate(): void', text] };
     const f = await fixture(direct, fields); await f.launch(); f.transcript();
     const terminal = await f.terminal();
     expect(f.job().current.receipts).toHaveLength(1);
     const receipt = f.job().current.receipts[0]!;
-    expect(receipt.reply).toMatchObject({ status: 'blocked', blockers: ['Needs integration'], interfaces: ['integrate(): void'] });
+    expect(receipt.reply).toMatchObject({ status: 'blocked', changed_files: ['src/result.ts'], blockers: ['Needs integration'], interfaces: ['integrate(): void'] });
     expect(receipt.reply).not.toHaveProperty('summary');
     const disk = readFileSync(jobPath(f.env, 's'), 'utf8');
     const context = f.job().current.background_context!;
@@ -96,7 +99,9 @@ describe('responsive native background contracts', () => {
       readFileSync(jobPath(foreground.env, 's'), 'utf8'), JSON.stringify(post)]) {
       for (const canary of canaries) expect(output).not.toContain(canary);
     }
-    for (const output of [context, JSON.stringify(replay), JSON.stringify(post)]) expect(output).toContain('Needs integration');
+    for (const output of [context, JSON.stringify(replay), JSON.stringify(post)]) {
+      for (const functional of ['src/result.ts', 'integrate(): void', 'Needs integration']) expect(output).toContain(functional);
+    }
   });
 
   it.each([false, true])('B3: strips report prose from Claude background settlement and replay (direct=%s)', async direct => {
@@ -224,27 +229,37 @@ describe('responsive native background contracts', () => {
     expect(intents.map(r => r.prompt_id).sort()).toEqual(['fresh-0', 'fresh-1', 'fresh-2']);
     expect(f.job().history.find(g => g.prompt_id === 'original')?.outcome).toBe('superseded');
   });
-  it.each(['UserPromptSubmit', 'PreToolUse'])('recovers a completed worker with no stop_reason from a native notification before %s', async event => {
+  it.each(['UserPromptSubmit', 'PreToolUse', 'Stop'].flatMap(event => [
+    { label: 'minimal', origin: { kind: 'task-notification' } },
+    { label: 'no turnOrigin', origin: { kind: 'task-notification', producer: 'session-task' } },
+    { label: 'no producer', origin: { kind: 'task-notification' }, turnOrigin: 'task_notification' },
+    { label: 'full', origin: { kind: 'task-notification', producer: 'session-task' }, turnOrigin: 'task_notification' },
+  ].map(metadata => ({ event, ...metadata }))))('H2: settles every host notice metadata shape without stop_reason before $event ($label)', async ({ event, label: _label, ...metadata }) => {
     const f = await fixture(); await f.launch(); f.transcript();
     const rows = readFileSync(f.path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    rows.at(-1).message.stop_reason = null; rows.at(-1).timestamp = '2026-10-07T05:31:45.968Z';
+    delete rows.at(-1).message.stop_reason; rows.at(-1).timestamp = '2026-10-07T05:31:45.968Z';
     writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
     await f.terminal(); expect(f.job().current.active['dispatch']).toBeDefined();
-    writeFileSync(join(f.root, 's.jsonl'), JSON.stringify({ type: 'user', sessionId: 's', timestamp: '2026-10-07T05:31:46.678Z', origin: { kind: 'task-notification', producer: 'session-task' }, promptSource: 'system', turnOrigin: 'task_notification', message: { content: '<task-notification><task-id>worker</task-id><status>completed</status></task-notification>' } }) + '\n');
-    await f.run({ hook_event_name: event, prompt_id: 'question', prompt: 'Continue', tool_name: 'Read', tool_use_id: 'read', tool_input: { file_path: 'x' } });
+    const prompt = '<task-notification><task-id>worker</task-id><status>completed</status></task-notification>';
+    writeFileSync(f.parent, JSON.stringify({ type: 'user', sessionId: 's', uuid: 'notice', timestamp: '2026-10-07T05:31:46.678Z', ...metadata, promptSource: 'system', message: { content: prompt } }) + '\n');
+    expect(isNativeTaskNotification({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'notice', transcript_path: f.parent, prompt })).toBe(true);
+    await f.run({ hook_event_name: event, prompt_id: 'notice', prompt, tool_name: 'Read', tool_use_id: 'read', tool_input: { file_path: 'x' } });
     expect(f.job().current.active).toEqual({});
     expect(f.job().current.receipts).toEqual([expect.objectContaining({ verdict: 'accept' })]);
-    await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'again', prompt: 'Continue' });
+    const next = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'again', prompt: 'Continue' });
+    expect(next.stdout ?? '').not.toContain('still have no terminal result');
+    expect(f.job().current.active).toEqual({});
     expect([f.job().current, ...f.job().history].find(g => g.prompt_id === 'original')?.receipts).toHaveLength(1);
   });
-  it.each(['human', 'wrong_agent', 'older', 'tool_use', 'invalid_child_time'])('does not settle missing stop_reason from an invalid notification (%s)', async kind => {
+  it.each(['human', 'wrong_agent', 'wrong_session', 'other_generation', 'older', 'tool_use', 'invalid_child_time', 'no_notice'])('H2: does not settle missing stop_reason from an invalid notification (%s)', async kind => {
     const f = await fixture(); await f.launch(); f.transcript();
     const rows = readFileSync(f.path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    rows.at(-1).message.stop_reason = null; rows.at(-1).timestamp = '2026-10-07T05:31:45.968Z';
+    delete rows.at(-1).message.stop_reason; rows.at(-1).timestamp = '2026-10-07T05:31:45.968Z';
+    if (kind === 'other_generation') rows[0].message.content = rows[0].message.content.replace(/token=[a-f0-9-]{36}/, 'token=00000000-0000-0000-0000-000000000000');
     if (kind === 'invalid_child_time') rows.at(-1).timestamp = 'not-a-time';
     if (kind === 'tool_use') rows.at(-1).message.content.push({ type: 'tool_use', name: 'Bash', id: 'tool' });
     writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
-    writeFileSync(join(f.root, 's.jsonl'), JSON.stringify({ type: 'user', sessionId: 's', timestamp: kind === 'older' ? '2026-10-07T05:30:00.000Z' : '2026-10-07T05:31:46.678Z', ...(kind === 'human' ? {} : { origin: { kind: 'task-notification', producer: 'session-task' }, promptSource: 'system', turnOrigin: 'task_notification' }), message: { content: `<task-notification><task-id>${kind === 'wrong_agent' ? 'another' : 'worker'}</task-id><status>completed</status></task-notification>` } }) + '\n');
+    if (kind !== 'no_notice') writeFileSync(f.parent, JSON.stringify({ type: 'user', sessionId: kind === 'wrong_session' ? 'another' : 's', timestamp: kind === 'older' ? '2026-10-07T05:30:00.000Z' : '2026-10-07T05:31:46.678Z', ...(kind === 'human' ? { promptSource: 'typed', origin: { kind: 'human' } } : { origin: { kind: 'task-notification' }, promptSource: 'system' }), message: { content: `<task-notification><task-id>${kind === 'wrong_agent' ? 'another' : 'worker'}</task-id><status>completed</status></task-notification>` } }) + '\n');
     await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'question', prompt: 'Continue' });
     expect(f.job().current.active['dispatch']).toBeDefined(); expect(f.job().current.receipts).toHaveLength(0);
   });

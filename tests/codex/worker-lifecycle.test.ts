@@ -113,16 +113,19 @@ describe('Codex status collection and deny tracing (#293)', () => {
   });
 
   it.each([false, true].flatMap(background => [
+    { label: 'bare Jev key', text: 'jv_live_' + '0123456789abcdef'.repeat(4), canaries: ['jv_live_' + '0123456789abcdef'.repeat(4)] },
+    { label: 'JSON password only', text: '{"password":"canary-pw-123"}', canaries: ['canary-pw-123'] },
     { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
     ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
       'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
-  ].map(test => ({ ...test, background }))))('F1/G1: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
+  ].map(test => ({ ...test, background }))))('H1/F1/G1: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
+    expect(text).not.toMatch(/bearer/i);
     const f = await setup('normal'); const launch = f.launch(background);
     await vi.waitFor(() => expect(f.started()).toBe(true)); if (background) await launch;
-    f.terminal('completed', JSON.stringify({ status: 'blocked', summary: text, blockers: [text, 'Needs integration'], interfaces: ['integrate(): void'], checks: [] }));
+    f.terminal('completed', JSON.stringify({ status: 'blocked', summary: text, changed_files: ['src/result.ts', text], blockers: [text, 'Needs integration'], interfaces: ['integrate(): void', text], checks: [] }));
     await launch;
     await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
-    expect(f.job().current.receipts[0]?.reply).toMatchObject({ status: 'blocked', blockers: ['Needs integration'], interfaces: ['integrate(): void'] });
+    expect(f.job().current.receipts[0]?.reply).toMatchObject({ status: 'blocked', changed_files: ['src/result.ts'], blockers: ['Needs integration'], interfaces: ['integrate(): void'] });
     expect(f.job().current.receipts[0]?.reply).not.toHaveProperty('summary');
     const status = await f.status('json-credential-status');
     const disk = readFileSync(jobPath(f.stateEnv, 'parent'), 'utf8');

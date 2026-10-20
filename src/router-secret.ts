@@ -5,6 +5,8 @@
 export const SECRET_PATTERNS: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   /\bsk-[A-Za-z0-9_-]{16,}/,
+  // Jev's own prefix; validApiKey imposes no issuer-specific suffix length.
+  /jv_live_[A-Za-z0-9_-]+/i,
   /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}/,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/,

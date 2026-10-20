@@ -34,6 +34,14 @@ describe('native Codex hook', () => {
     for (const file of readdirSync(path)) expect(lstatSync(join(path, file)).mode & 0o777).toBe(0o600);
   });
 
+  it.each(['jv_live_' + '0123456789abcdef'.repeat(4), 'sk-canary', 'ghp_' + 'a1'.repeat(20), 'AKIAIOSFODNN7EXAMPLE'])('H1: applies the shared credential screen to Codex hook metadata: %s', async secret => {
+    const path = dir();
+    await runCodexHook({ stdin: stdin({ ...input, model: secret }), env: { HOME: dir(), JEV_CODEX_TRACE_DIR: path } });
+    const records = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>);
+    expect(records.find(r => r['phase'] === 'codex_event')).toMatchObject({ model: null });
+    expect(JSON.stringify(records)).not.toContain(secret);
+  });
+
   it.each(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'Interrupt', 'SessionEnd'])('never approves permissions or patches inputs for %s', async event => {
     const result = await runCodexHook({ stdin: stdin({ ...input, hook_event_name: event, tool_response: 'ordinary result' }), env: { JEV_CODEX_TRACE_DIR: dir() } });
     expect(JSON.stringify(result)).not.toMatch(/permissionDecision|updatedInput|decision.*block/);
