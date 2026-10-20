@@ -326,26 +326,23 @@ it('does not close root or sibling preparations with another agent response in t
 });
 
 
-it('reports actual Compact Jev calls in both hosts separately from local packing and installation', () => {
+it('reports actual Compact Jev calls separately from local packing, and reads Codex Compact records of earlier versions as nothing', () => {
   const records = [
     { phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'r', stage: 'selected', applied: false, jev_sent: true, jev_ms: 310, candidates: 16, available: 20, dependencies: 1, selection: 'current_dependencies', written_at: at },
     { phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'r', stage: 'installed', applied: true, written_at: later },
   ];
   const mods = [row('compact', { event: 'compact', session_id: 's', run_id: 'r', stage: 'jev', jev_sent: true, jev_ms: 220, candidates: 4, available: 4, dependencies: 1, selection: 'current_dependencies' }), row('compact', { event: 'compact', session_id: 's', run_id: 'r', applied: true }, later)];
   const view = buildOperations(records, mods, new Date(later), { trace: true });
-  expect(view.requests).toBe(2); expect(view.latency.measured).toBe(2);
-  expect(view.feed.filter(s => s.lane === 'jev')).toHaveLength(2);
+  expect(view.requests).toBe(1); expect(view.latency.measured).toBe(1);
+  expect(view.feed.filter(s => s.lane === 'jev')).toHaveLength(1);
   expect(view.feed.some(s => s.summary.includes('Jev 작업 의존 근거 선택'))).toBe(true);
-  expect(view.feed.find(s => s.lane === 'host')?.summary).toContain('설치 확인');
+  expect(view.runs.some(r => r.host === 'codex')).toBe(false);
 });
 
 
-it('shows a forwarded native Compact request without a Router mismatch or claimed digest installation', () => {
+it('shows no step for a forwarded native Compact request recorded by an earlier version', () => {
   const view = buildOperations([{ phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'n', stage: 'native_submitted', applied: false, summarizer_request: true, submitted_model: 'gpt-6.1-sol', submitted_effort: 'xhigh', written_at: at }], [], new Date(later), { trace: true, host: 'codex' });
-  expect(view.feed).toHaveLength(1);
-  expect(view.feed[0]).toMatchObject({ feature: 'compact', lane: 'host', state: 'unconfirmed', summary: expect.stringContaining('호스트 요약 모델') });
-  expect(view.feed[0]?.issue).toBeUndefined();
-  expect(view.feed[0]?.details.join(' ')).toContain('설치 미관측');
+  expect(view.feed).toHaveLength(0); expect(view.runs).toHaveLength(0);
 });
 
 

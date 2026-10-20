@@ -11,7 +11,10 @@ import type { TraceWriter } from '../trace.js';
 import { resolveApiKey, withApiKey } from '../credentials.js';
 
 export const PROVIDER = 'jev-gate-native';
-export interface Connection { version: 1; pid: number; port: number; token: string; marker: string; root: string; original: Obj; installed: Obj }
+/** `marker` is carried over only from versions with Codex Compact, whose still-running readers require it. */
+export interface Connection { version: 1; pid: number; port: number; token: string; marker?: string; root: string; original: Obj; installed: Obj }
+/** The compact_prompt that versions with Codex Compact wrote. No other value is ever treated as theirs. */
+const LEGACY_COMPACT_PROMPT = /^\[jev-gate compact [0-9a-f]{48}\] Produce a factual compaction summary of the preceding conversation\.$/;
 const home = (env: Env): string => {
   const path = env['CODEX_HOME'] ?? join(env['HOME'] ?? homedir(), '.codex');
   if (!isAbsolute(path)) throw new Error('Codex home must be absolute');
@@ -31,7 +34,7 @@ const read = (env: Env): Connection | null => {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024 || stat.mode & 0o077) return null;
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     let value: Obj | null; try { value = obj(JSON.parse(readFileSync(fd, 'utf8'))); } finally { closeSync(fd); }
-    if (value?.['version'] !== 1 || !Number.isSafeInteger(value['pid']) || Number(value['pid']) < 1 || !Number.isSafeInteger(value['port']) || Number(value['port']) < 1 || Number(value['port']) > 65535 || typeof value['token'] !== 'string' || !/^[a-f0-9]{64}$/.test(value['token']) || typeof value['marker'] !== 'string' || typeof value['root'] !== 'string' || !isAbsolute(value['root']) || !obj(value['original']) || !obj(value['installed'])) return null;
+    if (value?.['version'] !== 1 || !Number.isSafeInteger(value['pid']) || Number(value['pid']) < 1 || !Number.isSafeInteger(value['port']) || Number(value['port']) < 1 || Number(value['port']) > 65535 || typeof value['token'] !== 'string' || !/^[a-f0-9]{64}$/.test(value['token']) || typeof value['root'] !== 'string' || !isAbsolute(value['root']) || !obj(value['original']) || !obj(value['installed'])) return null;
     return value as unknown as Connection;
   } catch { return null; }
 };
@@ -63,16 +66,19 @@ export const installConnection = async (rpc: CodexRpc, connection: Connection, e
   const values: Obj = {
     model_provider: PROVIDER,
     [`model_providers.${PROVIDER}`]: { name: 'Jev Gate / native Codex', base_url: `http://127.0.0.1:${connection.port}`, wire_api: 'responses', requires_openai_auth: env['JEV_CODEX_CONNECTION_TEST_NO_AUTH'] !== '1', supports_websockets: false, http_headers: { 'x-jev-gate-session': connection.token } },
-    compact_prompt: connection.marker,
   };
   for (const key of Object.keys(values)) {
     const actual = valueAt(user.config, key);
     if (previous && key in previous.installed && !equal(actual, previous.installed[key]) && !equal(actual, previous.original[key])) throw new Error('owner modified the connection settings');
     connection.original[key] = previous && Object.hasOwn(previous.original, key) ? previous.original[key] : actual ?? null;
   }
+  // An earlier version's own marker returns to the owner's value from before it; any other compact_prompt is the owner's.
+  const legacy = typeof user.config['compact_prompt'] === 'string' && LEGACY_COMPACT_PROMPT.test(user.config['compact_prompt']);
+  const prior = previous?.original['compact_prompt'];
+  if (legacy) connection.original['compact_prompt'] = typeof prior === 'string' && !LEGACY_COMPACT_PROMPT.test(prior) ? prior : null;
   connection.installed = values;
   write(env, connection); // Recovery facts precede the transaction.
-  await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits: Object.entries(values).map(([keyPath, value]) => ({ keyPath, value, mergeStrategy: 'replace' })) });
+  await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits: Object.entries(legacy ? { ...values, compact_prompt: connection.original['compact_prompt'] } : values).map(([keyPath, value]) => ({ keyPath, value, mergeStrategy: 'replace' })) });
 };
 export const restoreConnection = async (rpc: CodexRpc, env: Env): Promise<void> => {
   const state = read(env); if (!state) return;
@@ -171,7 +177,7 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
   }
   writeFileSync(join(lock, 'pid'), String(process.pid), { mode: 0o600, flag: 'wx' });
   const previous = read(env);
-  const state: Connection = { version: 1, pid: process.pid, port: previous?.port ?? 0, token: previous?.token ?? randomBytes(32).toString('hex'), marker: previous?.marker ?? `[jev-gate compact ${randomBytes(24).toString('hex')}] Produce a factual compaction summary of the preceding conversation.`, root, original: {}, installed: {} };
+  const state: Connection = { version: 1, pid: process.pid, port: previous?.port ?? 0, token: previous?.token ?? randomBytes(32).toString('hex'), ...(previous?.marker ? { marker: previous.marker } : {}), root, original: {}, installed: {} };
   let session: Awaited<ReturnType<typeof startCodexSession>> | undefined;
   let timer: NodeJS.Timeout | undefined;
   let closing = false;
@@ -191,7 +197,7 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
     return plugin['localVersion'] === null || plugin['localVersion'] === undefined || plugin['localVersion'] === version ? 1 : 0;
   };
   try {
-    session = await startCodexSession({ env, cwd: home(env), ...(env['JEV_CODEX_CONNECTION_TEST_NO_AUTH'] === '1' ? { nativeAuth: false } : {}), connection: { token: state.token, marker: state.marker, port: state.port, ready: () => ready, restart: () => { void close(); } } });
+    session = await startCodexSession({ env, cwd: home(env), ...(env['JEV_CODEX_CONNECTION_TEST_NO_AUTH'] === '1' ? { nativeAuth: false } : {}), connection: { token: state.token, port: state.port, ready: () => ready, restart: () => { void close(); } } });
     state.port = Number(new URL(session.url).port);
     const user = await userConfig(session.rpc);
     if (!env['JEV_CODEX_UPSTREAM']) {

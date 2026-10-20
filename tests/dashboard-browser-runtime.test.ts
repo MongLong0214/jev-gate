@@ -141,6 +141,24 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
   });
 
+  it('draws no Compact card or inspector in the Codex view and keeps Claude Compact (#292)', async () => {
+    const codex=run('cx','codex',[call('cx-router','router',90)]);
+    for(const rows of [[run('cl','claude',[call('cl-compact','compact',80)]),codex],[codex]]){
+      push(rows);
+      const p=await page();await settle(p);
+      const card=p.locator('[data-feature="compact"]'),shown=async()=>card.evaluate(n=>getComputedStyle(n).display!=='none');
+      expect(await shown()).toBe(true);
+      await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');expect(await p.locator('#pipeline svg.wires line').count()).toBe(8);
+      await p.locator('[data-host="codex"]').click();await settle(p);
+      expect.soft(await shown()).toBe(false);expect.soft(await p.locator('#circuit-inspector').textContent()).not.toContain('Compact');
+      expect.soft(await p.locator('#runs [data-run="cx"]').count()).toBe(1);expect.soft(await p.locator('#run-count').textContent()).not.toMatch(/Compact|컴팩트/);
+      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(7);
+      await p.locator('[data-host="claude"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(8);
+      await p.locator('[data-host="all"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(8);expect.soft(await p.locator('#runs .row').count()).toBe(rows.length);
+      await p.close();
+    }
+  });
+
   it('counts running executions from runs rather than the recent feed and scopes them by host', async () => {
     push([run('old-active','codex',[step('old-tool','workers',{lifecycle:true,lane:'host',state:'active',startedAt:ago(0)})],{state:'active'}),run('new','claude',[call('new-output','compact',80)])]);
     current.operations.feed=current.operations.feed.filter(event=>event.id!=='old-tool');

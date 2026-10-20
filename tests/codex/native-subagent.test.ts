@@ -18,7 +18,7 @@ describe('Codex native spawn_agent child requests', () => {
     writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n');});\n`, { mode: 0o755 });
     writeFileSync(join(root, 'policy.json'), '{}');
     const env = { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: trace, JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(upstream.address() as { port: number }).port}` };
-    const session = await startCodexSession({ cwd: root, env, ...(connected ? { connection: { token: 't'.repeat(64), marker: 'compact-marker', port: 0 } } : {}) });
+    const session = await startCodexSession({ cwd: root, env, ...(connected ? { connection: { token: 't'.repeat(64), port: 0 } } : {}) });
     try {
       await session.policy.externalHook({ hook_event_name: 'SessionStart', session_id: 's', cwd: root, model: 'gpt-6.1-sol' });
       const native = session.policy.sessions.get('s')!;
@@ -41,7 +41,7 @@ describe('Codex native spawn_agent child requests', () => {
     const root = mkdtempSync(join(tmpdir(), 'jev-native-child-'));
     writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n');});\n`, { mode: 0o755 });
     writeFileSync(join(root, 'policy.json'), '{}');
-    const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace') }, connection: { token: 't'.repeat(64), marker: 'compact-marker', port: 0 } });
+    const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace') }, connection: { token: 't'.repeat(64), port: 0 } });
     try {
       await session.policy.externalHook({ hook_event_name: 'SessionStart', session_id: 's', cwd: root, model: 'gpt-6.1-sol' });
       await session.policy.externalHook({ hook_event_name: 'SessionStart', session_id: 'worker', cwd: root, model: 'gpt-6.1-sol' });

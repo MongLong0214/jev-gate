@@ -9,7 +9,7 @@ import { PROVIDER, connectionOwner, connectionRequest, ensureConnection, helperR
 type Rec = Record<string, unknown>;
 const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Rec : null;
 const token = (v: unknown): string | null => typeof v === 'string' && /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !/(sk-|jv_live_)/i.test(v) ? v : null;
-const EVENTS = new Set(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'Interrupt']);
+const EVENTS = new Set(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt']);
 const LIMIT = 2 * 1024 * 1024;
 
 /** Only explicit structured status or the anchored native exec envelope; never infer from command output. */
@@ -62,9 +62,9 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
   const eventRecord = trace?.write('codex_event', base);
   if (!eventRecord || !eventRecord.ok && eventRecord.error !== 'recording_disabled') return {};
   if (event === 'SessionStart' && env['JEV_CODEX_BRIDGE_URL']) return { hookSpecificOutput: { hookEventName: event, additionalContext:
-    'Jev Gate is connected to the native Codex session adapter. Gate A/B, plans, contract acceptance and root guard use the shared policies; Router uses official turn settings; Compact uses the native compaction lifecycle. Follow the current turn guidance and use jev_agent for owned dispatches. Native permissions and the user request remain authoritative. Do not claim unobserved policies or savings ran.' } };
+    'Jev Gate is connected to the native Codex session adapter. Gate A/B, plans, contract acceptance and root guard use the shared policies; Router uses official turn settings. Follow the current turn guidance and use jev_agent for owned dispatches. Native permissions and the user request remain authoritative. Do not claim unobserved policies or savings ran.' } };
   if (event === 'SessionStart') return { hookSpecificOutput: { hookEventName: event, additionalContext:
-    'Jev Gate native Codex plugin: jev_evidence provides repository evidence and hooks record lifecycle metadata. The installed plugin connects ordinary native Codex automatically. A session already open during installation retains its previous provider; use a fresh native session once connection is ready. This startup notice does not establish actual Gate, Router or Compact application; inspect recorded requests and never claim unobserved policies ran. See the Jev Gate skill for setup.' } };
+    'Jev Gate native Codex plugin: jev_evidence provides repository evidence and hooks record lifecycle metadata. The installed plugin connects ordinary native Codex automatically. A session already open during installation retains its previous provider; use a fresh native session once connection is ready. This startup notice does not establish actual Gate or Router application; inspect recorded requests and never claim unobserved policies ran. See the Jev Gate skill for setup.' } };
   return {};
 };
 
@@ -104,8 +104,8 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     const opened = (deps.openTrace ?? openTraceDir)(codexTraceDir(deps.env), deps.env);
     const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined, routing);
     // The user sees these; the model does not. `codex exec` keeps its model and effort, so it needs no notice.
-    const notice = routing?.routed === false ? { systemMessage: `Jev Gate: this session started ${routing.model_provider ? `on model provider ${JSON.stringify(routing.model_provider)} ` : ''}without the Jev Gate connection, so Router and Compact do not apply to it. Start a new session once the connection is ready.` }
-      : routing ? { systemMessage: 'Jev Gate: Codex reported no usable start metadata for this session, so whether Router and Compact apply to it is unknown. Run doctor, then start a new session once the connection is ready.' }
+    const notice = routing?.routed === false ? { systemMessage: `Jev Gate: this session started ${routing.model_provider ? `on model provider ${JSON.stringify(routing.model_provider)} ` : ''}without the Jev Gate connection, so Router does not apply to it. Start a new session once the connection is ready.` }
+      : routing ? { systemMessage: 'Jev Gate: Codex reported no usable start metadata for this session, so whether Router applies to it is unknown. Run doctor, then start a new session once the connection is ready.' }
       : started && started['originator'] !== 'codex_exec' ? { systemMessage: 'Jev Gate: Router may change the model and effort of this interactive session, including a model given with -m/--model; Codex reports no signal that separates it from config defaults. codex exec keeps its model and effort.' } : {};
     const automatic = !bridge || !secret;
     if (automatic) {
@@ -121,7 +121,7 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
       return { ...recorded, ...notice };
     }
     if (Object.keys(reply.value).length) return { ...reply.value, ...notice };
-    if (automatic && input['hook_event_name'] === 'SessionStart') return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' }, ...notice };
+    if (automatic && input['hook_event_name'] === 'SessionStart') return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router applies only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' }, ...notice };
     return { ...recorded, ...notice };
   } catch {
     // Hook failures preserve native behavior. No exception messages containing input reach stdout/stderr.

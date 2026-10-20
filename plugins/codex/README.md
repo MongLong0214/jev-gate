@@ -1,6 +1,6 @@
 # Jev Gate for Codex
 
-Automatic Gate, Router and Compact connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
+Automatic Gate and Router connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
 
 Requires **Node 22.15+**. Automatic connection was tested with **Codex CLI 0.160.0**. The optional managed terminal connection was also tested on 0.158.0. An already open session retains its original provider until a new session loads the automatic settings. Local Codex app/IDE sessions must use this Codex home and support the same native plugin, hook and provider APIs; a remote managed coding session is a separate host.
 
@@ -23,7 +23,7 @@ Codex supplies the calling thread’s workspace; **no shell export, `JEV_CODEX_W
 
 ## Automatic connection
 
-The trusted startup hook and installed MCP start one local helper per Codex home. The helper uses the official App Server to execute owned workers and observes ordinary native Responses requests for Router, context usage and compaction. It automatically writes only its model-provider entry, provider selection and compaction marker through Codex’s revision-checked configuration API. Unrelated settings and comments are preserved; API keys are never written there. A custom provider is preserved and automatic connection is declined rather than redirected.
+The trusted startup hook and installed MCP start one local helper per Codex home. The helper uses the official App Server to execute owned workers and observes ordinary native Responses requests for Router and context usage. Codex’s own compaction runs unchanged, and the Router never rewrites its request. It automatically writes only its model-provider entry and provider selection through Codex’s revision-checked configuration API. A `compact_prompt` marker written by an earlier version is removed, or returned to the owner’s value from before it; any other `compact_prompt` is the owner’s and stays. Unrelated settings and comments are preserved; API keys are never written there. A custom provider is preserved and automatic connection is declined rather than redirected.
 
 Use Codex normally:
 
@@ -49,7 +49,6 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 | Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. Acceptance is owned by code on both hosts. |
 | Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
 | Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |
-| Compact | Prioritizes current-task dependencies with a bounded Jev batch, then produces the shared extractive digest; Codex installs it through its own state machine; unsupported extraction falls back to native compaction |
 | Evidence | Same local search, Jev judgments, pagination, cache and exact source read-back as Claude Code |
 
 Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. Planners narrow those grants to reads and disable network. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Worktree isolation creates a separate branch and leaves it for inspection and integration; it does not silently merge changes.
@@ -58,21 +57,20 @@ The defaults enable up to 16 snapshot worktree workers, up to 64 planned tasks, 
 
 A complete bounded lookup or mechanical edit can use one account-listed Luna worker without a planner even when the older delegation-cost estimate is negative. This preference shares Gate A's existing Jev request and respects missing context, explicit no-delegation, shape and depth constraints. Workers handle whole outcomes, not each individual file read; the main integrates the result.
 
-Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events. Encrypted reasoning, media, pending calls or an oversized mandatory context cannot be guessed; these cases use native compaction/handoff behavior. Digest bytes are not measured token or billing savings. Manual and automatic Compact, including Jev dependency selection, are enabled by default. Selection uses at most 16 omitted older successful results and a 1,000ms wait without retry. No key, invalid/secret input, timeout and optional key-access errors retain local extraction. Cancellation and a superseded native generation never apply late results; usage can remain unknown after a timeout. The recent tail, mandatory user text and failure evidence keep their existing rules. Switch `compact.jevEnabled` off for local-only extraction.
+Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events.
 
 ## Policy settings
 
-Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex.json`. No file is required. Gate/Router settings are loaded for each new prompt; restart the local host for Compact and environment changes.
+Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex.json`. No file is required. Gate/Router settings are loaded for each new prompt; restart the local host for environment changes.
 
 ```json
 {
   "gate": {"mode":"auto"},
-  "router": {"enabled":true,"model":true,"effort":true,"timeoutMs":800},
-  "compact": {"enabled":true,"manual":true,"budgetChars":40000,"jevEnabled":true,"jevTimeoutMs":1000}
+  "router": {"enabled":true,"model":true,"effort":true,"timeoutMs":800}
 }
 ```
 
-`gate` accepts the shared V5 options, including depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; Router and Compact keep their own settings, and `doctor` reports the value.
+`gate` accepts the shared V5 options, including depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable the Router. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; the Router keeps its own settings, and `doctor` reports the value. A `compact` section left from an earlier version is ignored.
 
 ### Current Codex models and efforts
 
@@ -152,9 +150,9 @@ claude plugin validate . --strict
 JEV_CODEX_E2E=1 npx vitest run tests/codex/runtime.test.ts tests/codex/connection-runtime.test.ts
 ```
 
-Ordinary tests use fake HTTP/CLI and no credentials. The native runtime suite installs a uniquely named disposable plugin and drives **real Codex processes** with a scripted local Responses provider. It verifies guarded root calls, workers, failed-check rejection, an actual file edit invalidating an earlier check followed by a successful recheck, plan dependencies, cancellation, denial budgets, read-only permissions, planned-worker worktrees, automatic/manual digest installation, Evidence, GPT-6/6.1 and Terra model/effort application, and dashboard records; the temporary installation is removed afterwards. The ordinary-native connection test additionally verifies no launcher/workspace export, crash recovery, concurrent sessions, actual Gate worker checks, native compaction installation and restoration of owner settings. This establishes those execution paths, not every future host version or measured product savings.
+Ordinary tests use fake HTTP/CLI and no credentials. The native runtime suite installs a uniquely named disposable plugin and drives **real Codex processes** with a scripted local Responses provider. It verifies guarded root calls, workers, failed-check rejection, an actual file edit invalidating an earlier check followed by a successful recheck, plan dependencies, cancellation, denial budgets, read-only permissions, planned-worker worktrees, unrouted native compaction, Evidence, GPT-6/6.1 and Terra model/effort application, and dashboard records; the temporary installation is removed afterwards. The ordinary-native connection test additionally verifies no launcher/workspace export, crash recovery, concurrent sessions, actual Gate worker checks, an unrouted native compaction, removal of an earlier version's compaction marker and restoration of owner settings. This establishes those execution paths, not every future host version or measured product savings.
 
-The design was checked against the [official App Server](https://developers.openai.com/codex/app-server), [native hooks](https://learn.chatgpt.com/docs/hooks), [CaMe's native terminal connection](https://github.com/IlBig/CaMe), [jev-router's native Responses integration](https://github.com/gargpratyush/jev-router), [jev-use](https://github.com/shitianfang/jev-use), and [fast-jev-compaction-codex](https://github.com/Li-ship-dot/fast-jev-compaction-codex). These are architectural references, not a copied alternate execution engine. The [0.158.0 loader](https://github.com/openai/codex/blob/main/codex-rs/core-plugins/src/loader.rs) uses the compatibility manifest and `.mcp.json`; root portable manifests currently omit plugin hooks.
+The design was checked against the [official App Server](https://developers.openai.com/codex/app-server), [native hooks](https://learn.chatgpt.com/docs/hooks), [CaMe's native terminal connection](https://github.com/IlBig/CaMe), [jev-router's native Responses integration](https://github.com/gargpratyush/jev-router), and [jev-use](https://github.com/shitianfang/jev-use). These are architectural references, not a copied alternate execution engine. The [0.158.0 loader](https://github.com/openai/codex/blob/main/codex-rs/core-plugins/src/loader.rs) uses the compatibility manifest and `.mcp.json`; root portable manifests currently omit plugin hooks.
 
 ## Responsive background workers
 

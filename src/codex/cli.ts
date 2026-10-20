@@ -40,7 +40,7 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
     check(obj(manifest) && manifest['name'] === 'jev-gate' && !!packageVersion(root, 'codex') && manifest['hooks'] === './hooks/hooks.json' && manifest['mcpServers'] === './.mcp.json', 'Codex plugin manifest: name, version and native discovery paths');
     const hooks: unknown = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8'));
     const table = obj(hooks) && obj(hooks['hooks']) ? hooks['hooks'] : {};
-    for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'Interrupt']) {
+    for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt']) {
       const groups = Array.isArray(table[event]) ? table[event] : [];
       const handlers = groups.flatMap((group: unknown) => obj(group) && Array.isArray(group['hooks']) ? group['hooks'] : []);
       check(groups.length === 1 && obj(groups[0]) && !('matcher' in groups[0]) && handlers.length === 1 && obj(handlers[0]) && handlers[0]['type'] === 'command' && handlers[0]['command'] === 'node "${PLUGIN_ROOT}/dist/hook.mjs"' && typeof handlers[0]['timeout'] === 'number' && handlers[0]['timeout'] > 0 && handlers[0]['timeout'] <= 5, `Codex ${event}: one unfiltered native hook with bounded timeout`);
@@ -69,7 +69,7 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
   say('info', `hooks: ${env['JEV_CODEX_ENABLED'] === '0' ? 'disabled by JEV_CODEX_ENABLED=0' : 'enabled by configuration; use /hooks in Codex to review trust and execution'}`);
   try {
     const policy = loadCodexPolicy(env);
-    check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}; Compact ${policy.compact.enabled ? 'on' : 'off'}`);
+    check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}`);
     say('info', `Router automatic Astra: ${policy.router.allowAstra ? 'opted in' : 'off (default)'}; model/effort: ${policy.router.model ? 'on' : 'off'}/${policy.router.effort ? 'on' : 'off'}`);
     say('info', 'Account model candidates: unknown until native model/list is observed. Submitted request values do not confirm response model or actual effort.');
   } catch { check(false, 'policy: invalid Codex policy configuration'); }

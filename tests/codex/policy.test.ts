@@ -10,8 +10,7 @@ import { codexSuccessor } from '../../src/codex/catalog.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import { readJob } from '../../src/job.js';
-import { extractCodexCompact, compactResponse } from '../../src/codex/compact.js';
-import { nativeLaunchOptions, nativeWorkspaceUpstream } from '../../src/codex/launch.js';
+import { localResponse, nativeLaunchOptions, nativeWorkspaceUpstream } from '../../src/codex/launch.js';
 import { buildOperations } from '../../src/operations.js';
 const tmp = mkdtempSync(join(tmpdir(), 'jev-codex-policy-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -31,26 +30,26 @@ describe('Codex ordered routing and recorded application', () => {
     expect(catalogTierModels('account-workhorse', available)).toEqual(models);
     const p = loadCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_MODEL: 'account-workhorse' }, available);
     expect(p.gate).toMatchObject({ models, maxParallelWorkers: 16, workerIsolation: 'worktree', guardAllowTools: ['*'], delegationDepthFloor: 0, planInterpretation: true });
-    expect(p.router.model).toBe(true); expect(p.compact.manual).toBe(true);
+    expect(p.router.model).toBe(true);
     const serial = join(tmp, 'serial-policy.json'); writeFileSync(serial, JSON.stringify({ gate: { maxParallelWorkers: 1, guardAllowTools: [] } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate.workerIsolation).toBe('none');
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
   });
-  it('turns off only the Gate for a mode it no longer knows, from the policy file or JEV_GATE_MODE, and keeps Router and Compact', () => {
+  it('turns off only the Gate for a mode it no longer knows, from the policy file or JEV_GATE_MODE, and keeps the Router', () => {
     const old = join(tmp, 'old-mode-policy.json'); writeFileSync(old, JSON.stringify({ gate: { mode: 'lean' }, router: { allowAstra: true }, compact: { budgetChars: 9000 } }));
     const fromFile = runtimeCodexPolicy({ JEV_CODEX_CONFIG: old });
     expect(fromFile.gate.mode).toBe('off');
     expect(fromFile.router).toMatchObject({ enabled: true, model: true, effort: true });
-    expect(fromFile.compact).toMatchObject({ enabled: true, manual: true, budgetChars: 9000 });
+    // A leftover Codex Compact section is accepted and never read.
+    expect(fromFile).not.toHaveProperty('compact');
     const fromEnv = runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_GATE_MODE: 'lean' });
     expect(fromEnv.gate.mode).toBe('off');
     expect(fromEnv.router.enabled).toBe(true);
-    expect(fromEnv.compact.enabled).toBe(true);
     // Doctor still reports the value, and a different invalid section still disables every dispatch.
     expect(() => loadCodexPolicy({ JEV_CODEX_CONFIG: old })).toThrow('invalid Codex gate config');
     const broken = join(tmp, 'broken-section.json'); writeFileSync(broken, JSON.stringify({ router: { enabled: 'yes' } }));
-    expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: broken })).toMatchObject({ gate: { mode: 'off' }, router: { enabled: false }, compact: { enabled: false } });
+    expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: broken })).toMatchObject({ gate: { mode: 'off' }, router: { enabled: false } });
     // JEV_CODEX_OUTPUT belonged to the removed Codex Output fold; nothing reads it.
     expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_OUTPUT: 'off' })).toEqual(runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json') }));
   });
@@ -208,32 +207,11 @@ describe('native check evidence', () => {
     expect(observation).toMatchObject({ truncated: true, openWrite: true, lastWrite: 1, runs: [{ command: 'vitest run', status: 'failed' }, { command: "/bin/zsh -c 'vitest run; true'", status: 'passed' }] });
   });
 });
-describe('native compaction contract', () => {
-  it('shows a digest waiting for installation and closes only on the native installed record', () => {
-    const selected = { host: 'codex', phase: 'codex_compact', session_id: 's', run_id: 'c', stage: 'selected', applied: false, written_at: '2026-09-30T01:00:00Z' };
-    const now = new Date('2026-09-30T01:00:01Z');
-    const open = buildOperations([selected], [], now, { trace: true, host: 'codex' });
-    expect(open.runs.find(r => r.source === 'compact')).toMatchObject({ state: 'active', title: expect.stringContaining('Compact') });
-    const installed = { ...selected, stage: 'installed', applied: true, written_at: '2026-09-30T01:00:01Z' };
-    expect(buildOperations([selected, installed], [], now, { trace: true, host: 'codex' }).runs.find(r => r.source === 'compact')?.state).toBe('done');
-  });
-  const message = (role: string, text: string) => ({ type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
-  const input = [message('user', 'Preserve this exact constraint.'), message('assistant', 'irrelevant narrative '.repeat(4000)), message('user', 'New question'), message('assistant', 'new reply'), message('user', 'compact-marker')];
-  it('preserves user constraints in a valid native response with complete usage fields', () => {
-    const compact = extractCodexCompact(input, 'compact-marker', 40000); expect(compact.ok).toBe(true);
-    if (!compact.ok) return;
-    expect(compact.summary).toContain('Preserve this exact constraint.');
-    expect(compact.after).toBeLessThan(compact.before / 2);
-    expect(extractCodexCompact([{ type: 'additional_tools', role: 'developer', tools: [{ type: 'function', name: 'jev_agent' }] }, ...input], 'compact-marker', 40000)).toMatchObject({ ok: true, summary: compact.summary });
-    const events = compactResponse(compact.summary).split('\n').filter(l => l.startsWith('data: ')).map(l => JSON.parse(l.slice(6)));
+describe('local stop response', () => {
+  it('is a valid native response with complete usage fields', () => {
+    const events = localResponse('Jev Gate stopped the turn.').split('\n').filter(l => l.startsWith('data: ')).map(l => JSON.parse(l.slice(6)));
     expect(events.at(-1).response.usage).toMatchObject({ input_tokens: 0, output_tokens: 0, total_tokens: 0 });
   });
-  it.each([
-    [[...input.slice(0, -1), message('user', 'normal prompt')], 'not_compact'],
-    [[{ type: 'reasoning', encrypted_content: 'opaque' }, ...input], 'opaque_context'],
-    [[{ type: 'function_call', call_id: 'pending', name: 'tool', arguments: '{}' }, ...input], 'pending_call'],
-    [[{ type: 'message', role: 'user', content: [{ type: 'input_image', image_url: 'image' }] }, ...input], 'media_or_role'],
-  ])('preserves native compaction for an unsafe extraction (%#)', (source, reason) => expect(extractCodexCompact(source, 'compact-marker', 40000)).toEqual({ ok: false, reason }));
 });
 describe('native transport authority', () => {
   it('confirms Ultra only from an official host setting and preserves selected versus wire facts', async () => {
