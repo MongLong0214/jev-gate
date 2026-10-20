@@ -30,6 +30,7 @@
 | `src/brief.ts` | 어댑터 | 적격성, 입력 패치(원문이 정확한 prefix), 출력 ≤512 KiB. `renderSystemMessage`(#48)는 모델 컨텍스트로 가지 않는 SessionStart 알림 전용. 루트 도구 가드는 #289로 삭제: 루트의 Agent 외 PreToolUse는 판정하지 않는다 |
 | `src/outbound-text.ts` | 코어 | 호스트 중립 송신 텍스트 선별: `looksSecret` 비밀정보 스크린, `estimateTokens`. hook·recent-prompts가 쓰고 `src/router-secret.ts`가 미러링 |
 | `src/cli.ts` | 어댑터 | `doctor` + `explain`. 추론 0. (#48) doctor는 host window·effective floor·liveness도 같은 FAIL/WARN 기준으로 보고. doctor는 `OWNED_AGENT_PROFILES`+`DEFAULT_CONFIG.models`에서 파생된 기대값과 설치된 frontmatter 불일치, 그리고 유효 config의 `models.<tier>`와 설치된 frontmatter의 family 불일치(#48)를 각각 fail 처리 |
+| `src/doctor-activity.ts` | 어댑터 | (#279) doctor `activity` 그룹: 두 호스트 trace(`dashboardSources`)의 최근 24시간으로 기능별 발화·적용·효과·회귀를 판정하는 순수 함수(`activityChecks`). liveness 링은 `gate_a`에 흡수. Codex `owner.json`은 root·pid만 읽는다. trace가 없거나 recording off면 `추적 불가` warn |
 | `hooks/hooks.json`, `agents/*.md` | 어댑터 | (legacy) UserPromptSubmit·PreToolUse(matcher 없음, 백그라운드 워커 종료 대조용)·PostToolUse/Failure(`^Agent$`)·Stop·SessionStart(#48, matcher 없음); worker 4종, 모두 Agent·SendMessage 금지. 커맨드는 `dist/entry.js`(#48) |
 | `src/bench/ab.ts` | 도구 | (#130) 설치된 플러그인의 짝지은 A/B 벤치: 4조건(A off/B Gate/C Compact/D all)×2턴(프라이밍→`--resume`)×조건 순서 회전. 타임아웃·영구 out 디렉토리·git worktree 정리·셀별 시각 기록. `report`는 ok 셀 중앙값+cache_create/read 분리+짝지은 부호 판정. 해석 주의는 `docs/bench-ab.md` |
 | `src/bench/{run,report,paths,checker,usage}.ts` | 도구 | legacy 8 arm 실행기(계획=stdout만, 실행=배타적 새 out + 입력 동결 + 셀별 state dir + 부모 환경 차단), 계획 우선 보고, checker 프로토콜 |

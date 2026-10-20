@@ -6,7 +6,8 @@ import { codexTraceDir } from '../codex-paths.js';
 import { startDashboard, dashboardSources } from '../dashboard.js';
 import { ensureDashboard, serveAutomaticDashboard } from '../dashboard-launch.js';
 import { dashboardPreferenceCommand } from '../dashboard-settings.js';
-import { recordingCommand } from '../recording.js';
+import { recordingCommand, recordingStatus } from '../recording.js';
+import { activityChecks, activityTraces, codexOwnerFacts } from '../doctor-activity.js';
 import { launchCodex } from './launch.js';
 import { loadCodexPolicy, resolveCodexConfigPath } from './config.js';
 import { IGNORED_KEYS } from '../config.js';
@@ -85,6 +86,8 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
       connection.state === 'unreachable' ? 'The helper may be busy. Check the next native session startup and its execution records; doctor does not restart active workers.' : 'Review /hooks trust and start a fresh native session after plugin installation. Doctor does not create a connection or alter the native provider.');
     if (connection.version && connection.version !== packageVersion(root, 'codex')) say('warn', 'Native connection helper and diagnosed package versions differ', 'Update the installed plugin and start a fresh native session; an already open session retains its provider.');
   } catch { say('fail', 'Native connection: invalid Codex home or unreadable owner metadata'); }
+  try { for (const c of activityChecks({ traces: activityTraces(env, 'codex'), now: Date.now(), installed: packageVersion(root, 'codex'), recording: recordingStatus(env).enabled, keyPresent: !!env['TYPESAFE_API_KEY'], codexOwner: codexOwnerFacts(env), liveness: null })) say(c.level, c.message, c.action ?? undefined); }
+  catch { say('fail', 'activity: unreadable trace or owner records; remaining checks continue'); }
   const dashboard = await dashboardDiagnostic(env); say(dashboard.level, dashboard.message);
   say('info', 'No source was scanned and no inference was performed. Local loopback health checks are read-only. Missing execution records remain unknown.');
   diagnosis.group('version');
