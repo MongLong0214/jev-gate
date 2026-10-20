@@ -1038,8 +1038,22 @@ describe('spawn model', () => {
     expect(refused.f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_denied', reason: 'restricted_baseline' }));
   });
 
+  it.each(['general-purpose', 'claude'].flatMap(type => ['project', 'plugin'].map(kind => [type, kind] as const)))("%s: a %s agent of that name is not the built-in, so the host's default does not apply to it", async (type, kind) => {
+    const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false, allowFable: false }));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }), pins: { subagentDefault: 'claude-fable-5-1' } });
+    f.engine.agentModel = async () => 'opus';
+    // A project's file is listed under its own source; a plugin's is a built-in listing served by another provider.
+    router.agentOffer(kind === 'project' ? { agent: type, source: 'projectSettings', provider: { plugin: 'engine', tier: 'core' } } : OFFER_BUILT_IN(type));
+    const e = spawn({ subagentType: type, parentModel: 'claude-opus-5-5', ...(kind === 'plugin' ? { provider: { plugin: 'someone', tier: 'append' } } : {}) });
+    const n = spawnNext();
+    // The agent's own model is opus: the host's Fable default is not its model, so nothing here may refuse the call.
+    expect(await router.agentSpawn(f.engine, e, n.next)).toEqual({ model: 'claude-opus-5-5' });
+    expect(n.calls).toEqual([e]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'definition_unverified' }));
+  });
+
   describe('a custom agent\'s file model', () => {
-    const custom = (declared: string | null, over: Partial<SpawnEvent> = {}, tier = 'standard', edits = true) => {
+    const custom =(declared: string | null, over: Partial<SpawnEvent> = {}, tier = 'standard', edits = true) => {
       const router = createRouter(configOf(SPAWN_ONLY));
       const f = fakeEngine({ respond: answering({ ...CLEAR, tier: [tier, 0.95], effort: ['high', 0.95] }) });
       const read: string[] = [];

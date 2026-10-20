@@ -1312,8 +1312,11 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     return explicit ?? (e.fork || inheritSkip(e) === null ? fallback === undefined ? null : fallback ?? e.parentModel : null);
   };
 
-  /** A built-in whose definition names no model, called without one: the host runs it on its default subagent model, if set. */
-  const takesDefault = (e: SpawnEvent): boolean => !e.fork && !e.model?.trim() && UNNAMED_BUILT_INS.has(e.subagentType);
+  /**
+   * A built-in whose definition names no model, called without one: the host runs it on its default subagent model, if
+   * set. Only the verified built-in: a project's or a plugin's agent of that name declares its own model.
+   */
+  const takesDefault = (e: SpawnEvent): boolean => !e.fork && !e.model?.trim() && UNNAMED_BUILT_INS.has(e.subagentType) && inheritSkip(e) === null;
 
   /**
    * Whether a differing model is really a mismatch: a model pin overrides every child model, and an alias remap changes
