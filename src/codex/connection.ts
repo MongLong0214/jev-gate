@@ -100,9 +100,8 @@ export const connectionRequest = async (env: Env, path: '/hook' | '/agent', inpu
   return helperRequest(`http://127.0.0.1:${state.port}${path}`, state.token, input, signal);
 };
 /** #287: every unanswered helper call leaves one failure row named by its closed reason, never by its exception or reply body. */
-export const recordConnectionFailure = (trace: TraceWriter | undefined, reason: ConnectionFailure, fields: Obj): void => {
-  trace?.write('failure', { host: 'codex', ...fields, error_first_line: `connection_${reason}`, connection_failure: reason });
-};
+export const recordConnectionFailure = (trace: TraceWriter | undefined, reason: ConnectionFailure, fields: Obj): boolean =>
+  trace?.write('failure', { host: 'codex', ...fields, error_first_line: `connection_${reason}`, connection_failure: reason }).ok === true;
 const healthy = async (state: Connection): Promise<boolean> => {
   try {
     const response = await fetch(`http://127.0.0.1:${state.port}/health`, { headers: { authorization: `Bearer ${state.token}` }, signal: AbortSignal.timeout(250) });

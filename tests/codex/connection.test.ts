@@ -80,6 +80,8 @@ describe('connection failures are named, not collapsed (#287)', () => {
     writeFileSync(join(home, 'jev-gate/connection/owner.json'), JSON.stringify({ version: 1, pid: process.pid, port, token: 'a'.repeat(64), marker: 'm', root: home, original: {}, installed: {} }), { mode: 0o600 });
   };
   const meta = (home: string) => ({ [CODEX_SANDBOX_META]: { sandboxCwd: home }, threadId: 'root-thread' });
+  async function* hookEvent(session: string): AsyncIterable<string> { yield JSON.stringify({ hook_event_name: 'PreToolUse', session_id: session, turn_id: 'turn', tool_use_id: 'call', tool_name: 'Bash', tool_input: { command: 'ls' } }); }
+  const failures = (trace: string): Obj[] => readdirSync(trace).filter(f => f.startsWith('failure-')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
   it('returns and records the closed reason a dispatch did not reach the helper, and passes a real answer through', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-connect-fail-')); temps.push(home);
     const env = { CODEX_HOME: home, HOME: home }; const trace = join(home, 'trace');
@@ -124,19 +126,32 @@ describe('connection failures are named, not collapsed (#287)', () => {
   });
   it('records why a hook did not reach the helper, on both the automatic connection and the managed bridge (#287 R2)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-connect-hook-')); temps.push(home);
-    const trace = join(home, 'trace'); const event = { hook_event_name: 'PreToolUse', session_id: 'root-thread', turn_id: 'turn', tool_use_id: 'call', tool_name: 'Bash', tool_input: { command: 'ls' } };
-    async function* stdin(): AsyncIterable<string> { yield JSON.stringify(event); }
-    const run = (env: Record<string, string>) => runCodexHook({ stdin: stdin(), env: { CODEX_HOME: home, HOME: home, JEV_CODEX_TRACE_DIR: trace, ...env } });
+    const trace = join(home, 'trace'); const bridged = { JEV_CODEX_BRIDGE_URL: '', JEV_CODEX_BRIDGE_TOKEN: 'b'.repeat(64) };
+    const run = (env: Record<string, string>, session = 'root-thread') => runCodexHook({ stdin: hookEvent(session), env: { CODEX_HOME: home, HOME: home, JEV_CODEX_TRACE_DIR: trace, ...env } });
     expect(await run({})).toEqual({});
     const failing = await helper(res => { res.writeHead(502); res.end('Error: /secret/path'); }); const port = (failing.address() as { port: number }).port; owner(home, port);
+    bridged.JEV_CODEX_BRIDGE_URL = `http://127.0.0.1:${port}`;
     expect(await run({})).toEqual({});
-    expect(await run({ JEV_CODEX_BRIDGE_URL: `http://127.0.0.1:${port}`, JEV_CODEX_BRIDGE_TOKEN: 'b'.repeat(64) })).toEqual({});
+    expect(await run(bridged, 'bridge-thread')).toEqual({});
     await new Promise<void>(r => failing.close(() => r()));
-    expect(await run({ JEV_CODEX_BRIDGE_URL: `http://127.0.0.1:${port}`, JEV_CODEX_BRIDGE_TOKEN: 'b'.repeat(64) })).toEqual({});
-    const rows = readdirSync(trace).filter(f => f.startsWith('failure-')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
-    expect(rows.map(r => r['connection_failure']).sort()).toEqual(['http_error', 'http_error', 'state_missing', 'unreachable']);
-    for (const row of rows) expect(row).toMatchObject({ host: 'codex', session_id: 'root-thread', event: 'PreToolUse', tool_name: 'Bash', error_first_line: `connection_${String(row['connection_failure'])}` });
+    expect(await run(bridged, 'bridge-thread')).toEqual({});
+    const rows = failures(trace);
+    expect(rows.map(r => `${String(r['session_id'])}:${String(r['connection_failure'])}`).sort()).toEqual(['bridge-thread:http_error', 'bridge-thread:unreachable', 'root-thread:http_error', 'root-thread:state_missing']);
+    for (const row of rows) expect(row).toMatchObject({ host: 'codex', event: 'PreToolUse', tool_name: 'Bash', error_first_line: `connection_${String(row['connection_failure'])}` });
     expect(readdirSync(trace).filter(f => f.startsWith('codex_event-'))).toHaveLength(4);
     expect(JSON.stringify(rows)).not.toMatch(/secret|"ls"/);
+  });
+  it('records a hook connection failure once per session and reason, however many events follow (#287)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-connect-once-')); temps.push(home);
+    const trace = join(home, 'trace'); const env = { CODEX_HOME: home, HOME: home, JEV_CODEX_TRACE_DIR: trace };
+    for (let i = 0; i < 5; i++) expect(await runCodexHook({ stdin: hookEvent('root-thread'), env })).toEqual({});
+    expect(failures(trace).map(r => r['connection_failure'])).toEqual(['state_missing']);
+    expect(failures(trace)[0]).toMatchObject({ host: 'codex', session_id: 'root-thread', event: 'PreToolUse', tool_name: 'Bash', error_first_line: 'connection_state_missing', connection_failure: 'state_missing' });
+    const failing = await helper(res => { res.writeHead(502); res.end(); }); owner(home, (failing.address() as { port: number }).port);
+    for (let i = 0; i < 3; i++) await runCodexHook({ stdin: hookEvent('root-thread'), env });
+    await new Promise<void>(r => failing.close(() => r()));
+    await runCodexHook({ stdin: hookEvent('other-thread'), env }); await runCodexHook({ stdin: hookEvent('other-thread'), env });
+    expect(failures(trace).map(r => `${String(r['session_id'])}:${String(r['connection_failure'])}`).sort()).toEqual(['other-thread:unreachable', 'root-thread:http_error', 'root-thread:state_missing']);
+    expect(readdirSync(trace).filter(f => f.startsWith('codex_event-'))).toHaveLength(10);
   });
 });

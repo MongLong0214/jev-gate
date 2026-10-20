@@ -67,6 +67,8 @@ describe('pruneTraceDir', () => {
     const target = file(outside, `post-${uuid}.json`, 30);
     file(dir, `mod_router-${uuid}.json`, 4);
     file(dir, `.pre_intent-${uuid}.tmp`, 4);
+    file(dir, `connection_failed-${'a'.repeat(32)}.seen`, 4);
+    file(dir, `connection_failed-${'b'.repeat(32)}.seen`, 2);
     file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 2);
     file(dir, 'notes.json', 30);
     file(dir, `post-${uuid}.json.bak`, 30);
@@ -75,8 +77,8 @@ describe('pruneTraceDir', () => {
     mkdirSync(join(dir, `stop-${uuid}.json`));
     symlinkSync(target, join(dir, `failure-${uuid}.json`));
 
-    expect(await pruneTraceDir(dir, now)).toBe(2);
-    expect(readdirSync(dir).sort()).toEqual(['.retention', `codex_event-${uuid.replace('0f', '1f')}.json`, `failure-${uuid}.json`, `post-${uuid}.json.bak`, 'notes.json', `stop-${uuid}.json`, 'sub'].sort());
+    expect(await pruneTraceDir(dir, now)).toBe(3);
+    expect(readdirSync(dir).sort()).toEqual(['.retention', `codex_event-${uuid.replace('0f', '1f')}.json`, `connection_failed-${'b'.repeat(32)}.seen`, `failure-${uuid}.json`, `post-${uuid}.json.bak`, 'notes.json', `stop-${uuid}.json`, 'sub'].sort());
     expect(lstatSync(join(dir, `failure-${uuid}.json`)).isSymbolicLink()).toBe(true);
     expect(readFileSync(target, 'utf8')).toBe('{}');
     expect(readFileSync(nested, 'utf8')).toBe('{}');
