@@ -11,7 +11,7 @@ export const dispatchMarker = (token: string): string => `\n\n[JEV_DISPATCH toke
 export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'task_stop' | 'launch_receipt' | 'unproven';
 
 /** Suppress host-authored notice turns; this never establishes worker termination. */
-export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: NoticeBasis; launched?: true } => {
+export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: NoticeBasis; launched?: true; delivered?: true } => {
   const human = (basis: NoticeBasis) => ({ notice: false, basis });
   if (!input.session_id || !input.prompt_id || !input.transcript_path || !/^\s*<task-notification>/.test(input.prompt ?? '')) return human('not_notice');
   if (input.source !== undefined && input.source !== 'system') return human('source');
@@ -37,7 +37,10 @@ export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: N
     if (rows.some(row => isHostNoticeRow(row) && row['sessionId'] === input.session_id && (row['promptId'] === input.prompt_id || row['uuid'] === input.prompt_id) && textOf(row) === input.prompt)) return { notice: true, basis: 'transcript_row' };
     // The receipt is the host's tool_result row for the launching call: Agent `agentId`, background Bash `backgroundTaskId`,
     // Monitor `taskId`. A Monitor event names no call, so only a Monitor receipt can launch it.
-    const envelope = noticeEnvelope(input.prompt ?? '');
+    const envelope = noticeEnvelope(input.prompt ?? ''), claim = noticeClaim(input.prompt ?? '');
+    // A launch whose notice row is written was delivered: a copy after it is a person's, even once the state forgot the claim.
+    const delivered = rows.some(row => { const text = isHostNoticeRow(row) && row['sessionId'] === input.session_id ? textOf(row) : null; return text !== null && noticeClaim(text) === claim; });
+    if (delivered) return { ...human('unproven'), delivered: true };
     const launched = envelope !== null && rows.some(row => {
       const result = row['toolUseResult'] as Record<string, unknown> | undefined;
       const content = (row['message'] as { content?: unknown } | undefined)?.content;
@@ -53,8 +56,10 @@ export const isNativeTaskNotification = (input: HookInput): boolean => taskNotic
 
 /** #281: the one task-notification a whole prompt is: a terminal notice names its task, launching call and status, a Monitor event only its task. */
 const noticeEnvelope = (prompt: string): { task: string; tool: string | null; status: string | null } | null => {
-  if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(prompt) || prompt.split('<task-notification>').length !== 2) return null;
-  const fields = (name: string): string[] => [...prompt.matchAll(new RegExp(`<${name}>([^<>]*)</${name}>`, 'g'))].map(m => m[1]!);
+  // An Agent's <result> is its own text: the envelope is what lies outside it.
+  const outside = prompt.replace(/<result>[\s\S]*?<\/result>/g, '');
+  if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(prompt) || outside.split('<task-notification>').length !== 2) return null;
+  const fields = (name: string): string[] => [...outside.matchAll(new RegExp(`<${name}>([^<>]*)</${name}>`, 'g'))].map(m => m[1]!);
   const [task, tool, status] = [fields('task-id'), fields('tool-use-id'), fields('status')];
   return task.length === 1 && tool.length <= 1 && status.length === tool.length ? { task: task[0]!, tool: tool[0] ?? null, status: status[0] ?? null } : null;
 };

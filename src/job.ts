@@ -232,6 +232,10 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
   const current = emptyGeneration(promptId, shape, now);
   if (!prev) return { state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: [] }, superseded: false };
   const old = prev.current;
+  // #281: history eviction must not make a consumed pre-flush notice eligible again. Carry the bounded session claims
+  // forward; once full the notice classifier refuses new unproven claims rather than dropping old ones.
+  const claims = [...new Set([old, ...prev.history].flatMap(gen => gen.notices_taken ?? []))];
+  if (claims.length) current.notices_taken = claims.slice(0, 256);
   const unfinished = old.outcome === null && (Object.keys(old.active).length > 0 || old.phase === 'planning' || old.phase === 'planned');
   const retired: JobGeneration = {
     ...old,

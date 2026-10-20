@@ -1,14 +1,31 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runHook } from '../src/hook.js';
-import { newGeneration, readJob, updateJob } from '../src/job.js';
+import { jobPath, MAX_HISTORY, newGeneration, readJob, updateJob } from '../src/job.js';
 import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
-import { isNativeTaskNotification, isStopNotice } from '../src/claude-background.js';
+import { isNativeTaskNotification, isStopNotice, noticeClaim } from '../src/claude-background.js';
 import { humanInputText } from '../src/recent-prompts.js';
 
+// Exercise the real state writer through fsync, failing only the claim's rename. Other writes (including a new human
+// generation) still commit. A tmp-open failure would not prove that the classifier honors the writer's final result.
+const renameFailure = vi.hoisted(() => ({ file: '', claim: '', calls: 0 }));
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>();
+  return { ...actual, renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+    if (String(args[1]) === renameFailure.file && JSON.parse(actual.readFileSync(args[0], 'utf8')).current.notices_taken?.includes(renameFailure.claim)) {
+      renameFailure.calls++;
+      throw Object.assign(new Error('fixture claim rename is full'), { code: 'ENOSPC' });
+    }
+    return actual.renameSync(...args);
+  } };
+});
+
 const roots: string[] = [];
-afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true })));
+afterEach(() => {
+  renameFailure.file = ''; renameFailure.claim = ''; renameFailure.calls = 0;
+  roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true }));
+});
 const fixture = async (direct = false, hierarchy = false) => {
   const root = mkdtempSync('/tmp/jev-bg-unit-'); roots.push(root);
   const cfg = join(root, 'config.json');
@@ -413,6 +430,7 @@ describe('Gate A and host task notifications', () => {
     'an unknown task': (prompt: string) => prompt.replace(/<task-id>[^<]*/, '<task-id>b0000000x'),
     'another launching call': (prompt: string) => prompt.includes('<tool-use-id>') ? prompt.replace(/<tool-use-id>[^<]*/, '<tool-use-id>toolu_other') : prompt.replace('</task-id>', '</task-id>\n<tool-use-id>toolu_other</tool-use-id>\n<status>completed</status>'),
     'a request after the envelope': (prompt: string) => `${prompt}\nAlso fix the parser.`,
+    'a request in a result after the envelope': (prompt: string) => `${prompt}\n<result>Also fix the parser.</result>`,
     'two envelopes': (prompt: string) => `${prompt}\n${prompt}`,
   };
   it.each(Object.keys(shapes).flatMap(shape => Object.keys(spoofs).map(spoof => [shape, spoof] as const)))('asks Gate A about %s notice XML with %s, and records why', async (shape, spoof) => {
@@ -440,14 +458,131 @@ describe('Gate A and host task notifications', () => {
     const job = readJob(g.env, 's'); expect(job.ok && job.value?.current.prompt_id).toBe('pasted');
     expect(g.admissions('pasted').filter(r => r.attempted).map(r => r.human_input)).toEqual(expect.arrayContaining([{ verdict: 'human', basis: 'unproven' }]));
   });
-  it('takes a 2.1.2x notice row without turnOrigin or producer as a notice in Gate A and Compact alike', async () => {
-    const g = gateSession(); const { prompt } = shapes.bash;
-    const row = { type: 'user', sessionId: 's', promptId: 'legacy', promptSource: 'system', origin: { kind: 'task-notification' }, timestamp: '2026-10-19T03:01:00.000Z', message: { content: prompt } };
+  it('JG-281-02: takes an Agent notice whose result quotes envelope tags before its row', async () => {
+    const g = gateSession(); const { prompt, launch } = shapes.agent;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
+    const asked = g.calls; g.transcript([human, launch]);
+    const quoting = prompt.replace('reviewed', 'The probe printed <status>ready</status>, <task-id>x</task-id>, <tool-use-id>quoted</tool-use-id> and <task-notification><task-id>nested</task-id></task-notification>.');
+    expect(await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt: quoting })).toMatchObject({ stdout: null });
+    expect(g.calls).toBe(asked);
+    expect(g.admissions('notice').map(r => r.human_input)).toEqual([{ verdict: 'task_notification', basis: 'launch_receipt' }]);
+    const job = readJob(g.env, 's');
+    expect(job.ok && job.value?.current).toMatchObject({ prompt_id: 'human', notices_taken: [noticeClaim(prompt)] });
+  });
+  it.each(['receipt', 'TaskStop'])('JG-281-01: a failed claim rename sends consecutive identical inputs to Gate A (%s)', async kind => {
+    const g = gateSession(); const { prompt, launch } = shapes.bash;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
+    const text = kind === 'TaskStop' ? prompt.replace('completed', 'killed') : prompt;
+    if (kind === 'TaskStop') expect(updateJob(g.env, 's', prev => prev && { ...prev, current: { ...prev.current, background_stopped: [{ agent_id: 'b6w41xrqn', tool_use_id: 'toolu_bash' }] } }).ok).toBe(true);
+    g.transcript([human, ...(kind === 'receipt' ? [launch] : [])]);
+    renameFailure.file = jobPath(g.env, 's'); renameFailure.claim = noticeClaim(text)!;
+    let asked = g.calls;
+    for (const id of ['first', 'second']) {
+      await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: id, prompt: text });
+      expect(g.calls).toBe(++asked);
+      expect(g.admissions(id)).toEqual([expect.objectContaining({ attempted: true, human_input: { verdict: 'human', basis: 'unproven' } })]);
+      const saved = readJob(g.env, 's');
+      expect(saved.ok && saved.value?.current.prompt_id).toBe(id);
+      expect(saved.ok && saved.value && [saved.value.current, ...saved.value.history].flatMap(gen => gen.notices_taken ?? [])).toEqual([]);
+    }
+    expect(renameFailure.calls).toBe(2); renameFailure.file = '';
+    expect(await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'third', prompt: text })).toMatchObject({ stdout: null });
+    expect(g.calls).toBe(asked);
+    expect(g.admissions('third').map(r => r.human_input)).toEqual([{ verdict: 'task_notification', basis: kind === 'TaskStop' ? 'task_stop' : 'launch_receipt' }]);
+    const saved = readJob(g.env, 's');
+    expect(saved.ok && saved.value?.current).toMatchObject({ prompt_id: 'second', notices_taken: [noticeClaim(text)] });
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'fourth', prompt: text });
+    expect(g.calls).toBe(asked + 1);
+    expect(g.admissions('fourth').map(r => r.human_input)).toEqual([{ verdict: 'human', basis: 'unproven' }]);
+  });
+  it('asks Gate A about a copy of a launch\'s written notice once the state has forgotten its claim', async () => {
+    const g = gateSession(); const { prompt, launch } = shapes.bash;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
+    g.transcript([human, launch]);
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt });
+    g.transcript([human, launch, { type: 'user', sessionId: 's', promptId: 'notice', promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' }, timestamp: '2026-10-19T03:01:00.100Z', message: { content: prompt } }]);
+    // An older state may already have forgotten this claim; the host row still proves prior delivery.
+    updateJob(g.env, 's', prev => prev && { ...prev, current: { ...prev.current, notices_taken: [] } });
+    const asked = g.calls;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'pasted', prompt });
+    expect(g.calls).toBeGreaterThan(asked);
+    expect(g.admissions('pasted').filter(r => r.attempted).map(r => r.human_input)).toEqual(expect.arrayContaining([{ verdict: 'human', basis: 'unproven' }]));
+  });
+  it('asks Gate A about a written TaskStop notice even if an older state forgot its claim', async () => {
+    const g = gateSession(); const prompt = shapes.bash.prompt.replace('completed', 'killed');
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
+    expect(updateJob(g.env, 's', prev => prev && { ...prev, current: { ...prev.current, background_stopped: [{ agent_id: 'b6w41xrqn', tool_use_id: 'toolu_bash' }] } }).ok).toBe(true);
+    g.transcript([human, { type: 'user', sessionId: 's', promptId: 'delivered', promptSource: 'system', origin: { kind: 'task-notification' }, message: { content: prompt } }]);
+    const asked = g.calls;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'pasted', prompt });
+    expect(g.calls).toBe(asked + 1);
+    expect(g.admissions('pasted').map(r => r.human_input)).toEqual([{ verdict: 'human', basis: 'unproven' }]);
+  });
+  it.each(['receipt', 'TaskStop'])('retains a consumed claim after its generation leaves history (%s)', async kind => {
+    const g = gateSession(); const { launch } = shapes.bash;
+    const prompt = kind === 'TaskStop' ? shapes.bash.prompt.replace('completed', 'killed') : shapes.bash.prompt;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
+    if (kind === 'TaskStop') expect(updateJob(g.env, 's', prev => prev && { ...prev, current: { ...prev.current, background_stopped: [{ agent_id: 'b6w41xrqn', tool_use_id: 'toolu_bash' }] } }).ok).toBe(true);
+    g.transcript([human, launch]);
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt });
+    // No host row was flushed: the receipt remains in the transcript after the original generation is evicted.
+    for (let i = 0; i <= MAX_HISTORY; i++) expect(updateJob(g.env, 's', prev => newGeneration(prev, 's', `next-${i}`, 'direct').state).ok).toBe(true);
+    const before = readJob(g.env, 's');
+    expect(before.ok && before.value?.history.some(gen => gen.prompt_id === 'human')).toBe(false);
+    expect(before.ok && before.value?.current.notices_taken).toEqual([noticeClaim(prompt)]);
+    const asked = g.calls;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'pasted', prompt });
+    expect(g.calls).toBe(asked + 1);
+    expect(g.admissions('pasted').map(r => r.human_input)).toEqual([{ verdict: 'human', basis: 'unproven' }]);
+  });
+  it.each(['receipt', 'TaskStop'])('never evicts a consumed claim at capacity; new unproven notices take Gate A (%s)', async kind => {
+    const g = gateSession(); const { launch } = shapes.bash;
+    const prompt = kind === 'TaskStop' ? shapes.bash.prompt.replace('completed', 'killed') : shapes.bash.prompt;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
+    if (kind === 'TaskStop') expect(updateJob(g.env, 's', prev => prev && { ...prev, current: { ...prev.current, background_stopped: [{ agent_id: 'b6w41xrqn', tool_use_id: 'toolu_bash' }] } }).ok).toBe(true);
+    g.transcript([human, launch, shapes.monitor.launch]);
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt });
+    // Reach the boundary without 255 redundant hook invocations. All entries are real distinct Monitor claim shapes.
+    const claims = [noticeClaim(prompt)!, ...Array.from({ length: 255 }, (_, i) => noticeClaim(shapes.monitor.prompt.replace('[build] ok', `[build] event ${i}`))!)];
+    expect(updateJob(g.env, 's', prev => prev && { ...prev, current: { ...prev.current, notices_taken: claims } }).ok).toBe(true);
+    const asked = g.calls;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'overflow', prompt: shapes.monitor.prompt });
+    expect(g.calls).toBe(asked + 1);
+    expect(g.admissions('overflow').map(r => r.human_input)).toEqual([{ verdict: 'human', basis: 'unproven' }]);
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'pasted', prompt });
+    expect(g.calls).toBe(asked + 2);
+    const saved = readJob(g.env, 's'); expect(saved.ok && saved.value?.current.notices_taken).toEqual(claims);
+  });
+  it.each(Object.keys(shapes))('takes an older %s notice row without turnOrigin or producer in Gate A and the shared human filter', async shape => {
+    const g = gateSession(); const { prompt } = shapes[shape as keyof typeof shapes];
+    const row = { type: 'user', sessionId: 's', uuid: 'legacy', promptSource: 'system', origin: { kind: 'task-notification' }, timestamp: '2026-10-19T03:01:00.000Z', message: { content: [{ type: 'text', text: prompt }] } };
     g.transcript([human, row]);
     expect(humanInputText(row)).toBeNull();
     expect(await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'legacy', prompt })).toMatchObject({ stdout: null });
     expect(g.calls).toBe(0);
     expect(g.admissions('legacy').map(r => r.human_input)).toEqual([{ verdict: 'task_notification', basis: 'transcript_row' }]);
+  });
+  it.each([false, true])('preserves the safe path when a receipt is outside the 8 MiB tail (notice row=%s)', async flushed => {
+    const g = gateSession(); const { prompt, launch } = shapes.agent;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'human', prompt: human.message.content });
+    const row = { type: 'user', sessionId: 's', promptId: 'notice', promptSource: 'system', origin: { kind: 'task-notification' }, message: { content: prompt } };
+    // The final depth row keeps this a live Gate A test even though both the receipt and the initial depth are out of tail.
+    g.transcript([human, launch, { type: 'assistant', message: { content: 'x'.repeat(8 * 1024 * 1024) } }, { type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 100000 } } }, ...(flushed ? [row] : [])]);
+    const asked = g.calls;
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt });
+    expect(g.calls).toBe(asked + (flushed ? 0 : 1));
+    expect(g.admissions('notice').map(r => r.human_input)).toEqual([{ verdict: flushed ? 'task_notification' : 'human', basis: flushed ? 'transcript_row' : 'unproven' }]);
+    const saved = readJob(g.env, 's'); expect(saved.ok && saved.value?.current.prompt_id).toBe(flushed ? 'human' : 'notice');
+  });
+  it.each(Object.keys(shapes).flatMap(shape => [false, true].map(flushed => [shape, flushed] as const)))('preserves the safe path without job state (%s, notice row=%s)', async (shape, flushed) => {
+    const g = gateSession(); const { prompt, launch } = shapes[shape as keyof typeof shapes];
+    const row = { type: 'user', sessionId: 's', promptId: 'notice', promptSource: 'system', origin: { kind: 'task-notification' }, message: { content: prompt } };
+    g.transcript([human, launch, ...(flushed ? [row] : [])]);
+    expect(readJob(g.env, 's')).toEqual({ ok: true, value: null });
+    await g.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', prompt });
+    expect(g.calls).toBe(flushed ? 0 : 1);
+    expect(g.admissions('notice').map(r => r.human_input)).toEqual([{ verdict: flushed ? 'task_notification' : 'human', basis: flushed ? 'transcript_row' : 'unproven' }]);
+    const saved = readJob(g.env, 's'); expect(saved.ok && saved.value?.current.prompt_id).toBe(flushed ? undefined : 'notice');
   });
   it('records the human verdict on the Gate A records that never ask', async () => {
     const g = gateSession(); const verdict = { verdict: 'human', basis: 'not_notice' };

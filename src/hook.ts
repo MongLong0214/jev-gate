@@ -549,21 +549,24 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   const noticeVerdict = (): { notice: boolean; basis: NoticeBasis } => {
     const verdict = taskNoticeVerdict(input);
     const claim = noticeClaim(input.prompt ?? '');
-    if (verdict.basis !== 'unproven' || !input.session_id || claim === null) return { notice: verdict.notice, basis: verdict.basis };
+    if (verdict.basis !== 'unproven' || verdict.delivered || !input.session_id || claim === null) return { notice: verdict.notice, basis: verdict.basis };
     // #281: before its row is written a notice is the host's only as exactly one envelope naming a launch receipt of this
     // session or an execution a native TaskStop here ended, and only once: the claim is taken under the lock, so a later
     // copy is a person's. 2.1.304 names no author until the row, so a person pasting such an envelope, with IDs only this
     // session shows, skips Gate A for that one input; it gains no permission or tool, and the host's notice after it is a person's.
     let taken = null as NoticeBasis | null;
-    updateJob(deps.env, input.session_id, prev => {
-      if (!prev || [prev.current, ...prev.history].some(gen => gen.notices_taken?.includes(claim))) return null;
+    const saved = updateJob(deps.env, input.session_id, prev => {
+      if (!prev) return null;
+      const claims = [...new Set([prev.current, ...prev.history].flatMap(gen => gen.notices_taken ?? []))];
+      // Never forget a consumed claim to make room: at capacity, unproven envelopes take the human/native path.
+      if (claims.includes(claim) || claims.length >= 256) return null;
       const stopped = [prev.current, ...prev.history].some(gen => gen.background_stopped?.some(stop => isStopNotice(input.prompt ?? '', stop)));
       if (!stopped && !verdict.launched) return null;
       taken = stopped ? 'task_stop' : 'launch_receipt';
-      // ponytail: the last 256 claims per generation keep a long Monitor watch under the state cap; an older copy can pass again.
-      return { ...prev, current: { ...prev.current, notices_taken: [...(prev.current.notices_taken ?? []), claim].slice(-256) } };
+      return { ...prev, current: { ...prev.current, notices_taken: [...claims, claim] } };
     });
-    return taken ? { notice: true, basis: taken } : { notice: false, basis: 'unproven' };
+    // Only a committed claim is taken: an unsaved one would let the next copy skip Gate A too.
+    return saved.ok && taken ? { notice: true, basis: taken } : { notice: false, basis: 'unproven' };
   };
   const isTaskNotice = (): boolean => (taskNotice ??= noticeVerdict()).notice;
   /** #281: every Gate A record says whether the prompt was taken as a person's and why, so notice inflow is countable. */
