@@ -25,8 +25,11 @@ export const routeCost = (host: 'claude' | 'codex', from: string, to: string, ca
   const writeRate = (p: ReturnType<typeof providerPrice>, ttl: number | null): number | readonly [number, number] | null => p?.write ?? (ttl === 300_000 ? p?.write5m : ttl === 3_600_000 ? p?.write1h : undefined) ??
     (p?.write5m !== undefined && p.write1h !== undefined ? [Math.min(p.write5m, p.write1h), Math.max(p.write5m, p.write1h)] as const : null);
   const seen = (v: CacheObservation | null) => v ? { age_ms: now - v.at, ttl_ms: v.ttlMs, ttl_minimum: v.ttlIsMinimum ?? false, ttl_bounds_ms: v.ttlBoundsMs ?? null,
-    input: v.input ?? null, read: v.read, write: v.write, output: v.output } : 'not_observed_in_epoch';
-  return { ...switchCost({ prefix, targetHeld: size(target) ?? 0, baseline: fromPrice, target: toPrice, baselineCache: cacheState(baseline, now), targetCache: cacheState(target, now),
+    input: v.input ?? null, read: v.read, write: v.write, output: v.output, ...(v.seq !== undefined && latest?.seq !== undefined ? { requests_since: latest.seq - v.seq } : {}) } : 'not_observed_in_epoch';
+  // #274: the switched request reads the target only within reach of the target's last request, whatever its TTL.
+  const since = target?.seq !== undefined && latest?.seq !== undefined ? latest.seq - target.seq : 0;
+  const targetCache = since >= CACHE_GONE ? 'cold' : since > CACHE_REACH && cacheState(target, now) === 'warm' ? 'unknown' : cacheState(target, now);
+  return { ...switchCost({ prefix, targetHeld: size(target) ?? 0, baseline: fromPrice, target: toPrice, baselineCache: cacheState(baseline, now), targetCache,
     baselineWrite: writeRate(fromPrice, ttl(baseline)), targetWrite: writeRate(toPrice, ttl(target)), outputRange: latest?.output != null ? [horizon > 1 ? latest.output : 0, latest.output] : null, returns: cache !== undefined, horizon }),
     evidence: { baseline: seen(baseline), target: seen(target), prefix_source: prefix === null ? 'unobserved' : latest === baseline ? 'baseline' : latest === target ? 'target' : latest!.model },
     output_basis: horizon > 1 ? 'previous_output' : 'scenario_zero_to_previous_output', future_output: 'unknown', new_content: added > 1 ? 'price_band_only' : 'unobserved_not_counted', jev_cost: 'separate_observed_usage',
@@ -40,6 +43,14 @@ export const routeCost = (host: 'claude' | 'codex', from: string, to: string, ca
  * rises more than 0.6%; 6 to 10 let one session rise 3%, 15 one 13%, no guard (as v0.8.22) one 27.5%.
  */
 export const TURN_HORIZON = 5;
+/**
+ * #274: a request reads an earlier cache entry only from at most 20 blocks back, so a model's cache, live by its TTL, is
+ * out of reach once enough requests to other models come between. Over 100 returns to a model within 55 minutes (three
+ * transcripts, 2026-10-16 to 10-19), every one with at most 5 requests between read its cache, 5 of 12 with 6 or 7,
+ * and none of 41 with 8 or more.
+ */
+export const CACHE_REACH = 5;
+export const CACHE_GONE = 8;
 /**
  * An upgrade is the classifier's capability call, never held for cache cost; an unknown rank is not an upgrade. A null
  * cost is a switch not checked: none, an effort change alone, or a move the baseline cannot stay out of.

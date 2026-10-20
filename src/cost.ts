@@ -44,7 +44,9 @@ export const usageCost = (u: TokenUsage, p: PriceFacts | null): { usd: number | 
 };
 export interface CacheObservation { model: string; at: number; epoch: string; ttlMs: number | null; read: number | null; write: number | null; output: number | null; input?: number | null; effort?: string | null; ttlIsMinimum?: boolean;
   /** The adapter's provider lifetimes when a response reports no TTL: certainly held before the first, certainly gone from the second. */
-  ttlBoundsMs?: readonly [number, number] }
+  ttlBoundsMs?: readonly [number, number];
+  /** The conversation's request number this answered, when the adapter counts them: how far back a later request must reach for it. */
+  seq?: number }
 /** One small per-execution map, not a cache service or billing ledger. */
 export class ModelCache {
   private entries = new Map<string, CacheObservation>();

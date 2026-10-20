@@ -1506,6 +1506,30 @@ describe('subagent effort and named models', () => {
 });
 
 describe('root effort and the prompt cache', () => {
+  // #274: a request reads a cache entry only within reach of its last request; 6847d1 ran Haiku 11 requests and the
+  // return to Opus read 29,836 and wrote 123,451.
+  it('returns a switched root to its baseline while the baseline cache is still in reach', async () => {
+    const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
+    const f = fakeEngine({ hostBase: '2.1.293', respond: answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: ['fast', .99], effort: ['low', .99] }) });
+    f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+    f.engine.currentEffort = async () => undefined;
+    await warmRoot(router, f, 'claude-sonnet-5-5', 'high');
+    const turn = async (turnId: string, steps: number) => {
+      router.turnStart({ turnId, text: 'Find the exact helper file.' });
+      const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 900, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 1000 });
+      for (let index = 0; index < steps; index++) await drain(router.turnStep(f.engine, { turnId, index, model: 'claude-sonnet-5-5', effort: 'high' }, n.next));
+      router.turnComplete({ turnId, reason: 'answer', answer: 'Done.' });
+      return n.calls.map(c => c.model === 'claude-haiku-5-5' ? 'h' : 's').join('');
+    };
+    expect(await turn('long', 7)).toBe('hhhhhss');
+    expect(f.logs).toContainEqual({ event: 'root_stop', turn: 'long', index: 5, reason: 'baseline_reach' });
+    // Five switched requests leave no room: the next turn stays on the baseline, and the one after may switch again.
+    expect(await turn('short', 5)).toBe('hhhhh');
+    expect(await turn('after', 2)).toBe('ss');
+    expect(f.logs.find(l => l.event === 'root' && l.turn === 'after')).toMatchObject({ reasons: { model: 'baseline_reach' }, proposed_patch: expect.objectContaining({ model: 'claude-haiku-5-5' }), cost: null });
+    expect(await turn('again', 1)).toBe('h');
+    expect(f.logs.find(l => l.event === 'root' && l.turn === 'again')).toMatchObject({ cost: { horizon: 5, evidence: { target: { requests_since: 2 } } } });
+  });
   it('keeps the original model pair when an observed priced switch has a strictly positive cost floor', async () => {
     let tier = 'standard'; const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
     const f = fakeEngine({ respond: req => answering({ ...CLEAR, tier: [tier, .99] })(req) });
