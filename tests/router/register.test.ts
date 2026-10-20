@@ -274,6 +274,13 @@ describe('register', () => {
     const fallback = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5' } });
     expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), fallback)).toBe('claude-haiku-5-5');
     expect(fallback.logs.join('\n')).toContain('"model_asked":true');
+    // _FORCE is read as Claude Code reads a boolean: `0` is off like unset, `true` is on like `1`.
+    const off = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '0' } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), off)).toBe('claude-haiku-5-5');
+    expect(off.requests).toHaveLength(1);
+    const on = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: 'true' } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), on)).toBeUndefined();
+    expect(on.requests).toHaveLength(0);
     for (const name of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) {
       const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
       expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-5-5');

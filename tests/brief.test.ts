@@ -63,6 +63,7 @@ describe('checkEligibility', () => {
     ['an execution control field', hook({ resume: 'agent-1' }), env, config, 'execution_control_present'],
     ['a blank prompt', hook({ prompt: '   ' }), env, config, 'bad_tool_input'],
     ['a forced subagent model', hook(), { ...env, CLAUDE_CODE_SUBAGENT_MODEL: 'haiku', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }, config, 'subagent_model_override'],
+    ['a subagent model forced by `true`', hook(), { ...env, CLAUDE_CODE_SUBAGENT_MODEL: 'haiku', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: 'true' }, config, 'subagent_model_override'],
     ['a forced fork', hook(), { ...env, CLAUDE_CODE_FORK_SUBAGENT: '1' }, config, 'fork_or_background_override'],
     ['an oversized prompt', hook({ prompt: 'z'.repeat(MAX_PROMPT_BYTES + 1) }), env, config, 'prompt_too_large'],
     ['a lone surrogate', hook({ prompt: 'bad \ud800' }), env, config, 'prompt_invalid_unicode'],

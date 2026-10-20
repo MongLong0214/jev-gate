@@ -172,6 +172,12 @@ export const frontmatterModel = (text: string, absent = 'inherit'): string | nul
   return model || absent;
 };
 
+/**
+ * A boolean environment value as Claude Code reads one (2.1.304, its `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` among them):
+ * `1`, `true`, `yes` or `on` in any case, trimmed; anything else is off. Core and the Router both read this one parse.
+ */
+export const hostFlag = (v: string | undefined): boolean => v !== undefined && ['1', 'true', 'yes', 'on'].includes(v.toLowerCase().trim());
+
 /** The tools that change files. Bash can too (a shell or Python write), so it is read with them below. */
 const EDITING_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit'];
 

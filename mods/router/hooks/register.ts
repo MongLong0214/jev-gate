@@ -8,7 +8,7 @@ import { installedKeyPath, parseInstalledKey } from './key.ts';
 import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
 import { createRecorder } from './recording.ts';
 import { childStepContext } from '../../../src/router-child-context.ts';
-import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel } from './models.ts';
+import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel, hostFlag } from './models.ts';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
 /**
@@ -16,7 +16,7 @@ const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== 
  * name none, and nothing more (the Router runs on 2.1.282+). `inherit` is unset.
  */
 const subagentDefault = (model: string | undefined, force: string | undefined): string | undefined =>
-  set(model) && model!.trim() !== 'inherit' && !set(force) ? model!.trim() : undefined;
+  set(model) && model!.trim() !== 'inherit' && !hostFlag(force) ? model!.trim() : undefined;
 /** Each session's root record lives under this prefix in the plugin's store, so a resume finds its native pair. */
 const ROOT_KEY = 'router-root:';
 const MAX_ROOT_RECORDS = 200;
@@ -110,7 +110,7 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     return {
       mainModel: set(mainModel),
       mainEffort: set(mainEffort),
-      subagentModel: set(subagentForce),
+      subagentModel: hostFlag(subagentForce),
       ...(fallback ? { subagentDefault: fallback } : {}),
       aliasRemap: set(opus) || set(sonnet) || set(haiku),
     };

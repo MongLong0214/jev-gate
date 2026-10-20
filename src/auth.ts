@@ -1,4 +1,5 @@
 /** Strict `claude auth status` parser shared by doctor and the benchmark preflight (#14 §5). */
+import { hostFlag } from './claude-models.js';
 
 export interface CommandResult {
   status: number | null;
@@ -43,13 +44,13 @@ export const AUTH_CONFLICT_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', '
 /**
  * Since Claude Code 2.1.251 a concrete CLAUDE_CODE_SUBAGENT_MODEL value is only the default model of a child that names
  * none: an agent definition's `model:` (every owned role has one) and a per-spawn model take precedence. The documented
- * `inherit` value is treated as unset from v2.1.196 and is therefore harmless. FORCE=1 (2.1.257) makes the value (or the
- * main model) override everything, so only `force` pins a child's model. No owned role's model runs on a host before
- * 2.1.257 (`minimumHostRelease` in src/claude-models.ts), and the Router refuses one before 2.1.282.
+ * `inherit` value is treated as unset from v2.1.196 and is therefore harmless. FORCE on (2.1.257, read by `hostFlag`)
+ * makes the value (or the main model) override everything, so only `force` pins a child's model. No owned role's model
+ * runs on a host before 2.1.257 (`minimumHostRelease` in src/claude-models.ts), and the Router refuses one before 2.1.282.
  */
 export const subagentModelOverride = (env: Record<string, string | undefined>): { concrete: boolean; force: boolean; value: string | null } => {
   const raw = env['CLAUDE_CODE_SUBAGENT_MODEL'];
   const value = raw && raw.trim().length > 0 ? raw.trim() : null;
-  const force = env['CLAUDE_CODE_SUBAGENT_MODEL_FORCE'] === '1';
+  const force = hostFlag(env['CLAUDE_CODE_SUBAGENT_MODEL_FORCE']);
   return { concrete: value !== null && value !== 'inherit', force, value };
 };

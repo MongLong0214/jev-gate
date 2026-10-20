@@ -37,4 +37,9 @@ describe('subagentModelOverride', () => {
     expect(subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' })).toMatchObject({ concrete: true, value: 'haiku' });
     expect(subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' })).toMatchObject({ force: true });
   });
+
+  it('reads FORCE as Claude Code 2.1.304 reads a boolean: 1, true, yes or on, in any case', () => {
+    for (const v of ['1', 'true', 'TRUE', ' yes ', 'On']) expect(subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL_FORCE: v }).force, v).toBe(true);
+    for (const v of ['0', 'false', 'no', 'off', '', '2', 'enabled']) expect(subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL_FORCE: v }).force, v).toBe(false);
+  });
 });

@@ -310,7 +310,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const gated = mode === 'auto';
     const o = subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL: launch('CLAUDE_CODE_SUBAGENT_MODEL'), CLAUDE_CODE_SUBAGENT_MODEL_FORCE: launch('CLAUDE_CODE_SUBAGENT_MODEL_FORCE') });
     const overrideEffect = gated ? `mode=${mode} stays native on every prompt as host_unsupported and sends no Jev request` : 'eligible calls are preserved (no routing)';
-    if (o.force) say(gated ? 'fail' : 'warn', `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1: every subagent model is overridden; ${overrideEffect}`);
+    if (o.force) say(gated ? 'fail' : 'warn', `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=${launch('CLAUDE_CODE_SUBAGENT_MODEL_FORCE')?.trim()}: every subagent model is overridden; ${overrideEffect}`);
     else if (o.concrete) say('info', `CLAUDE_CODE_SUBAGENT_MODEL=${o.value} is the default model of a child that names none; owned roles and routed spawns override it`);
     else if (o.value === 'inherit') say('info', 'CLAUDE_CODE_SUBAGENT_MODEL=inherit is treated as unset on v2.1.196+ (harmless)');
     else say('ok', 'no CLAUDE_CODE_SUBAGENT_MODEL override');
