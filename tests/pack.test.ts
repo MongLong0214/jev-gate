@@ -181,7 +181,8 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const outDir = join(tmp, 'pack router out');
     const otherCwd = join(tmp, 'other router cwd');
     mkdirSync(otherCwd, { recursive: true });
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--profile', 'router'], { cwd: otherCwd, encoding: 'utf8' });
+    // Use the fixture's built reader, independent of a prior or concurrent checkout build.
+    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--profile', 'router', '--root', pluginRoot], { cwd: otherCwd, encoding: 'utf8' });
     expect(pack.status, pack.stderr).toBe(0);
     const manifest = JSON.parse(readFileSync(join(root, 'mods', 'router', '.claude-plugin', 'plugin.json'), 'utf8')) as { name: string; version: string };
     expect(manifest.name).toBe('jev-gate-router');

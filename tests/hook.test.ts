@@ -869,9 +869,9 @@ describe('single executor (A19)', () => {
     const gen = state(env).current;
     expect(gen.active).toEqual({});
     expect(gen.receipts).toHaveLength(1);
-    // The contract hash is empty because there is no contract; the check the worker reported is kept as it wrote it.
+    // There is no contract hash; the report keeps check results under positions, never shell commands.
     expect(gen.receipts[0]).toMatchObject({ task_id: 'single', contract_hash: '', verdict: 'accept', provenance: 'worker_reported' });
-    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: 'npm test', result: 'pass', note: 'all passed' }]);
+    expect(gen.receipts[0]?.reply?.checks).toEqual([{ check_id: '#1', result: 'pass', note: 'all passed' }]);
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).toBe('completed');
   });
@@ -926,8 +926,8 @@ describe('single executor (A19)', () => {
     await run(env, workerPost('toolu_1', reply), fetchImpl);
     const receipt = state(env).current.receipts[0];
     expect(receipt).toMatchObject({ task_id: 'single', verdict: 'accept' });
-    // The name is kept as the worker wrote it, so the record says which check ran.
-    expect(receipt?.reply?.checks).toEqual([{ check_id: 'npm run typecheck', result: 'pass', note: 'no errors' }]);
+    // Free command names are matched in memory and stored by position.
+    expect(receipt?.reply?.checks).toEqual([{ check_id: '#1', result: 'pass', note: 'no errors' }]);
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).toBe('completed');
   });
@@ -1116,6 +1116,35 @@ describe('worker check verification (0.4.0)', () => {
     return fetchImpl;
   };
   const ACCEPTED = 'The worker reported done with no blockers';
+
+  it.each(['result', 'note'])('keeps malformed check %s commands out of receipts, coordinator context and traces (R1)', async field => {
+    const dir = join(tmp, `trace-malformed-${field}`);
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await dispatched(env);
+    const sentinel = 'REVIEW_COMMAND_SENTINEL';
+    const reply = workerReply();
+    const checks = [{ check_id: 'npm test', result: 'pass' }, { check_id: `echo ${sentinel}`, result: 'pass', [field]: 7 }];
+    const post = await run(env, workerPost('toolu_1', { ...reply, checks }));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt).toMatchObject({ verdict: 'invalid', reply: null });
+    expect.soft(receipt?.verdict_reason).toContain('check #2:');
+    const traced = readdirSync(dir).map(f => readFileSync(join(dir, f), 'utf8')).join('\n');
+    for (const output of [JSON.stringify(receipt), context(post), traced]) expect.soft(output).not.toContain(sentinel);
+  });
+
+  it.each(['pass', 'fail', 'not_run', 'duplicate'] as const)('stores positional check ids after matching %s commands in memory (R3)', async result => {
+    const env = makeEnv();
+    await dispatched(env);
+    const command = 'echo REVIEW_RECEIPT_SENTINEL';
+    const check = { check_id: command, result: result === 'duplicate' ? 'pass' as const : result, note: 'reported' };
+    const reply = workerReply({ checks: result === 'duplicate' ? [check, check] : [check] });
+    await run(env, postWith(reply, workerTranscript([{ command, failed: false }])));
+    const receipt = state(env).current.receipts[0];
+    expect(receipt?.reply?.checks).toEqual(reply.checks.map((c, i) => ({ ...c, check_id: `#${i + 1}` })));
+    expect(JSON.stringify(receipt)).not.toContain('REVIEW_RECEIPT_SENTINEL');
+    expect(receipt?.verdict).toBe(result === 'pass' ? 'accept' : 'incomplete');
+    if (result === 'duplicate') expect(receipt?.verdict_reason).toBe('worker_check_duplicate');
+  });
 
   it('refuses a reported pass whose last run in the worker transcript failed', async () => {
     const env = makeEnv();

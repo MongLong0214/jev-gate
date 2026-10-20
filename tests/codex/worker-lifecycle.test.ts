@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexRpc, RpcRequestError } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import { AGENT_TOOL } from '../../src/codex/profiles.js';
+import { readOnlyCommand, writeTargets } from '../../src/codex/write-scope.js';
 import { readJob, updateJob, newGeneration, cleanupJobs, jobPath } from '../../src/job.js';
 import { buildOperations } from '../../src/operations.js';
 import type { Obj } from '../../src/codex/source.js';
@@ -67,6 +68,35 @@ const setup = async (scenario = 'uncertain', started = true) => {
 describe('Codex status collection and deny tracing (#293)', () => {
   type F = Awaited<ReturnType<typeof setup>>;
   const write = (f: F) => f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_use_id: 'root-write', cwd: f.root, tool_name: 'Write', tool_input: { file_path: join(f.root, 'src/file'), content: 'PRIVATE_CONTENT' } });
+  it.each(['result', 'note'])('keeps malformed check %s commands out of Codex diagnostics (R1)', async field => {
+    const f = await setup('normal'); await f.launch(true);
+    const sentinel = 'REVIEW_COMMAND_SENTINEL';
+    f.terminal('completed', JSON.stringify({ status: 'done', checks: [
+      { check_id: 'npm test', result: 'pass' },
+      { check_id: `echo ${sentinel}`, result: 'pass', [field]: 7 },
+    ] }));
+    await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
+    const receipt = f.job().current.receipts[0]!;
+    expect(receipt).toMatchObject({ verdict: 'invalid', reply: null });
+    expect.soft(receipt.verdict_reason).toContain('check #2:');
+    const output = await f.status('invalid-result');
+    const guidance = output.slice(output.lastIndexOf('[Jev Gate result]'));
+    expect.soft(guidance).toContain('check #2:');
+    f.parent.prompt = 'next';
+    const next = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
+    for (const value of [JSON.stringify(receipt), guidance, f.job().current.background_context, JSON.stringify(next), JSON.stringify(f.traces('post'))]) expect.soft(value).not.toContain(sentinel);
+  });
+  it('stores Codex check positions and replays the sanitized report after observed command verification (R3)', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    const command = 'echo REVIEW_RECEIPT_SENTINEL';
+    f.rpc.onNotification({ method: 'item/completed', params: { threadId: 'worker', item: { id: 'check', type: 'commandExecution', command, status: 'completed', exitCode: 0 } } });
+    f.terminal('completed', JSON.stringify({ status: 'done', summary: 'verified result', checks: [{ check_id: command, result: 'pass', note: 'reported' }] }));
+    await vi.waitFor(() => expect(f.job().current.receipts[0]?.verdict).toBe('accept'));
+    const receipt = f.job().current.receipts[0]!;
+    expect(receipt).toMatchObject({ reply: { checks: [{ check_id: '#1', result: 'pass', note: 'reported' }] }, verification: { transcript: 'read', contradicted: [], unobserved: [], stale: [] } });
+    expect(f.job().current.background_context).toContain('verified result');
+    for (const value of [JSON.stringify(receipt), f.job().current.background_context]) expect(value).not.toContain('REVIEW_RECEIPT_SENTINEL');
+  });
   it.each(['done', 'blocked', 'failed'])('collects terminal %s after a missed notification, releases the scope and returns the same result twice', async status => {
     const f = await setup('normal'); await f.launch(true);
     const text = JSON.stringify({ status, summary: 'collected terminal result', changed_files: [], interfaces: [], checks: [], blockers: status === 'blocked' ? ['blocked'] : [] });
@@ -361,6 +391,25 @@ describe('Codex write scope from native tool targets (#234)', () => {
   };
   const patch = (...lines: string[]) => ({ command: `*** Begin Patch\n${lines.join('\n')}\n*** End Patch\n` });
   const add = (path: string) => `*** Add File: ${path}\n+export const x = 1;`;
+  it('treats repository-configured textconv as an unknown write target from unrelated directories (R2)', async () => {
+    const f = await scoped();
+    // The callback deliberately targets the protected reservation, outside the repository invoking it.
+    const protectedFile = join(f.root, 'protected.txt');
+    writeFileSync(protectedFile, 'original');
+    mkdirSync(join(f.other, '.git', 'info'), { recursive: true });
+    writeFileSync(join(f.other, '.git', 'config'), `[diff "review"]\n\ttextconv = touch ${protectedFile}\n`);
+    writeFileSync(join(f.other, '.git', 'info', 'attributes'), '*.txt diff=review\n');
+    for (const command of ['git blame a.txt', 'git diff', 'git log -p', 'git show HEAD', 'git grep --textconv pattern', 'git cat-file --filters HEAD:a.txt',
+      'git diff --no-ext-diff', 'git diff --no-textconv', 'git blame -- a.txt --no-textconv', 'git diff -- --no-ext-diff --no-textconv',
+      'git diff --src-prefix --no-textconv --no-ext-diff', 'git --git-dir=.git blame a.txt', 'git diff --no-ext-diff --no-textconv --textc',
+      'git show --no-ext-diff --no-textconv --ext', 'git blame --no-textconv --no-no-textconv a.txt', 'git cat-file --filt HEAD:a.txt']) {
+      expect(readOnlyCommand(command), command).toBe(false);
+      expect(writeTargets(f.other, 'exec_command', { cmd: command, workdir: f.other }), command).toEqual(['/']);
+      expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other), command).toBe(true);
+      expect(await f.blocked('Bash', { command: `cd ${f.other} && ${command}` }), command).toBe(true);
+    }
+    expect(readFileSync(protectedFile, 'utf8')).toBe('original');
+  });
   it('allows a patch or edit whose every target is unrelated and denies any overlapping target', async () => {
     const f = await scoped();
     expect(await f.hook('apply_patch', patch(add(join(f.other, 'a.ts')), add(join(f.other, 'nested/b.ts'))))).toEqual({});
@@ -386,8 +435,8 @@ describe('Codex write scope from native tool targets (#234)', () => {
   });
   it('keeps read/status diagnostics with quoted search patterns available inside the protected root', async () => {
     const f = await scoped();
-    for (const command of ['ps aux', 'gh issue view 234 --repo MongLong0214/jev-gate --comments', 'gh pr list --state open', 'git status --short', 'git diff --check',
-      `rg -n "write|conflict; rm -rf src > hits" src`, `grep -rn 'a && b $(c)' ${f.root}`, 'ps aux | grep -i "codex" 2>/dev/null', `cd ${f.root} && git --no-pager log --oneline -3`,
+    for (const command of ['ps aux', 'gh issue view 234 --repo MongLong0214/jev-gate --comments', 'gh pr list --state open', 'git status --short', 'git diff --no-ext-diff --no-textconv --check',
+      `rg -n "write|conflict; rm -rf src > hits" src`, `grep -rn 'a && b $(c)' ${f.root}`, 'ps aux | grep -i "codex" 2>/dev/null', `cd ${f.root} && git --no-pager log --no-ext-diff --no-textconv --oneline -3`,
       `find . -name '*.ts' -not -path './node_modules/*'`, 'cat src/file | wc -l', 'pwd']) {
       expect(await f.hook('Bash', { command }), command).toEqual({});
     }
@@ -399,7 +448,7 @@ describe('Codex write scope from native tool targets (#234)', () => {
   it('keeps the read commands Codex workers ran during a settlement available and their writing forms blocked (#287)', async () => {
     const f = await scoped();
     for (const command of ['nl -ba src/file.ts', `sed -n '1,80p' src/file.ts`, `sed -n -e '10p;20,30p' -e '$p' a b`, `rg -n foo src | nl -ba | sed -n '1,40p'`, 'command -v codex', 'command -V node',
-      'which node', 'node --version', 'git rev-parse --show-toplevel', 'git ls-files src', 'git branch --show-current', 'git blame -L 1,9 src/a.ts',
+      'which node', 'node --version', 'git rev-parse --show-toplevel', 'git ls-files src', 'git branch --show-current', 'git blame --no-textconv -L 1,9 src/a.ts',
       'git cat-file -p HEAD', 'git merge-base HEAD origin/main', 'git describe --tags', 'git remote -v', 'git remote get-url origin', 'git config --get user.name',
       'sort -u a', 'uniq -c a', 'cut -d: -f1 a', 'tr a-z A-Z < a', 'stat a', 'file a', 'diff a b', 'jq .x a.json', 'basename a/b', 'dirname a/b', 'realpath a',
       'echo ok', `printf '%s\\n' a`, 'true', 'test -f a', '[ -d src ]', 'date +%s', 'date -u']) {
@@ -423,8 +472,8 @@ describe('Codex write scope from native tool targets (#234)', () => {
   });
   it('blocks the git read options that run configured filters, textconv, external diff or gpg, prefixes included (#287)', async () => {
     const f = await scoped();
-    for (const command of ['git cat-file -p HEAD:package.json', 'git diff --no-ext-diff --no-textconv', 'git log --format=%H -1', 'git show --stat HEAD',
-      'git log --no-show-signature --no-textconv -p', 'git show --no-ext-diff --no-textconv HEAD', 'git blame --no-textconv a',
+    for (const command of ['git cat-file -p HEAD:package.json', 'git diff --no-ext-diff --no-textconv', 'git log --no-ext-diff --no-textconv --format=%H -1', 'git show --no-ext-diff --no-textconv --stat HEAD',
+      'git log --no-show-signature --no-ext-diff --no-textconv -p', 'git show --no-ext-diff --no-textconv HEAD', 'git blame --no-textconv a',
       'git status --short', 'git rev-parse HEAD', 'git ls-files', 'git merge-base HEAD main', 'git describe HEAD',
       'git branch --show-current', 'git remote get-url origin', 'git config --get user.name']) {
       expect(await f.hook('Bash', { command }), command).toEqual({});
@@ -449,11 +498,11 @@ describe('Codex write scope from native tool targets (#234)', () => {
       }
     };
     it.each([
-      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0='printf FILTER_EXECUTED' git diff --no-index -- a b`,
-      `GIT_EXTERNAL_DIFF='printf FILTER_EXECUTED' git diff --no-index -- a b`,
-      'GIT_CONFIG_GLOBAL=callbacks.config git diff --no-index -- a b',
-      `GIT_CONFIG_PARAMETERS="'diff.external=printf FILTER_EXECUTED'" git diff --no-index -- a b`,
-      'ARBITRARY=1 git diff --no-index -- a b',
+      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0='printf FILTER_EXECUTED' git diff --no-ext-diff --no-textconv --no-index -- a b`,
+      `GIT_EXTERNAL_DIFF='printf FILTER_EXECUTED' git diff --no-ext-diff --no-textconv --no-index -- a b`,
+      'GIT_CONFIG_GLOBAL=callbacks.config git diff --no-ext-diff --no-textconv --no-index -- a b',
+      `GIT_CONFIG_PARAMETERS="'diff.external=printf FILTER_EXECUTED'" git diff --no-ext-diff --no-textconv --no-index -- a b`,
+      'ARBITRARY=1 git diff --no-ext-diff --no-textconv --no-index -- a b',
       'ARBITRARY= git status --short',
       `git -c diff.external='printf FILTER_EXECUTED' diff --no-index -- a b`,
       `git -cdiff.external='printf FILTER_EXECUTED' diff --no-index -- a b`,
@@ -467,12 +516,12 @@ describe('Codex write scope from native tool targets (#234)', () => {
     });
     it.each(keys.flatMap(key => ['', key === 'GIT_CONFIG_COUNT' ? '1' : 'callback'].map(value => [key, value] as const)))('blocks inherited %s=%s including empty presence', async (key, value) => {
       cleanEnv(); const f = await scoped(); process.env[key] = value;
-      for (const command of ['git diff --no-index -- a b', 'git status --short']) {
+      for (const command of ['git diff --no-ext-diff --no-textconv --no-index -- a b', 'git status --short']) {
         expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other), command).toBe(true);
         expect(await f.blocked('Bash', { command }), command).toBe(true);
       }
     });
-    it.each(['git diff --no-index -- a b', 'git status --short'])('allows clean-env plain reads: %s', async command => {
+    it.each(['git diff --no-ext-diff --no-textconv --no-index -- a b', 'git status --short'])('allows clean-env plain reads: %s', async command => {
       cleanEnv(); const f = await scoped();
       expect(await f.hook('Bash', { command })).toEqual({});
       expect(await f.hook('exec_command', { cmd: command, workdir: f.other }, f.other)).toEqual({});
@@ -578,16 +627,29 @@ describe('Codex owned dispatch input guidance (#287)', () => {
     for (const row of rows) expect(row).toMatchObject({ host: 'codex', session_id: 'parent', tool_name: 'jev_agent', error_first_line: `dispatch_${String(row['dispatch_failure'])}` });
     expect(JSON.stringify(rows)).not.toMatch(/EACCES|secret|disconnected/);
   });
-  it('names the real jev_agent fields in the tool, the session instructions and the refusal, so a retry can succeed', async () => {
+  it('names the real jev_agent fields without requiring an obsolete opening marker (R4)', async () => {
     const f = await setup('normal');
     await f.rpc.onRequest({ id: 'wrong', method: 'item/tool/call', params: { threadId: 'parent', callId: 'wrong', tool: 'jev_agent', arguments: { action: 'start', profile: 'jev-gate:worker-fast', marker: '[JEV_TASK rev=1 id=a attempt=1]', task: 'Investigate' } } });
     const refusal = JSON.stringify(f.sent.find(m => m['id'] === 'wrong'));
-    for (const text of ['subagent_type (one of jev-gate:worker)', 'prompt (', '[JEV_TASK', 'status|cancel with agent_id']) expect(refusal).toContain(text);
+    for (const text of ['subagent_type (one of jev-gate:worker)', 'prompt (', 'status|cancel with agent_id']) expect(refusal).toContain(text);
+    expect(refusal).not.toContain('JEV_TASK');
     expect(f.sent.some(m => m['method'] === 'thread/start')).toBe(false);
     await f.policy.client({ id: 'root', method: 'thread/start', params: { cwd: f.root } });
     const instructions = String((f.sent.find(m => m['method'] === 'thread/start')?.['params'] as Obj | undefined)?.['developerInstructions']);
     for (const text of [AGENT_TOOL.description, instructions]) {
-      expect(text).toMatch(/\bsubagent_type\b/); expect(text).toMatch(/\bprompt\b/); expect(text).toContain('[JEV_TASK'); expect(text).not.toMatch(/profile and marker/);
+      expect(text).toMatch(/\bsubagent_type\b/); expect(text).toMatch(/\bprompt\b/); expect(text).not.toContain('JEV_TASK'); expect(text).not.toMatch(/profile and marker/);
     }
+  });
+  it('documents the task prompt without an obsolete opening marker (R4)', () => {
+    const skill = readFileSync(join(process.cwd(), 'plugins/codex/skills/jev-gate/SKILL.md'), 'utf8');
+    expect(skill).toContain('the task as `prompt`');
+    expect(skill).not.toContain('JEV_TASK');
+  });
+  it('documents the current single-worker admission flow without a planner or recent-turn retry (R5)', () => {
+    const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8');
+    expect(readme).toContain('hand the whole request to one background worker');
+    expect(readme).not.toContain('plan worker tasks with contracts and checks');
+    expect(readme).toContain('one admission judgment uses the current request once');
+    expect(readme).not.toContain('A needs-context retry can include recent user turns');
   });
 });

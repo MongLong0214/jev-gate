@@ -444,7 +444,7 @@ export class CodexPolicy {
       const tools = Array.isArray(params['dynamicTools']) ? params['dynamicTools'] : [];
       if (tools.some(t => obj(t)?.['name'] === 'jev_agent')) throw new Error('jev_agent already registered');
       const instructions = typeof params['developerInstructions'] === 'string' ? params['developerInstructions'] + '\n\n' : '';
-      this.rpc.forward({ ...message, params: { ...params, config: { ...(obj(params['config']) ?? {}), ...hookConfig }, dynamicTools: [...tools, AGENT_TOOL], developerInstructions: instructions + 'If Jev Gate guidance asks for an Agent dispatch, call jev_agent with that owned profile as subagent_type and prompt starting with its [JEV_TASK ...] marker. Do not substitute native spawn_agent or implement an admitted contract in the root. Jev failures keep native execution available. Native permissions and user constraints remain authoritative.' } }); return;
+      this.rpc.forward({ ...message, params: { ...params, config: { ...(obj(params['config']) ?? {}), ...hookConfig }, dynamicTools: [...tools, AGENT_TOOL], developerInstructions: instructions + 'If Jev Gate guidance asks for an Agent dispatch, call jev_agent with that owned profile as subagent_type and the task as prompt. Do not substitute native spawn_agent or implement an admitted contract in the root. Jev failures keep native execution available. Native permissions and user constraints remain authoritative.' } }); return;
     }
     const session = this.sessions.get(String(params['threadId']));
     if (session && method === 'turn/interrupt') { session.controller?.abort(); await this.interruptChildren(session); }
@@ -569,7 +569,7 @@ export class CodexPolicy {
       if (conflict) {
         const e = conflict.codex_execution!; const dispatch = this.sessions.get(e.thread_id)?.dispatch;
         const reason = dispatch?.pendingReason ?? (dispatch ? dispatch.ended ? 'settlement_pending' : 'terminal_not_observed' : e.host_pid === undefined ? 'host_identity_unavailable' : 'host_process_running');
-        return emitDeny('write_conflict', `A managed Codex worker in this write scope has not completed terminal settlement. Reservation ${e.thread_id}: ${reason}. Read/status commands (git status/diff/log/show/blame/rev-parse/ls-files and other git reads, rg, grep, find, ls, cat, nl, head, tail, \`sed -n\` line prints, wc, sort, uniq, cut, tr, jq, diff, stat, ps, which, \`command -v\`, a lone --version, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with \`cd <absolute dir> &&\` and name its paths without variables.`,
+        return emitDeny('write_conflict', `A managed Codex worker in this write scope has not completed terminal settlement. Reservation ${e.thread_id}: ${reason}. Read/status commands (git status/rev-parse/ls-files and callback-disabled diff/log/show/blame reads, rg, grep, find, ls, cat, nl, head, tail, \`sed -n\` line prints, wc, sort, uniq, cut, tr, jq, diff, stat, ps, which, \`command -v\`, a lone --version, gh issue/pr view/list) and writes whose every target lies outside its scope remain available. Hooks do not report exec workdir, so start a shell command elsewhere with \`cd <absolute dir> &&\` and name its paths without variables.`,
           { reservation_id: e.thread_id, agent_id: e.thread_id, settlement_reason: reason, host_pid: e.host_pid ?? null });
       }
     }
@@ -642,7 +642,7 @@ export class CodexPolicy {
       return worker.dispatch.ended ? this.settleWorker(worker) : `${worker.dispatch.unconfirmed ?? 'The original worker is still running. No terminal result or acceptance is available. Answer the user here; do not wait synchronously or duplicate its work.'} Reservation ${worker.id}: ${worker.dispatch.pendingReason ?? 'terminal_not_observed'}.`;
     }
     if (!session || session.role || session.eligible === false || this.env['JEV_CODEX_ENABLED'] === '0' || !session.prompt || !session.controller || session.controller.signal.aborted || !original) return 'No active root Jev job.';
-    if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || original['run_in_background'] !== undefined && typeof original['run_in_background'] !== 'boolean' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model', 'run_in_background'].includes(k))) return `Invalid owned Agent input. Pass subagent_type (one of ${Object.keys(this.profiles).join(', ')}) and prompt (the task, starting unchanged with any [JEV_TASK ...] marker); optional: description, model, run_in_background. action is only status|cancel with agent_id.`;
+    if (typeof original['subagent_type'] !== 'string' || !this.profiles[original['subagent_type']] || typeof original['prompt'] !== 'string' || original['run_in_background'] !== undefined && typeof original['run_in_background'] !== 'boolean' || Object.keys(original).some(k => !['subagent_type', 'prompt', 'description', 'model', 'run_in_background'].includes(k))) return `Invalid owned Agent input. Pass subagent_type (one of ${Object.keys(this.profiles).join(', ')}) and prompt (the task); optional: description, model, run_in_background. action is only status|cancel with agent_id.`;
     const background = original['run_in_background'] !== false;
     const parentSignal = session.controller.signal;
     const parent: Session = { ...session, settings: { ...session.settings }, controller: null };
@@ -824,7 +824,8 @@ export class CodexPolicy {
       if (post.code) d.pendingReason = post.code; else delete d.pendingReason;
       const state = readJob(this.env, d.parent.id);
       const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
-      const committed = gen?.receipts.some(r => r.tool_use_id === d.tool);
+      const receipt = gen?.receipts.find(r => r.tool_use_id === d.tool);
+      const committed = receipt !== undefined;
       if (!gen || own(gen.active, d.tool) || !committed) {
         d.pendingReason ??= !state.ok ? state.code : !gen ? 'generation_unavailable' : own(gen.active, d.tool) ? 'reservation_active' : 'receipt_uncommitted';
         this.trace?.write('failure', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id,
@@ -839,7 +840,9 @@ export class CodexPolicy {
       this.backgroundResults.set(worker.id, { parent: d.parent.id, output: d.output });
       while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
       if (d.background) {
-        updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: d.output!, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
+        // Replayed coordinator context uses the stored positional report, never raw check commands or invalid JSON.
+        const context = failure ? d.output! : `${receipt?.reply ? JSON.stringify(receipt.reply) : 'No usable worker report.'}\n\n${guidance}`;
+        updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: context, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
         this.trace?.write('background_terminal', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, status: String(d.ended!['status']),
           ...(failure ? { failure_category: failure.category, failure_stage: failure.stage, not_executed: failure.not_executed } : {}) });
       }

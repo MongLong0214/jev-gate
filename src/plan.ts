@@ -151,15 +151,16 @@ export const parseWorkerReply = (text: string): ParseResult<WorkerReply> => {
   const rawChecks = parsed['checks'] ?? [];
   if (!Array.isArray(rawChecks)) return { ok: false, error: 'checks must be an array' };
   const checks: WorkerCheckResult[] = [];
-  for (const raw of rawChecks) {
-    if (!isRecord(raw)) return { ok: false, error: 'each check result must be an object with check_id and result' };
+  for (const [i, raw] of rawChecks.entries()) {
+    const name = `check #${i + 1}`;
+    if (!isRecord(raw)) return { ok: false, error: `${name}: result must be an object with check_id and result` };
     const id = raw['check_id'];
-    if (typeof id !== 'string') return { ok: false, error: 'check_id must be a string' };
-    // A free id is kept verbatim, so a check the worker ran is recorded under the name it used rather than a rewrite.
-    if (id.length === 0 || bytes(id) > MAX_FIELD_BYTES) return { ok: false, error: `check_id must be a non-empty string of at most ${MAX_FIELD_BYTES} bytes` };
+    if (typeof id !== 'string') return { ok: false, error: `${name}: check_id must be a string` };
+    // Keep the command verbatim for in-memory matching; diagnostics and persisted receipts use its position.
+    if (id.length === 0 || bytes(id) > MAX_FIELD_BYTES) return { ok: false, error: `${name}: check_id must be a non-empty string of at most ${MAX_FIELD_BYTES} bytes` };
     const result = raw['result'];
-    if (result !== 'pass' && result !== 'fail' && result !== 'not_run') return { ok: false, error: `check ${id}: result must be pass|fail|not_run` };
-    const note = strField(raw['note'] ?? '', `check ${id}: note`);
+    if (result !== 'pass' && result !== 'fail' && result !== 'not_run') return { ok: false, error: `${name}: result must be pass|fail|not_run` };
+    const note = strField(raw['note'] ?? '', `${name}: note`);
     if (!note.ok) return note;
     checks.push({ check_id: id, result, note: note.value });
   }
