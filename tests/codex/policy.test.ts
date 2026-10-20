@@ -177,11 +177,6 @@ describe('Codex ordered routing and recorded application', () => {
     const missing = await superseded('gpt-6-sol', 'key_missing', extra);
     expect(missing.patch).toEqual({ model: 'gpt-6.1-sol' }); expect(missing.fetchImpl).not.toHaveBeenCalled();
     expect(missing.rows).toEqual([expect.objectContaining({ phase: 'codex_router_skipped', reason: 'key_missing', superseded_baseline: { from: 'gpt-6-sol', to: 'gpt-6.1-sol' } })]);
-    // A pin never keeps a superseded model running; a pinned effort is kept and Jev is not asked.
-    expect((await superseded('gpt-6-sol', 'key_missing', { ...extra, modelPinned: true })).patch).toEqual({ model: 'gpt-6.1-sol' });
-    const pinned = await superseded('gpt-6-sol', 'complex', { ...extra, modelPinned: true, effortPinned: true });
-    expect(pinned.patch).toEqual({ model: 'gpt-6.1-sol' }); expect(pinned.fetchImpl).not.toHaveBeenCalled();
-    expect(pinned.rows).toEqual([expect.objectContaining({ phase: 'codex_router_skipped', reason: 'pinned', superseded_baseline: { from: 'gpt-6-sol', to: 'gpt-6.1-sol' } })]);
   });
   it('keeps a superseded baseline whose successor is not an allowed target for the same effort', async () => {
     const astra = [...account, { ...account[1]!, model: 'gpt-5.6-astra' }];
@@ -189,7 +184,12 @@ describe('Codex ordered routing and recorded application', () => {
     expect((await superseded('gpt-5.6-astra', 'key_missing', { catalog: astra, config: { ...config, router: { ...config.router, allowAstra: true } } })).patch).toEqual({ model: 'gpt-6-astra' });
     expect((await superseded('gpt-5.6-luna', 'key_missing', { effort: 'ultra', catalog: account.map(m => m.model === 'gpt-5.6-luna' ? { ...m, supportedReasoningEfforts: levels() } : m) })).patch).toEqual({});
     expect((await superseded('gpt-5.6-terra', 'key_missing')).patch).toEqual({});
-    expect((await superseded('gpt-5.6-astra', 'key_missing', { catalog: astra, modelPinned: true, effortPinned: true })).patch).toEqual({});
+    expect((await superseded('gpt-6-sol', 'key_missing', { modelPinned: true })).patch).toEqual({});
+    // A pinned model is kept exactly, superseded or not; a run pinning both is never assessed.
+    const pinned = await superseded('gpt-6-sol', 'complex', { modelPinned: true, effortPinned: true });
+    expect(pinned.patch).toEqual({}); expect(pinned.fetchImpl).not.toHaveBeenCalled();
+    expect(pinned.rows).toEqual([expect.objectContaining({ phase: 'codex_router_skipped', reason: 'pinned' })]);
+    expect(pinned.rows[0]).not.toHaveProperty('superseded_baseline');
   });
 });
 describe('native workspace authentication routing', () => {

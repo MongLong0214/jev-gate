@@ -72,6 +72,13 @@ describe('operations display model', () => {
     const gate = buildOperations([{ ...base, phase: 'admission_result', attempted: true, http: { code: 'deadline', duration_ms: 500 }, decision: { shape: 'direct' } }], [], new Date(later), { trace: true });
     expect(gate.feed.find(s => s.lane === 'jev')?.state).toBe('error');
   });
+  it('reports a skipped Codex assessment that moved a superseded baseline instead of claiming the original model', () => {
+    const skipped = { ...base, host: 'codex', phase: 'codex_router_skipped', known_not_sent: true, attempted: false };
+    const kept = buildOperations([{ ...skipped, reason: 'pinned' }], [], new Date(later), { trace: true });
+    expect(kept.feed[0]?.details).toContain('Jev 전송 없음 · 원래 모델·effort 유지');
+    const moved = buildOperations([{ ...skipped, reason: 'key_missing', superseded_baseline: { from: 'gpt-6-sol', to: 'gpt-6.1-sol' } }], [], new Date(later), { trace: true });
+    expect(moved.feed[0]?.details).toContain('Jev 전송 없음 · gpt-6-sol에서 후속 모델 gpt-6.1-sol로 변경 · effort 유지');
+  });
   it('does not present a direct turn ending or a planner dispatch as observed worker execution', () => {
     const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' }], [], new Date(later), { trace: true, host: 'codex' });
     expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, state: 'waiting' });

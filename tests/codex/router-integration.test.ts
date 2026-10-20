@@ -249,14 +249,15 @@ describe('original Codex root execution boundaries', () => {
     if (!routed) expect(rows).toContainEqual(expect.objectContaining({phase:'codex_router_skipped',session_id:'root',reason:'pinned',known_not_sent:true}));
     f.rpc.close();
   });
-  it('moves a codex exec root off a superseded model to its successor at the same effort, without asking Jev',async()=>{
+  it.each(['gpt-6-sol','fixture-A'])('a codex exec root pinned to %s keeps it on every request, superseded or the configured model',async model=>{
+    // gpt-6.1-sol supersedes gpt-6-sol; fixture-A is the session's configured model. Jev would move either to fixture-B/max.
     const f = await fixture(true,'fixture-B','max');
-    f.policy.catalog = ['gpt-6.1-sol','gpt-6-sol'].map(model => ({ model, description: 'Workhorse model for coding.', supportedReasoningEfforts: ['high','xhigh'].map(reasoningEffort => ({ reasoningEffort })) }));
-    const request = {...f.request,model:'gpt-6-sol',reasoning:{effort:'xhigh',summary:'auto'}};
-    for (let i=0;i<2;i++) expect((await f.policy.externalRequest('root',request,new AbortController().signal,'codex_exec')).request).toEqual({...request,model:'gpt-6.1-sol'});
+    f.policy.catalog = [...catalog,...['gpt-6.1-sol','gpt-6-sol'].map(id => ({ model: id, description: 'Workhorse model for coding.', supportedReasoningEfforts: ['high','xhigh'].map(reasoningEffort => ({ reasoningEffort })) }))];
+    const request = {...f.request,model};
+    for (let i=0;i<2;i++) expect((await f.policy.externalRequest('root',request,new AbortController().signal,'codex_exec')).request).toEqual(request);
     expect(f.fetchImpl).not.toHaveBeenCalled();
     const rows = readdirSync(join(dir,'trace')).map(file => JSON.parse(readFileSync(join(dir,'trace',file),'utf8')));
-    expect(rows).toContainEqual(expect.objectContaining({phase:'codex_router_skipped',session_id:'root',reason:'pinned',superseded_baseline:{from:'gpt-6-sol',to:'gpt-6.1-sol'}}));
+    expect(rows).not.toContainEqual(expect.objectContaining({superseded_baseline:expect.objectContaining({from:model})}));
     f.rpc.close();
   });
   it('shares pending assessment across concurrent external requests and keeps manual C',async()=>{

@@ -48,14 +48,13 @@ export const routeCodex = async (args: {
   if (env['JEV_CODEX_ENABLED'] === '0') return skip('disabled');
   if (!config.router.enabled) return skip('router_disabled');
   const modelPin = args.modelPinned === true; const effortPin = args.effortPinned === true;
+  // A caller that fixed both keeps both: nothing is asked and no successor replaces the model.
+  if (modelPin && effortPin) return skip('pinned');
   // A superseded baseline runs on its newest successor when that is a routable target for the same effort; this needs no Jev answer.
-  // A pin does not exempt it: a superseded model never runs (owner rule, 2026-10-15).
-  const successor = config.router.model ? codexSuccessor(args.model, args.catalog) : null;
+  const successor = config.router.model && !modelPin ? codexSuccessor(args.model, args.catalog) : null;
   const moved = successor && codexCandidates(args.catalog, config.router.allowAstra).some(c => c.id === successor && (args.effort === null ? c.omitEffort : c.efforts.includes(args.effort))) ? successor : null;
   const native: PairPatch = moved ? { model: moved } : {};
   const model = moved ?? args.model;
-  // A caller that fixed both keeps its effort and is never assessed.
-  if (modelPin && effortPin) return skip('pinned', native);
   if (!env['TYPESAFE_API_KEY']) return skip('key_missing', native);
   if (signal?.aborted) return skip('aborted');
   if (looksSecret(args.task)) return skip('input_secret', native);
