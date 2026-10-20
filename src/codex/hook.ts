@@ -3,7 +3,7 @@ import { dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
-import { PROVIDER, connectionRequest, ensureConnection } from './connection.js';
+import { PROVIDER, connectionOwner, connectionRequest, ensureConnection } from './connection.js';
 
 type Rec = Record<string, unknown>;
 const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Rec : null;
@@ -25,7 +25,7 @@ export const toolOutcome = (value: unknown): { exit_code: number | null; is_erro
 /** #282: a new session's rollout opens with session_meta, the provider and originator it started with. Only those are read. */
 const startedSession = (input: Rec): Rec | null => {
   const path = input['transcript_path'];
-  if (input['hook_event_name'] !== 'SessionStart' || input['source'] !== 'startup' || typeof path !== 'string' || !isAbsolute(path)) return null;
+  if (typeof path !== 'string' || !isAbsolute(path)) return null;
   try {
     const head = Buffer.alloc(256 * 1024); const fd = openSync(path, 'r');
     let size: number; try { size = readSync(fd, head, 0, head.length, 0); } finally { closeSync(fd); }
@@ -42,7 +42,7 @@ export interface CodexHookDeps {
 }
 
 /** No permissions, prompts, source, tool input/output, transcript or environment dumps enter the recorder. */
-export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: TraceWriter, unrouted?: string): Rec => {
+export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: TraceWriter, routing?: Rec): Rec => {
   const event = token(input['hook_event_name']);
   const session = token(input['session_id']);
   if (!event || !EVENTS.has(event) || !session) return {};
@@ -56,7 +56,7 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
     ...toolOutcome(input['tool_response']),
     interrupted: event === 'Interrupt',
     // A session keeps the provider it started with: one started without the connection is never routed.
-    ...(unrouted ? { routed: false, model_provider: token(unrouted) } : {}),
+    ...routing,
   };
   const eventRecord = trace?.write('codex_event', base);
   if (!eventRecord || !eventRecord.ok && eventRecord.error !== 'recording_disabled') return {};
@@ -81,17 +81,23 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     if (!input) return {};
     const bridge = deps.env['JEV_CODEX_BRIDGE_URL'];
     const secret = deps.env['JEV_CODEX_BRIDGE_TOKEN'];
-    const started = (!bridge || !secret) && deps.env['JEV_CODEX_AUTO_CONNECT'] !== '0' ? startedSession(input) : null;
+    const startup = (!bridge || !secret) && deps.env['JEV_CODEX_AUTO_CONNECT'] !== '0' && input['hook_event_name'] === 'SessionStart' && input['source'] === 'startup';
+    const started = startup ? startedSession(input) : null;
     const provider = started?.['model_provider'];
-    const unrouted = typeof provider === 'string' && provider !== PROVIDER ? provider : undefined;
+    // Without start metadata (an ephemeral session has no transcript) only the connection owner, read before this hook may start one, is trusted:
+    // none means the session cannot have started connected; an unreadable or stopped one leaves it unknown, which is never reported as routed.
+    const owner = startup && !started ? connectionOwner(deps.env) : null;
+    const routing = typeof provider === 'string' && provider !== PROVIDER ? { routed: false, model_provider: token(provider) }
+      : owner === 'absent' ? { routed: false, model_provider: null } : owner === 'unknown' ? { routed: 'unknown', model_provider: null } : undefined;
     const opened = (deps.openTrace ?? openTraceDir)(codexTraceDir(deps.env), deps.env);
-    const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined, unrouted);
+    const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined, routing);
     if (!bridge || !secret) {
       if (deps.env['JEV_CODEX_AUTO_CONNECT'] === '0') return recorded;
       if (input['hook_event_name'] === 'SessionStart' && typeof input['model'] === 'string' && typeof input['cwd'] === 'string') await ensureConnection(dirname(dirname(fileURLToPath(import.meta.url))), deps.env);
       const policy = await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200));
       // The user sees these; the model does not. `codex exec` keeps its model and effort, so it needs no notice.
-      const notice = unrouted ? { systemMessage: `Jev Gate: this session started on model provider ${JSON.stringify(token(unrouted) ?? 'unknown')} without the Jev Gate connection, so Router and Compact do not apply to it. Start a new session once the connection is ready.` }
+      const notice = routing?.routed === false ? { systemMessage: `Jev Gate: this session started ${routing.model_provider ? `on model provider ${JSON.stringify(routing.model_provider)} ` : ''}without the Jev Gate connection, so Router and Compact do not apply to it. Start a new session once the connection is ready.` }
+        : routing ? { systemMessage: 'Jev Gate: Codex reported no start metadata for this session and the Jev Gate connection is unreadable or not running, so whether Router and Compact apply to it is unknown. Run doctor, then start a new session once the connection is ready.' }
         : started && started['originator'] !== 'codex_exec' ? { systemMessage: 'Jev Gate: Router may change the model and effort of this interactive session, including a model given with -m/--model; Codex reports no signal that separates it from config defaults. codex exec keeps its model and effort.' } : {};
       if (policy && Object.keys(policy).length) return { ...policy, ...notice };
       if (input['hook_event_name'] === 'SessionStart' && policy) return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' }, ...notice };

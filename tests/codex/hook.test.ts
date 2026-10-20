@@ -1,4 +1,5 @@
-import { mkdtempSync, readdirSync, readFileSync, lstatSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, lstatSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -74,6 +75,27 @@ describe('native Codex hook', () => {
       if (provider === 'openai' && source === 'startup') expect(event).toMatchObject({ event: 'SessionStart', routed: false, model_provider: 'openai' });
       else expect(event).not.toHaveProperty('routed');
       expect(JSON.stringify(event)).not.toContain('PRIVATE_INSTRUCTIONS');
+    } finally { request.mockRestore(); }
+  });
+
+  it.each([
+    ['no', null, false, 'without the Jev Gate connection'],
+    ['a live', process.pid, undefined, null],
+    ['a stopped', spawnSync(process.execPath, ['-e', '']).pid, 'unknown', 'is unknown'],
+  ] as const)('judges an ephemeral start without a transcript from %s connection owner', async (_owner, pid, routed, notice) => {
+    const path = dir(); const home = dir(); const token = 'f'.repeat(64);
+    if (pid) {
+      mkdirSync(join(home, 'jev-gate', 'connection'), { recursive: true, mode: 0o700 });
+      writeFileSync(join(home, 'jev-gate', 'connection', 'owner.json'), JSON.stringify({ version: 1, pid, port: 1, token, marker: 'marker', root: dir(), original: {}, installed: {} }), { mode: 0o600 });
+    }
+    const request = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no connection'));
+    try {
+      const result = await executeCodexHook({ stdin: stdin({ hook_event_name: 'SessionStart', session_id: 'session', source: 'startup', model: 'native-model', cwd: dir(), transcript_path: null, permission_mode: 'default' }), env: { JEV_CODEX_TRACE_DIR: path, CODEX_HOME: home } });
+      if (notice) expect(result['systemMessage']).toContain(notice); else expect(result).not.toHaveProperty('systemMessage');
+      expect(String(result['systemMessage'])).not.toContain('"unknown"');
+      const event = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
+      if (routed === undefined) expect(event).not.toHaveProperty('routed'); else expect(event).toMatchObject({ event: 'SessionStart', routed, model_provider: null });
+      expect(JSON.stringify([result, event])).not.toContain(token);
     } finally { request.mockRestore(); }
   });
 
