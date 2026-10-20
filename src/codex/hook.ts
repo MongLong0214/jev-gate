@@ -84,11 +84,11 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     const startup = (!bridge || !secret) && deps.env['JEV_CODEX_AUTO_CONNECT'] !== '0' && input['hook_event_name'] === 'SessionStart' && input['source'] === 'startup';
     const started = startup ? startedSession(input) : null;
     const provider = started?.['model_provider'];
-    // Without start metadata (an ephemeral session has no transcript) only the connection owner, read before this hook may start one, is trusted:
-    // none means the session cannot have started connected; an unreadable or stopped one leaves it unknown, which is never reported as routed.
+    // Without start metadata (an ephemeral session has no transcript, or it is unreadable or another session's) the provider is unknown, never routed;
+    // only an absent connection owner, read before this hook may start one, proves the session cannot have started connected. A live helper proves nothing.
     const owner = startup && !started ? connectionOwner(deps.env) : null;
     const routing = typeof provider === 'string' && provider !== PROVIDER ? { routed: false, model_provider: token(provider) }
-      : owner === 'absent' ? { routed: false, model_provider: null } : owner === 'unknown' ? { routed: 'unknown', model_provider: null } : undefined;
+      : owner === 'absent' ? { routed: false, model_provider: null } : owner ? { routed: 'unknown', model_provider: null } : undefined;
     const opened = (deps.openTrace ?? openTraceDir)(codexTraceDir(deps.env), deps.env);
     const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined, routing);
     if (!bridge || !secret) {
@@ -97,7 +97,7 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
       const policy = await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200));
       // The user sees these; the model does not. `codex exec` keeps its model and effort, so it needs no notice.
       const notice = routing?.routed === false ? { systemMessage: `Jev Gate: this session started ${routing.model_provider ? `on model provider ${JSON.stringify(routing.model_provider)} ` : ''}without the Jev Gate connection, so Router and Compact do not apply to it. Start a new session once the connection is ready.` }
-        : routing ? { systemMessage: 'Jev Gate: Codex reported no start metadata for this session and the Jev Gate connection is unreadable or not running, so whether Router and Compact apply to it is unknown. Run doctor, then start a new session once the connection is ready.' }
+        : routing ? { systemMessage: 'Jev Gate: Codex reported no usable start metadata for this session, so whether Router and Compact apply to it is unknown. Run doctor, then start a new session once the connection is ready.' }
         : started && started['originator'] !== 'codex_exec' ? { systemMessage: 'Jev Gate: Router may change the model and effort of this interactive session, including a model given with -m/--model; Codex reports no signal that separates it from config defaults. codex exec keeps its model and effort.' } : {};
       if (policy && Object.keys(policy).length) return { ...policy, ...notice };
       if (input['hook_event_name'] === 'SessionStart' && policy) return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router and Compact apply only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' }, ...notice };

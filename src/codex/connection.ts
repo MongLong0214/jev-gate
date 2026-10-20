@@ -101,15 +101,8 @@ export const connectionDiagnostic = async (env: Env): Promise<{ state: 'disabled
   if (!state) return { state: existsSync(statePath(env)) ? 'invalid' : 'absent', version: null };
   return { state: await healthy(state) ? 'ready' : 'unreachable', version: (await import('../release-info.js')).packageVersion(state.root, 'codex') };
 };
-/** #282: what a start hook can trust when a session reports no start metadata. Only the owner's root and pid are used; its token never leaves this module. */
-export const connectionOwner = (env: Env): 'absent' | 'live' | 'unknown' => {
-  try {
-    const state = read(env);
-    if (!state) return existsSync(statePath(env)) ? 'unknown' : 'absent';
-    try { process.kill(state.pid, 0); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') return 'unknown'; }
-    return existsSync(state.root) ? 'live' : 'unknown';
-  } catch { return 'unknown'; }
-};
+/** #282: whether a connection owner record exists. Its liveness proves nothing about the provider a session loaded; the MCP can start the helper independently. */
+export const connectionOwner = (env: Env): 'absent' | 'present' => existsSync(statePath(env)) ? 'present' : 'absent';
 const enabled = (env: Env): boolean => env['JEV_CODEX_AUTO_CONNECT'] !== '0' && env['JEV_CODEX_ENABLED'] !== '0' && !env['JEV_CODEX_BRIDGE_URL'];
 const packageVersion = (root: string): number => {
   try { const v = obj(JSON.parse(readFileSync(join(root, '.codex-plugin', 'plugin.json'), 'utf8')))?.['version']; const m = typeof v === 'string' && /^(\d+)\.(\d+)\.(\d+)$/.exec(v); return m ? Number(m[1]) * 1_000_000 + Number(m[2]) * 1000 + Number(m[3]) : -1; }
