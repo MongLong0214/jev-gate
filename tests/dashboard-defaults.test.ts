@@ -158,7 +158,7 @@ describe('independent recording',()=>{
     const setting=join(credentialsDir(env),'recording.json');files.set(setting,JSON.stringify({version:1,enabled:false}));
     recorder.log('jev-router {"event":"request","sent":true}');await recorder.flush();expect(readdirSync(dir)).toHaveLength(2);
     files.set(setting,JSON.stringify({version:1,enabled:true}));recorder.log('jev-router {"event":"root_result","observed":"haiku"}');await recorder.flush();expect(readdirSync(dir)).toHaveLength(3);
-    expect(readFileSync(join(dir,readdirSync(dir)[0]!),'utf8')).toContain('session_id');
+    for(const file of readdirSync(dir))expect(JSON.parse(readFileSync(join(dir,file),'utf8'))).toMatchObject({session_id:'session'});
   });
   it('merges both hosts without colliding sessions or request counts',()=>{
     const env=environment();const sources=dashboardSources(env);for(const source of sources.traceDirs!){mkdirSync(source.dir,{recursive:true});writeFileSync(join(source.dir,'record.json'),JSON.stringify({host:source.host,phase:'admission_result',session_id:'same',prompt_id:'same',request_id:source.host,attempted:true,written_at:new Date().toISOString(),http:{duration_ms:75},decision:{shape:'direct'}}))}

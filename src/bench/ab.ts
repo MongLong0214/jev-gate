@@ -393,7 +393,8 @@ const extraUsage = (lines: TranscriptLine[]): { write5m: number | null; write1h:
 export const sessionFacts = (traceDir: string, sid: string): { routed: Map<string, string>; jevInput: number | null; jevOutput: number | null; jevRequests: number; jevCost: number | null; marked: boolean } => {
   const routed = new Map<string, string>(); let jevInput: number | null = 0, jevOutput: number | null = 0, jevRequests = 0, jevCost: number | null = 0;
   const calls = new Map<string, { input: number | null; output: number | null; model: string | null }>();
-  const records = (existsSync(traceDir) ? readdirSync(traceDir) : []).map(file => readJson(join(traceDir, file))).filter((r): r is Record<string, unknown> => isRecord(r) && r['session_id'] === sid);
+  const records = (existsSync(traceDir) ? readdirSync(traceDir) : []).map(file => readJson(join(traceDir, file))).filter((r): r is Record<string, unknown> => isRecord(r) && r['session_id'] === sid)
+    .sort((a, b) => String(a['written_at'] ?? '').localeCompare(String(b['written_at'] ?? '')));
   const decisions = new Map(records.filter(r => r['phase'] === 'mod_router' && r['event'] === 'root' && isRecord(r['patch']) && typeof r['patch']['model'] === 'string').map(r => [r['turn'], (r['patch'] as Record<string, unknown>)['model']]));
   for (const r of records) {
     if (r['phase'] === 'mod_router' && r['event'] === 'root_result' && r['confirmation'] === 'confirmed' && typeof r['request_id'] === 'string' && typeof r['observed'] === 'string' && decisions.get(r['turn']) === r['observed']) routed.set(r['request_id'], r['observed']);

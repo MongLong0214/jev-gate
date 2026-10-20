@@ -183,9 +183,6 @@ export interface WorkerReply {
   blockers: string[];
 }
 
-/** T4: the pin that was requested and the model the host actually ran are different facts; an unknown id is neither. */
-export type ModelAgreement = 'match' | 'mismatch' | 'unverified';
-
 export type JobOutcome = 'completed' | 'incomplete' | 'blocked' | 'superseded';
 export type DeterministicVerdict = 'accept' | 'incomplete';
 export type ReceiptVerdict = DeterministicVerdict | 'invalid' | 'unknown';
