@@ -21,12 +21,12 @@
  *   node dist/bench/ab.js report --out DIR [--trace DIR]
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { recordingStatus } from '../recording.js';
+import { recordingPath, recordingStatus } from '../recording.js';
 import { estimateJevCostUsd, money } from './usage.js';
 
 export const CONDITIONS = ['A', 'B', 'C', 'D'] as const;
@@ -88,7 +88,11 @@ export interface CellResult {
   model?: string | undefined;
   /** `claude --version` right before the cell ran; null when it did not answer. Absent in results written before it. */
   host_version?: string | null;
-  /** Jev recording, the live switch every trace write reads, was on before the first turn and after the last. Absent in results written before it. */
+  /**
+   * The cell's trace can be complete: Jev recording was on before the first turn and after the last, its switch file
+   * (or, absent, the nearest folder that would hold it) was not written in between, no trace write the cell began was
+   * left unfinished, and no turn was killed by the timeout. Absent in results written before it.
+   */
   recording?: boolean;
   started_at: string;
   prime_wall_s: number;
@@ -127,6 +131,25 @@ export const cleanEnv = (env: NodeJS.ProcessEnv, mode: 'off' | 'auto'): NodeJS.P
   for (const key of Object.keys(out)) if (key.startsWith('GIT_')) delete out[key];
   return out;
 };
+
+/**
+ * Recording is a live switch: a file the user or host can rewrite at any time (src/recording.ts). The bench cannot pin
+ * it through the cell's environment, so it reads that the file was never written during the cell: its identity and
+ * change time, or those of the nearest folder that exists, the same before and after. A toggle and its undo still
+ * change it. Also the trace directory's names, to find a write the cell left unfinished.
+ */
+const recordingSnapshot = (env: NodeJS.ProcessEnv, traceDir: string): { on: boolean; stamp: string; names: Set<string> } => {
+  let stamp = 'unavailable';
+  try {
+    for (let path = recordingPath(env); ; path = dirname(path)) {
+      try { const s = lstatSync(path, { bigint: true }); stamp = `${path} ${s.ino} ${s.ctimeNs}`; break; } catch { if (dirname(path) === path) break; }
+    }
+  } catch { /* An unusable configuration directory leaves recording off (recordingStatus). */ }
+  return { on: recordingStatus(env).enabled, stamp, names: new Set(readdirSync(traceDir)) };
+};
+/** A failed or killed trace write leaves its `.tmp` (src/trace.ts) or a record that does not parse. */
+const unfinishedWrite = (traceDir: string, before: Set<string>, after: Set<string>): boolean =>
+  [...after].some(name => !before.has(name) && (name.endsWith('.tmp') || name.endsWith('.json') && !isRecord(readJson(join(traceDir, name)))));
 
 interface RunOptions {
   tasks: string;
@@ -221,7 +244,7 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
   const hostVersion = version.status === 0 ? String(version.stdout ?? '').trim() || null : null;
   const startedAt = new Date().toISOString();
   process.stdout.write(`run ${id} sid=${sid} cwd=${cwd} host=${String(hostVersion)} started=${startedAt}\n`);
-  const recordingBefore = recordingStatus(env).enabled;
+  const recordingBefore = recordingSnapshot(env, env['JEV_GATE_TRACE_DIR']);
   const p0 = Date.now();
   const prime = claude(['-p', file._prime, '--session-id', sid, ...common]);
   writeFileSync(join(R, `${id}.prime.json`), String(prime.stdout ?? ''));
@@ -242,8 +265,11 @@ export const runCell = (o: RunOptions, file: TasksFile, task: string, cond: Cond
     followups.push({ rc: result.status, timed_out: result.signal === 'SIGKILL', summary: finalSummary });
   }
   const t1 = Date.now();
-  const recording = recordingBefore && recordingStatus(env).enabled;
   const timedOut = prime.signal === 'SIGKILL' || work.signal === 'SIGKILL' || followups.some(f => f.timed_out);
+  const recordingAfter = recordingSnapshot(env, env['JEV_GATE_TRACE_DIR']);
+  // A killed turn can lose a record it had queued without leaving anything behind.
+  const recording = recordingBefore.on && recordingAfter.on && recordingBefore.stamp === recordingAfter.stamp && !timedOut
+    && !unfinishedWrite(env['JEV_GATE_TRACE_DIR'], recordingBefore.names, recordingAfter.names);
 
   let checkRc: number | null = null;
   if (spec.check) {
@@ -359,8 +385,9 @@ export const sessionFacts = (traceDir: string, sid: string): { routed: Map<strin
     if (r['phase'] === 'mod_router' && r['event'] === 'root_result' && r['confirmation'] === 'confirmed' && typeof r['request_id'] === 'string' && typeof r['observed'] === 'string' && decisions.get(r['turn']) === r['observed']) routed.set(r['request_id'], r['observed']);
     const hook = typeof r['request_id'] === 'string' && (String(r['phase']).endsWith('_intent') || r['attempted'] === true);
     const router = r['phase'] === 'mod_router' && (r['sent'] === true || r['event'] === 'late');
-    // A failed Compact selection records `jev_sent: null`: it may have reached Jev, so it is a request of unknown cost.
-    const compact = r['phase'] === 'mod_compact' && r['stage'] === 'jev' && (r['jev_sent'] === true || r['jev_sent'] === null);
+    // A failed Compact selection records `jev_sent: null` (the classic PreCompact path only `selection: 'error'` on its
+    // last record): it may have reached Jev, so it is a request of unknown cost.
+    const compact = r['phase'] === 'mod_compact' && (r['stage'] === 'jev' && (r['jev_sent'] === true || r['jev_sent'] === null) || r['path'] === 'classic' && 'guided' in r && r['selection'] === 'error');
     if (!hook && !router && !compact) continue;
     const binding = hook ? `gate:${String(r['request_id'])}` : router && typeof r['tool_use_id'] === 'string' ? `spawn:${r['tool_use_id']}`
       : router && typeof r['turn'] === 'string' ? JSON.stringify(['router', r['scope'], r['turn'], r['agent_id'] ?? null, r['index'] ?? null])
@@ -375,6 +402,11 @@ export const sessionFacts = (traceDir: string, sid: string): { routed: Map<strin
     // Intent/result and a late response are one call only when their native binding agrees.
     calls.set(binding, { input: input ?? previous?.input ?? null, output: output ?? previous?.output ?? null, model: model ?? previous?.model ?? null });
   }
+  // A Compact run that built its digest asks Jev and records a `jev` stage either way (mods/compact/hooks/register.ts):
+  // started with neither that stage nor a `fallback` (no digest, no ask), its receipt was lost.
+  const compactRuns = (has: (r: Record<string, unknown>) => boolean) => new Set(records.filter(r => r['phase'] === 'mod_compact' && typeof r['run_id'] === 'string' && has(r)).map(r => r['run_id']));
+  const settled = compactRuns(r => r['stage'] === 'jev' || 'fallback' in r);
+  for (const run of compactRuns(r => r['stage'] === 'started')) if (!settled.has(run)) calls.set(`compact:${String(run)}`, { input: null, output: null, model: null });
   jevRequests = calls.size;
   for (const { input, output, model } of calls.values()) {
     jevInput = jevInput !== null && input !== null ? jevInput + input : null;

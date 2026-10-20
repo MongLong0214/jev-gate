@@ -55,6 +55,21 @@ describe('bench ab (#130)', () => {
     writeFileSync(join(dir, 'compact-error.json'), JSON.stringify({ phase: 'mod_compact', stage: 'jev', selection: 'error', jev_sent: null, invocation_id: 'e', session_id: 'sid' }));
     expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 4, jevInput: null, jevCost: null });
     rmSync(join(dir, 'compact-error.json'));
+    // The classic PreCompact path records a failed selection only on its last record.
+    writeFileSync(join(dir, 'classic-error.json'), JSON.stringify({ phase: 'mod_compact', event: 'compact', path: 'classic', stage: 'pre', guided: true, selection: 'error', invocation_id: 'ce', session_id: 'sid' }));
+    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 4, jevCost: null });
+    rmSync(join(dir, 'classic-error.json'));
+    // A Compact run that built its digest always records a `jev` stage; started without it or a fallback, it was lost.
+    const compactRun = (name: string, value: object) => writeFileSync(join(dir, name), JSON.stringify({ phase: 'mod_compact', event: 'compact', run_id: 'r', session_id: 'sid', ...value }));
+    compactRun('run-start.json', { stage: 'started' });
+    compactRun('run-end.json', { applied: true, digestChars: 10 });
+    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 4, jevCost: null });
+    compactRun('run-end.json', { applied: false, fallback: 'too_short' });
+    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 3, jevInput: 100 });
+    compactRun('run-end.json', { applied: true, digestChars: 10 });
+    compactRun('run-jev.json', { stage: 'jev', jev_sent: false, selection: 'key_missing' });
+    expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 3, jevInput: 100 });
+    for (const name of ['run-start.json', 'run-end.json', 'run-jev.json']) rmSync(join(dir, name));
     writeFileSync(join(dir, 'lost.json'), JSON.stringify({ phase: 'pre_intent', request_id: 'lost', session_id: 'sid' }));
     expect(sessionFacts(dir, 'sid')).toMatchObject({ jevRequests: 4, jevInput: null, jevOutput: null, jevCost: null });
     rmSync(dir, { recursive: true });
@@ -243,7 +258,8 @@ describe('bench ab (#130)', () => {
     try {
       const cli = join(dir, 'fake-claude.mjs');
       writeFileSync(cli, `#!/usr/bin/env node
-import { mkdirSync, appendFileSync } from 'node:fs';
+import { mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 const args = process.argv.slice(2);
 const flag = n => args[args.indexOf(n)+1];
@@ -252,6 +268,10 @@ const prime = args.includes('--session-id');
 const sid = flag(prime ? '--session-id' : '--resume');
 if (!process.env.JEV_GATE_STATE_DIR || !process.env.JEV_GATE_TRACE_DIR || process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS !== '1') process.exit(3);
 const root = join(process.env.HOME, '.claude', 'projects', 'fixture'); mkdirSync(root, { recursive: true });
+// Recording turned off and back on during the turn, in place; or a trace write left unfinished.
+const switchFile = join(process.env.HOME, '.config', 'jev-gate', 'auth', 'recording.json');
+if (process.env.AB_FAKE_ACT === 'toggle') for (const enabled of [false, true]) writeFileSync(switchFile, JSON.stringify({ version: 1, enabled }));
+if (process.env.AB_FAKE_ACT === 'lose') writeFileSync(join(process.env.JEV_GATE_TRACE_DIR, '.mod_router-' + randomUUID() + '.tmp'), '{"ev');
 for (const record of [{ type:'user', timestamp:new Date().toISOString(), message:{content:flag('-p')} }, { type:'assistant', timestamp:new Date().toISOString(), message:{id:prime?'p':flag('-p'), model:flag('--model'), usage:{input_tokens:5,output_tokens:2,cache_read_input_tokens:0,cache_creation_input_tokens:0},content:[]} }]) appendFileSync(join(root,sid+'.jsonl'),JSON.stringify(record)+'\\n');
 console.log(JSON.stringify({result:'SUCCESS', session_id:sid, total_cost_usd:0.01}));
 `);
@@ -273,6 +293,16 @@ console.log(JSON.stringify({result:'SUCCESS', session_id:sid, total_cost_usd:0.0
       expect(cell).toMatchObject({ rc:0, prime_rc:0, check_rc:0, host_version:'9.9.9 (Claude Code)', recording:true });
       const on = JSON.parse(readFileSync(join(out,'results','S-B-1.json'),'utf8')) as CellResult;
       expect(rowOf(on,inputs,join(dir,'.claude','projects','fixture',on.sid+'.jsonl'),join(out,'trace'))).toMatchObject({ jev_requests:0, jev_cost:0 });
+      // On before and after is not on throughout: a toggle and its undo during the cell, or a write it left unfinished,
+      // leaves the cell unproven and its Jev cost unknown.
+      for (const act of ['toggle', 'lose']) {
+        process.env['AB_FAKE_ACT'] = act;
+        rmSync(join(out,'results'),{recursive:true});
+        try { run(args); } finally { delete process.env['AB_FAKE_ACT']; }
+        const unproven = JSON.parse(readFileSync(join(out,'results','S-B-1.json'),'utf8')) as CellResult;
+        expect(unproven.recording, act).toBe(false);
+        expect(rowOf(unproven,inputs,join(dir,'.claude','projects','fixture',unproven.sid+'.jsonl'),join(out,'trace')), act).toMatchObject({ jev_requests:0, jev_cost:null });
+      }
       const transcript = join(dir,'.claude','projects','fixture',cell.sid+'.jsonl');
       expect(rowOf(cell,inputs,transcript,join(out,'trace'))).toMatchObject({ ok:true,total_tokens:21 });
       const before = readFileSync(join(out,'plan.json'),'utf8'); run(args);

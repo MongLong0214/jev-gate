@@ -1398,6 +1398,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const toolClass = byTools ? await spawnToolClass(engine, e, live) : null;
     const state = routingContext(e.prompt); Object.assign(state.task, { description: e.description, subagent_type: e.subagentType, source: 'child_contract' });
     const started = engine.now();
+    // The `spawn` receipt is the applied route; a final guard that stops the route leaves this sent intent without one,
+    // so its Jev cost reads as unknown rather than none.
     const result = await client.assess(engine, key.key, state, offer.questions, live, usage => log(engine, { event: 'late', scope: 'spawn', tool_use_id: e.tool_use_id, usage: loggable(usage) }),
       () => log(engine, { event: 'request', scope: 'spawn', tool_use_id: e.tool_use_id, sent: true }));
     // The dashboard counts a Jev call by its duration, as for root and child steps (#267).
@@ -1421,16 +1423,15 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       : toolClass === null && claudeTargetAllowed(baselineModel, allowFable) ? 'tool_unknown'
         : baseRank === undefined || targetRank === undefined || targetRank > baseRank ? 'tool_ceiling' : null;
     if (toolHold) target = null;
-    // The receipt precedes every return below: a request sent is billed whether or not its route is applied.
+    if (!target && !claudeTargetAllowed(baselineModel, allowFable)) return denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.');
+    const nowAvailable = await within(engine.availableModels().catch(() => []), live);
+    const nowPins = await within(pinsOf(engine, 'spawn', live), live);
+    if (target && (nowPins.subagentModel || nowPins.aliasRemap && !engine.modelAliases || !claudeTargetAllowed(target, await within(frontierFor(engine), live)) || !claudeModelAllowed(target, nowAvailable, aliases))) { log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, requested: target, reason: nowPins.subagentModel ? 'subagent_model_pinned' : nowPins.aliasRemap && !engine.modelAliases ? 'alias_remapped' : 'target_not_allowed' }); return null; }
     log(engine, { event: 'spawn', scope: 'subagent', boundary: 'host_hook', tool_use_id: e.tool_use_id, type: typeLabel(e), from: baselineModel, assessment: 'ok', sent: true, jev_model: JEV_MODEL, ...timing,
       usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, cost, cost_reason: costReason, reasons: { ...selected.reasons, ...(bound ? { model: bound.reason } : {}), ...(hold ? { model: costReason } : {}), ...(toolHold ? { model: toolHold } : {}) },
       spawn_tool_class: toolClass, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
       discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: allowFable,
       selection: selected.diagnostics, answers: pairReceipt(offer, result.answers) });
-    if (!target && !claudeTargetAllowed(baselineModel, allowFable)) return denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.');
-    const nowAvailable = await within(engine.availableModels().catch(() => []), live);
-    const nowPins = await within(pinsOf(engine, 'spawn', live), live);
-    if (target && (nowPins.subagentModel || nowPins.aliasRemap && !engine.modelAliases || !claudeTargetAllowed(target, await within(frontierFor(engine), live)) || !claudeModelAllowed(target, nowAvailable, aliases))) { log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, requested: target, reason: nowPins.subagentModel ? 'subagent_model_pinned' : nowPins.aliasRemap && !engine.modelAliases ? 'alias_remapped' : 'target_not_allowed' }); return null; }
     return { target, answers: {}, pair: { offer, raw: result.answers } };
   };
 
