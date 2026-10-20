@@ -48,7 +48,8 @@ const ASSIGNMENT_VALUE = String.raw`(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\x60([^\x60\r
 const CREDENTIAL_KEYS = String.raw`authorization|auth|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|(?:access|refresh|id)[_-]?token|client[_-]?secret|password|passwd|pwd|secret|token|credentials?|aws_access_key_id|aws_secret_access_key|aws_session_token`;
 const CREDENTIAL_KEY = new RegExp(String.raw`^(?:${CREDENTIAL_KEYS})$`, 'i');
 const GENERIC_CREDENTIAL_KEY = /^(?:authorization|auth|pwd|secret|token|credentials?)$/i;
-const CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_KEYS})\b["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
+// Shell/.env assignments may prefix the key with an application name (`DB_PASSWORD`), at the start of a line.
+const CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:\b|^[ \t]*(?:export[ \t]+)?[A-Z_][A-Z0-9_]*_)(${CREDENTIAL_KEYS})\b["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gim');
 const COOKIE_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-][\w.-]*|cookie|token|session)?)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
 const NETRC_PASSWORD = new RegExp(String.raw`^[ \t]*(password)[ \t]+` + ASSIGNMENT_VALUE + String.raw`[ \t]*\r?$`, 'gim');
 
@@ -65,14 +66,18 @@ const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolea
     const quoted = match[5] === undefined;
     const hasDigit = /\d/.test(value);
     const identifier = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(value);
-    // Digit-bearing literals such as canary123 remain eligible; dotted paths always name another value.
-    const reference = identifier && (!hasDigit || value.includes('.'));
+    const generic = pattern === COOKIE_ASSIGNMENT || GENERIC_CREDENTIAL_KEY.test(match[1]!);
+    // Dotted paths always name another value. Strong keys permit alphabetic literals, excluding primitive/type
+    // names; generic keys and session cookies still exclude digit-free identifiers such as tokenValue.
+    const reference = identifier && (value.includes('.') || (generic ? !hasDigit
+      : /^(?:string|number|bigint|boolean|symbol|object|undefined|null|any|unknown|never|void)$/i.test(value)));
     if (!quoted && (reference || /^[~/]/.test(value)
       || /^\s*(?:[.(\[]|\?\.)/.test(text.slice(match.index! + match[0].length)))) continue;
     // Bare session cookies retain D1's eight-character threshold, excluding names even when quoted.
     if (pattern === COOKIE_ASSIGNMENT) { if (!reference) return true; continue; }
-    // Only strong keys make a short quoted literal sufficient. Generic keys and every unquoted value need shape.
-    if (quoted && !GENERIC_CREDENTIAL_KEY.test(match[1]!)) return true;
+    // Strong keys accept any quoted literal, or an unquoted literal of at least eight characters. Generic keys
+    // retain their value-shape thresholds, including quoted options such as credentials: 'include'.
+    if (!generic && (quoted || value.length >= 8)) return true;
     if ((value.length >= 8 && hasDigit)
       || (value.length >= 16 && /^[A-Za-z0-9_%+./~:=@!-]+$/.test(value) && !identifier)) return true;
   }

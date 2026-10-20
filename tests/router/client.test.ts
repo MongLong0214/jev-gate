@@ -67,6 +67,17 @@ describe('the one request', () => {
     expect(x.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    'PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
+    'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue',
+  ])('G1: refuses unquoted strong credentials without sending: %s', async text => {
+    const x = transport(() => GOOD);
+    expect(await createClient({ timeoutMs: 800 }).assess(x.t, FAKE_KEY, { task: { text } }, QUESTIONS)).toMatchObject({
+      ok: false, reason: 'input_secret', sent: false, requestBytes: null,
+    });
+    expect(x.fetch).not.toHaveBeenCalled();
+  });
+
   it('maps statuses to closed reasons, keeps the usage a refusal reports, and never retries', async () => {
     const cases: Array<[number, string]> = [
       [400, 'rejected_input'],

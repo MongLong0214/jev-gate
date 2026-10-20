@@ -72,8 +72,11 @@ describe('responsive native background contracts', () => {
     }
   });
 
-  it.each([false, true])('F1: removes JSON credentials from Claude settlement and replay (direct=%s)', async direct => {
-    const text = '{"password":"canary-pw-123","api_key":"canary-key-456"}';
+  it.each([false, true].flatMap(direct => [
+    { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
+    ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
+      'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
+  ].map(test => ({ ...test, direct }))))('F1/G1: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
     const fields = { status: 'blocked', summary: text, blockers: [text, 'Needs integration'], interfaces: ['integrate(): void'] };
     const f = await fixture(direct, fields); await f.launch(); f.transcript();
     const terminal = await f.terminal();
@@ -91,7 +94,7 @@ describe('responsive native background contracts', () => {
     const persisted = JSON.parse(disk);
     for (const output of [JSON.stringify(persisted.current.receipts[0]), disk, JSON.stringify(f.job()), context, JSON.stringify(terminal), JSON.stringify(replay),
       readFileSync(jobPath(foreground.env, 's'), 'utf8'), JSON.stringify(post)]) {
-      for (const canary of ['canary-pw-123', 'canary-key-456']) expect(output).not.toContain(canary);
+      for (const canary of canaries) expect(output).not.toContain(canary);
     }
     for (const output of [context, JSON.stringify(replay), JSON.stringify(post)]) expect(output).toContain('Needs integration');
   });

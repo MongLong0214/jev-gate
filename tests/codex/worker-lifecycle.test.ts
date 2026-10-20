@@ -112,8 +112,11 @@ describe('Codex status collection and deny tracing (#293)', () => {
     }
   });
 
-  it.each([false, true])('F1: removes JSON credentials from Codex foreground, status and background replay (background=%s)', async background => {
-    const text = '{"password":"canary-pw-123","api_key":"canary-key-456"}';
+  it.each([false, true].flatMap(background => [
+    { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
+    ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
+      'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
+  ].map(test => ({ ...test, background }))))('F1/G1: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
     const f = await setup('normal'); const launch = f.launch(background);
     await vi.waitFor(() => expect(f.started()).toBe(true)); if (background) await launch;
     f.terminal('completed', JSON.stringify({ status: 'blocked', summary: text, blockers: [text, 'Needs integration'], interfaces: ['integrate(): void'], checks: [] }));
@@ -128,7 +131,7 @@ describe('Codex status collection and deny tracing (#293)', () => {
     const replay = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
     for (const output of [JSON.stringify(persisted.current.receipts[0]), disk, JSON.stringify(f.job()), JSON.stringify(f.returned()), status,
       ...(background ? [f.job().current.background_context!] : []), JSON.stringify(replay)]) {
-      for (const canary of ['canary-pw-123', 'canary-key-456']) expect(output).not.toContain(canary);
+      for (const canary of canaries) expect(output).not.toContain(canary);
     }
     expect(status).toContain('Needs integration');
     if (background) expect(JSON.stringify(replay)).toContain('Needs integration');
