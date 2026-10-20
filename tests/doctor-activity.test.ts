@@ -147,6 +147,47 @@ describe('activity: router_cost', () => {
     expect(c.message).toMatch(/1 routed root requests off their turn's baseline model over 1 switches; net -\$0\.\d\d at 5m \/ -\$0\.\d\d at 1h/);
   });
 
+  it.each(['input', 'cache_read', 'cache_creation', 'output'])('ACT-USAGE-01 keeps a losing return with missing %s unknown', (counter) => {
+    const rows = losing(), returning = rows.at(-1)!;
+    delete (returning['usage'] as Rec)[counter];
+    const c = check(run(rows), 'router_cost');
+    expect(c).toMatchObject({ level: 'warn', message: expect.stringContaining('unknown/untracked') });
+    expect(c.message).toContain('1 root requests with incomplete usage; 1 sessions excluded');
+    expect(c.message).not.toContain('net ');
+  });
+
+  it('ACT-USAGE-01 computes explicit zero counters', () => {
+    const c = check(run(result('claude-haiku-5-5', { input: 0, cache_read: 0, cache_creation: 0, output: 2000 }, 5)), 'router_cost');
+    expect(c.level).toBe('ok');
+    expect(c.message).toMatch(/net \+\$0\.04 at 5m \/ \+\$0\.04 at 1h/);
+    expect(c.message).not.toContain('unknown');
+    const zero = check(run(result('claude-haiku-5-5', { input: 0, cache_read: 0, cache_creation: 0, output: 0 }, 5)), 'router_cost');
+    expect(zero.level).toBe('ok');
+    expect(zero.message).toContain('net +$0.00 at 5m / +$0.00 at 1h');
+  });
+
+  it.each(['input', 'cache_read', 'cache_creation', 'output'])('ACT-USAGE-01 distinguishes mixed zero and missing %s', (counter) => {
+    const usage: Rec = { input: 0, cache_read: 0, cache_creation: 0, output: 2000 };
+    delete usage[counter];
+    const c = check(run(result('claude-haiku-5-5', usage, 5)), 'router_cost');
+    expect(c).toMatchObject({ level: 'warn', message: expect.stringContaining('unknown/untracked') });
+    expect(c.message).not.toContain('net ');
+  });
+
+  it('ACT-USAGE-01 excludes partial accounting even with numeric counters', () => {
+    const rows = losing();
+    rows.at(-1)!['accounting'] = { coverage: 'partial' };
+    const c = check(run(rows), 'router_cost');
+    expect(c).toMatchObject({ level: 'warn', message: expect.stringContaining('unknown/untracked') });
+    expect(c.message).not.toContain('net ');
+  });
+
+  it('ACT-USAGE-01 prevents a positive verdict with partial accounting', () => {
+    const positive = result('claude-haiku-5-5', { input: 0, cache_read: 0, cache_creation: 0, output: 2000 }, 5);
+    positive.at(-1)!['accounting'] = { coverage: 'partial' };
+    expect(check(run(positive), 'router_cost').level).toBe('warn');
+  });
+
   it('gives native requests in another session no savings, so they cannot hide a loss', () => {
     const native = (minutes: number): Rec => router('root_result', { session_id: 's2', turn: 'n', index: minutes, requested: 'claude-haiku-5-5', observed: 'claude-haiku-5-5', usage: { input: 2, output: 2000, cache_read: 50_000, cache_creation: 1000 } }, minutes);
     const rows = losing(), alone = check(run(rows), 'router_cost');
