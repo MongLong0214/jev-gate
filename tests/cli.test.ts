@@ -135,6 +135,8 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     sharedDist = join(tmp, 'shared-dist');
     const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', sharedDist], { encoding: 'utf8' });
     expect(r.status, r.stdout + r.stderr).toBe(0);
+    const codex = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(sharedDist, 'codex')], { encoding: 'utf8' });
+    expect(codex.status, codex.stdout + codex.stderr).toBe(0);
   }, 60_000);
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -158,6 +160,23 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const r = spawnSync(process.execPath, [join(pluginRoot, 'dist', 'cli.js'), 'doctor', '--verbose'], { encoding: 'utf8', env: { PATH: '/nonexistent', HOME: home, ...extraEnv } });
     return { status: r.status, stdout: r.stdout };
   };
+
+  it.each(['claude', 'codex'])('C3: %s doctor CLI never prints cookie-bearing legacy rejection or failure prose', host => {
+    const pluginRoot = preparePluginRoot(), trace = join(tmp, `legacy-${host}`), home = join(tmp, `legacy-home-${host}`);
+    mkdirSync(trace); mkdirSync(home);
+    const canary = 'sessionid=canary123', reason = `check curl --cookie ${canary}: result malformed`;
+    const records = [{ phase: 'post', subagent_type: 'jev-gate:worker', verdict: 'invalid', verdict_reason: reason },
+      { phase: 'background_terminal', status: 'failed', verdict_reason: reason },
+      { phase: 'failure', error_first_line: reason, failure_category: reason, verdict_reason: reason }];
+    records.forEach((r, i) => writeFileSync(join(trace, `legacy-${i}.json`), JSON.stringify({ host, session_id: 'legacy', written_at: new Date().toISOString(), ...r })));
+    const entry = host === 'codex' ? join(pluginRoot, 'dist/codex/cli.mjs') : join(pluginRoot, 'dist/cli.js');
+    const result = spawnSync(process.execPath, [entry, 'doctor', '--verbose'], { encoding: 'utf8',
+      env: { PATH: '/nonexistent', HOME: home, JEV_GATE_TRACE_DIR: trace, JEV_CODEX_TRACE_DIR: trace } });
+    // No host CLI or installed package is supplied; the activity output still runs, without authentication or inference.
+    expect(result.status).toBe(1);
+    expect(result.stdout, result.stderr).toContain('invalid_reply'); expect(result.stdout).toContain('worker_result_unknown');
+    expect(result.stdout + result.stderr).not.toContain(canary);
+  });
 
   it('prints every Gate cleanup reason from activity fixtures', () => {
     const pluginRoot = preparePluginRoot(), trace = join(tmp, 'cleanup-reasons'); mkdirSync(trace);

@@ -2,6 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, read
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { looksSecret } from './outbound-text.js';
 import { dirname, join } from 'node:path';
+import { codexFailureReason, verdictReason, workerTraceData } from './worker-record.js';
 
 /**
  * Reads a `JEV_GATE_TRACE_DIR` and says what the gate did, in the order it did it.
@@ -80,8 +81,9 @@ const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats, k
     if (!stat.isFile() || stat.size > 512_000) return null;
     const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'));
     if (!isRecord(parsed)) return null;
-    cache?.set(key, { signature: signature(stat), record: parsed });
-    return parsed;
+    const record = workerTraceData(String(parsed['phase']), parsed);
+    cache?.set(key, { signature: signature(stat), record });
+    return record;
   } catch (err) { cache?.delete(key); return gone(err); }
   finally { if (fd !== undefined) closeSync(fd); }
 };
@@ -97,8 +99,9 @@ const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats, 
     if (!opened.isFile() || opened.size > 512_000) return null;
     const parsed: unknown = JSON.parse(await handle.readFile('utf8'));
     if (!isRecord(parsed)) return null;
-    cache.set(key, { signature: signature(opened), record: parsed });
-    return parsed;
+    const record = workerTraceData(String(parsed['phase']), parsed);
+    cache.set(key, { signature: signature(opened), record });
+    return record;
   } catch (err) { cache.delete(key); return gone(err); }
   finally { await handle?.close().catch(() => undefined); }
 };
@@ -322,7 +325,7 @@ const requestedResolved = (r: Rec): string => {
 /** One named list from a check verification, left out when it is empty. */
 const checkList = (v: Rec, key: string): string => {
   const ids = Array.isArray(v[key]) ? (v[key] as unknown[]).filter((x): x is string => typeof x === 'string') : [];
-  return ids.length === 0 ? '' : `, ${key} ${ids.join(' ')}`;
+  return ids.length === 0 ? '' : `, ${key} ${ids.every(id => /^#[0-9]{1,4}$/.test(id)) ? ids.join(' ') : `${ids.length} check(s)`}`;
 };
 
 const resultLine = (r: Rec): string => {
@@ -333,7 +336,7 @@ const resultLine = (r: Rec): string => {
   }
   const attempt = num(r['attempt']);
   const verdict = str(r['verdict']) ?? 'no verdict';
-  const reason = str(r['verdict_reason']);
+  const reason = verdictReason(verdict, r['verdict_reason'])?.[0] ?? null;
   const tr = sub(r, 'tool_response');
   const ms = tr ? num(tr['totalDurationMs']) : null;
   const tools = tr ? num(tr['totalToolUseCount']) : null;
@@ -354,7 +357,7 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
     case 'failure': {
       const ms = num(r['duration_ms']);
       const subagent = str(r['subagent_type']);
-      return `failure  ${str(r['error_first_line']) ?? 'no message recorded'}${ms === null ? '' : `  after ${ms}ms`}${subagent ? `  (${subagent})` : ''}${requestedResolved(r)}`;
+      return `failure  ${codexFailureReason(r) ?? verdictReason('', r['verdict_reason'])?.[0] ?? 'no message recorded'}${ms === null ? '' : `  after ${ms}ms`}${subagent ? `  (${subagent})` : ''}${requestedResolved(r)}`;
     }
     case 'stop':
       return `stop     ${str(r['outcome']) ?? 'no outcome recorded'}`;
@@ -383,7 +386,8 @@ export const explainRecords = (read: TraceRead): string[] => {
     return out;
   }
   const bySession = new Map<string, Rec[]>();
-  for (const r of allocatedTraceRecords(read.records)) {
+  for (const raw of allocatedTraceRecords(read.records)) {
+    const r = workerTraceData(String(raw['phase']), raw);
     const key = str(r['session_id']) ?? '(no session id)';
     const list = bySession.get(key);
     if (list) list.push(r);

@@ -26,10 +26,10 @@ afterEach(() => {
   renameFailure.file = ''; renameFailure.claim = ''; renameFailure.calls = 0;
   roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true }));
 });
-const fixture = async (direct = false, reportFields: Record<string, unknown> = {}) => {
+const fixture = async (direct = false, reportFields: Record<string, unknown> = {}, workerIsolation: 'none' | 'worktree' = 'none') => {
   const root = mkdtempSync('/tmp/jev-bg-unit-'); roots.push(root);
   const cfg = join(root, 'config.json');
-  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native' }));
+  writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', workerIsolation }));
   const env = { JEV_GATE_TRACE_DIR: join(root, 'trace'), HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' };
   const parent = join(root, 's.jsonl'); writeFileSync(parent, '');
   const run = (event: Record<string, unknown>, fetchImpl?: typeof fetch) => runHook({ env, ...(fetchImpl ? { fetchImpl } : {}), stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() });
@@ -51,6 +51,25 @@ const fixture = async (direct = false, reportFields: Record<string, unknown> = {
 };
 
 describe('responsive native background contracts', () => {
+  it('C1: retains functional Claude settlement and replay fields while dropping unscreened commands and notes', async () => {
+    const command = 'printf sessionid=canary123', note = 'sessionid=canary123_note';
+    const fields = { status: 'blocked', summary: 'Functional Claude result', changed_files: ['src/claude-result.ts'], interfaces: ['integrate(): void'], blockers: ['Needs integration'],
+      checks: [{ check_id: command, result: 'pass', note, observed_output: note, error: note }] };
+    for (const isolation of ['none', 'worktree'] as const) {
+      const f = await fixture(false, fields, isolation); await f.launch(); f.transcript(); await f.terminal();
+      const replay = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
+      const context = f.job().current.background_context!;
+      const foreground = await fixture(false, fields, isolation); foreground.transcript();
+      const post = await foreground.run({ hook_event_name: 'PostToolUse', prompt_id: 'original', tool_name: 'Agent', tool_use_id: 'dispatch', tool_input: foreground.input,
+        tool_response: { status: 'completed', agentId: 'worker', content: [{ type: 'text', text: foreground.report }] } });
+      expect(JSON.parse(post.stdout!).hookSpecificOutput.additionalContext).toBe(context);
+      for (const value of [context, JSON.stringify(replay), readFileSync(jobPath(f.env, 's'), 'utf8')]) {
+        expect(value).not.toContain('sessionid=canary123');
+        for (const text of ['Functional Claude result', 'src/claude-result.ts', 'integrate(): void', 'Needs integration']) expect(value).toContain(text);
+      }
+    }
+  });
+
   it.each([false, true])('B3: strips report prose from Claude background settlement and replay (direct=%s)', async direct => {
     const sentinel = 'B3_SYNTHETIC_CLAUDE_BACKGROUND_SENTINEL';
     const text = `echo ${sentinel}; Bearer synthetic-${sentinel}`;
@@ -63,7 +82,7 @@ describe('responsive native background contracts', () => {
       { type: 'user', agentId: 'worker', sessionId: 's', message: { content: [{ type: 'tool_result', tool_use_id: 'check', content: text }] } });
     writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
     const terminal = await f.terminal();
-    expect(f.job().current.receipts[0]?.reply).toEqual({ status: 'done', checks: [{ check_id: '#1', result: 'pass' }] });
+    expect(f.job().current.receipts[0]?.reply).toEqual({ status: 'done', changed_files: [], interfaces: [], blockers: [], checks: [{ check_id: '#1', result: 'pass' }] });
     const replay = await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'delivery', prompt: 'Explain the result.' });
     const trace = readdirSync(join(f.root, 'trace')).map(file => readFileSync(join(f.root, 'trace', file), 'utf8')).join('\n');
     for (const output of [readFileSync(jobPath(f.env, 's'), 'utf8'), f.job().current.background_context, JSON.stringify(terminal), JSON.stringify(replay), trace]) expect.soft(output).not.toContain(sentinel);

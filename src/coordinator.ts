@@ -1,6 +1,7 @@
-import type { DenyReason, RoutingMode, Tier } from './types.js';
+import type { DenyReason, Receipt, RoutingMode, Tier } from './types.js';
+import { workerReceipt } from './plan.js';
 
-/** All coordinator text is fixed (D10): it never contains the user's prompt, repository content or a Jev answer's text. */
+/** Guidance is fixed (D10); worker deliveries append only the shared, screened receipt projection. */
 export const GUIDANCE_HEADER = '[Jev Gate coordinator guidance for this session]';
 
 /**
@@ -98,13 +99,33 @@ export const renderSingleResult = (
         : verdict === 'invalid'
           ? `[Jev Gate result] The single-executor dispatch replied in a shape this plugin could not read (${bounded(reason)}). Nothing about the work is settled; dispatch it again or finish it another way.`
           : `[Jev Gate result] The single-executor dispatch reported that it did not finish (${bounded(reason)}). Dispatch it again with what was wrong.`;
-  const format = opts.formatHint ? ` This appears to be a check-command format mismatch. Closest executed command per unmatched check: ${bounded(opts.formatHint)}. Run each reported check_id as its own exact Bash command, with no ; echo, pipe, or output suffix. Retry the same worker profile and model; this formatting retry does not use one of the two charged attempts.` : '';
+  const format = opts.formatHint ? ` This appears to be a check-command format mismatch for ${bounded(opts.formatHint)}. Run each reported check_id as its own exact Bash command, with no ; echo, pipe, or output suffix. Retry the same worker profile and model; this formatting retry does not use one of the two charged attempts.` : '';
   const handoff =
     opts.rootFallbackReason === 'accepted'
-      ? ' The worker actually ended and no Agent remains active. Continue review, integration and reporting in this session; this is not a claim of complete requirements verification.'
+      ? ' The worker actually ended and no owned execution remains active. Continue review, integration and reporting in this session; this is not a claim of complete requirements verification.'
       : '';
   return result + (opts.checks ? ` ${opts.checks}` : '') + handoff + format;
 };
 
 export const renderAdhocResult = (verdict: string, reason: string, checks: string): string =>
   `[Jev Gate result] The bounded worker ended with verdict ${verdict}${reason ? ` (${bounded(reason)})` : ''}. Integrate this subtask result in the main session; the overall user request remains yours to complete. ${checks}`;
+
+/** Every owned delivery uses the same functional projection and positional evidence, including legacy replay. */
+export const renderWorkerDelivery = (raw: Receipt, opts: { single?: boolean; rootFallback?: boolean; rootFallbackReason?: 'attempt_cap' | 'accepted' } = {}): string => {
+  const receipt = workerReceipt(raw), verification = receipt.verification;
+  const passed = receipt.reply?.checks.filter(check => check.result === 'pass').length ?? 0;
+  const rejected = verification ? [...verification.contradicted, ...verification.stale, ...verification.unobserved] : [];
+  const confirmed = verification && verification.transcript !== 'unavailable' && !rejected.includes('unmapped')
+    ? receipt.reply?.checks.filter(check => check.result === 'pass' && !rejected.includes(check.check_id)).length ?? 0 : 0;
+  const checks = verification
+    ? `Check evidence: reported pass ${passed}; confirmed command pass ${confirmed}; transcript ${verification.transcript}; contradicted ${verification.contradicted.length}; stale ${verification.stale.length}; unobserved ${verification.unobserved.length}. Confirmation covers matched command runs and observed edit timing only; this does not establish requirement coverage.`
+    : 'Check evidence: observation disabled or unavailable. No verified pass is claimed.';
+  const guidance = opts.single
+    ? renderSingleResult(receipt.verdict as 'accept' | 'incomplete' | 'unknown' | 'invalid', receipt.verdict_reason ?? '', {
+      ...opts, checks, formatHint: receipt.evidence_format_only ? verification?.unobserved.map(id => `check ${id}`).join(', ') || 'reported checks' : '',
+    })
+    : renderAdhocResult(receipt.verdict, receipt.verdict_reason ?? '', checks);
+  const worktree = receipt.worker_worktree;
+  const integration = worktree ? `\nWorker worktree: ${worktree.path}\nBranch: ${worktree.branch}\nSnapshot baseline: ${worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : '';
+  return `${receipt.reply ? JSON.stringify({ ...receipt.reply, ...(verification ? { verification } : {}) }) : 'No usable worker report.'}\n\n${guidance}${integration}`;
+};

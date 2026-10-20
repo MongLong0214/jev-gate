@@ -11,6 +11,7 @@ import { readTraceRecords, type TraceRead } from './explain.js';
 import type { Host } from './host-support.js';
 import { LIVENESS_WINDOW, type LivenessState } from './liveness.js';
 import { providerPrice } from './provider-prices.js';
+import { codexFailureReason, verdictReason } from './worker-record.js';
 import { routerDecisionKey } from './operations.js';
 import { estimateJevCostUsd } from './bench/usage.js';
 import { OWNED_AGENT_NAMES } from './types.js';
@@ -135,12 +136,12 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   const cancelled = new Set(workerEnds.filter(r => (OWNED_AGENT_NAMES.includes(str(r['subagent_type']) ?? '') || dispatchedKeys.has(workerKey(r))) &&
     (r['verdict_reason'] === 'worker_cancelled' || ['cancelled', 'interrupted'].includes(String(r['failure_category'] ?? r['status'])))).map(workerKey)).size;
   say(rejected.length || unchecked ? 'warn' : owned.length ? 'ok' : 'info',
-    `worker: ${owned.length} Gate worker results -- ${owned.length ? tally(owned.map(r => String(r['verdict']))) : 'none'}${unchecked ? `; ${unchecked} accepted with no checks run` : ''}${rejected.length ? `; ${[...new Set(rejected.map(r => str(r['verdict_reason']) ?? 'no reason'))].map(v => `"${v}"`).join('; ')}` : ''}; ${posts.length - owned.length} native Agent calls (예약 외 호출, not worker acceptances)`,
+    `worker: ${owned.length} Gate worker results -- ${owned.length ? tally(owned.map(r => ['accept', 'incomplete', 'invalid', 'unknown', 'rework', 'replan'].includes(String(r['verdict'])) ? String(r['verdict']) : 'unknown')) : 'none'}${unchecked ? `; ${unchecked} accepted with no checks run` : ''}${rejected.length ? `; ${[...new Set(rejected.map(r => verdictReason(String(r['verdict']), r['verdict_reason'])?.[0] ?? 'no reason'))].map(v => `"${v}"`).join('; ')}` : ''}; ${posts.length - owned.length} native Agent calls (예약 외 호출, not worker acceptances)`,
     'Open the named workers in the dashboard; an unverified or unchecked result was not proven done.', 'workers',
     { fired: dispatched.length + owned.filter(r => !dispatchedKeys.has(workerKey(r))).length, applied: owned.length - rejected.length, effect: null, regression: rejected.length + unchecked, accepted: owned.length - rejected.length, rejected: rejected.length, pending, cancelled });
 
   const terminals = phase('background_terminal'), failed = terminals.filter(r => r['status'] === 'failed').length;
-  say(failed ? 'warn' : terminals.length ? 'ok' : 'info', `background: ${terminals.length} background workers ended${terminals.length ? ` (${tally(terminals.map(r => String(r['status'])))}; reasons ${tally(terminals.map(r => str(r['verdict_reason']) ?? 'none'))})` : ''}`,
+  say(failed ? 'warn' : terminals.length ? 'ok' : 'info', `background: ${terminals.length} background workers ended${terminals.length ? ` (${tally(terminals.map(r => ['completed', 'failed', 'cancelled', 'interrupted'].includes(String(r['status'])) ? String(r['status']) : 'unknown'))}; reasons ${tally(terminals.map(r => verdictReason('', r['verdict_reason'])?.[0] ?? 'none'))})` : ''}`,
     'Open the failed background workers in the dashboard; user-stopped tasks are recorded as cancelled.');
 
   const routerRecords = rs.filter(r => isRouter(r) || r['phase'] === 'codex_router_result' || r['phase'] === 'codex_route_applied' || r['phase'] === 'post');
@@ -297,7 +298,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     stale ? 'No Codex root routing was recorded: sessions started before the current connection keep the old provider; restart them (exit and resume), then rerun doctor.' : 'No Codex root routing was recorded; start a fresh Codex session so the installed plugin reconnects, then rerun doctor.');
 
   const failures = phase('failure');
-  say(failures.length ? 'warn' : 'ok', `failures: ${failures.length} failure records${failures.length ? ` (${tally(failures.map(r => str(r['failure_category']) ?? str(r['verdict_reason']) ?? 'uncategorized'))})` : ''}`,
+  say(failures.length ? 'warn' : 'ok', `failures: ${failures.length} failure records${failures.length ? ` (${tally(failures.map(r => (codexFailureReason(r) ? String(r['failure_category']) : null) ?? verdictReason('', r['verdict_reason'])?.[0] ?? 'uncategorized'))})` : ''}`,
     'Open the failures in the dashboard; each names the stage that failed.');
 
   return out;

@@ -807,7 +807,7 @@ describe('single executor (A19)', () => {
     if (workerIsolation === 'worktree') expect(context(guidance)).toContain('worktree');
   });
 
-  it('B1: preserves the called model while isolating an ad-hoc native worker', async () => {
+  it('C2: preserves the called model and delivers the commit request while isolating an ad-hoc native worker', async () => {
     const cfg = join(tmp, 'isolation-adhoc.json');
     writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native', workerIsolation: 'worktree' }));
     const env = makeEnv({ JEV_GATE_CONFIG: cfg, JEV_GATE_MODE: 'native' });
@@ -815,7 +815,7 @@ describe('single executor (A19)', () => {
     const original = agentInput();
     const pre = await run(env, preEvent('Agent', original));
     expect(pre.kind).toBe('patch');
-    expect(updatedInput(pre)).toEqual({ ...original, isolation: 'worktree' });
+    expect(updatedInput(pre)).toEqual({ ...original, isolation: 'worktree', prompt: expect.stringMatching(/^Implement the store\.[\s\S]*\[Jev Gate isolation\].*Commit your changes once/) });
   });
 
   const singleEnv = (): Env => {
@@ -903,7 +903,7 @@ describe('single executor (A19)', () => {
   it('does not accept a worker that changed files on its word alone: no passing check, or one that names no command', async () => {
     for (const [reply, reason] of [
       [workerReply({ checks: [] }), 'worker_checks_missing'],
-      [workerReply({ checks: [{ check_id: 'unit tests', result: 'pass', note: '' }] }), 'shows no passing run'],
+      [workerReply({ checks: [{ check_id: 'unit tests', result: 'pass', note: '' }] }), 'check_unobserved'],
     ] as const) {
       const env = singleEnv();
       const fetchImpl = fakeJev({ execution: 'orchestrated' });
@@ -976,6 +976,22 @@ describe('single executor (A19)', () => {
     expect(state(env).current.active['toolu_3']).toBeUndefined();
   });
 
+  it('C4: refers to evidence-format retries by check position without echoing unscreened command canaries', async () => {
+    const env = singleEnv(), command = 'printf sessionid=canary123';
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    await run(env, preEvent('Agent', agentInput()), fetchImpl);
+    const ran = workerTranscript([{ command: `${command}; echo "exit=$?"`, failed: false }]);
+    const reply = workerReply({ checks: [{ check_id: command, result: 'pass', note: 'sessionid=canary123_note' }] });
+    const post = await run(env, workerPost('toolu_1', reply, { transcript_path: ran.parent,
+      tool_response: { status: 'completed', agentId: ran.agentId, content: [{ type: 'text', text: fence(reply) }] } }), fetchImpl);
+    expect(state(env).current.receipts[0]?.evidence_format_only).toBe(true);
+    expect(context(post)).toContain('check #1');
+    expect(context(post)).toContain('same worker profile');
+    expect(context(post)).not.toContain('sessionid=canary123');
+    expect(JSON.stringify(state(env))).not.toContain('sessionid=canary123');
+  });
+
   it('grants one same-tier retry for a check hidden by an output suffix without accepting it', async () => {
     const env = singleEnv();
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
@@ -989,7 +1005,8 @@ describe('single executor (A19)', () => {
     }), fetchImpl);
     expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', evidence_format_only: true, requested_tier: 'standard' });
     expect(state(env).current.root_fallback).toBeUndefined();
-    expect(context(first)).toContain('npm test; echo');
+    expect(context(first)).not.toContain('npm test; echo');
+    expect(context(first)).toContain('check #1');
     expect(context(first)).toContain('same worker profile');
     const wrongTier = await run(env, preEvent('Agent', agentInput({ subagent_type: 'jev-gate:worker-deep', prompt: 'Do what the request asks.' }), { tool_use_id: 'toolu_wrong' }), fetchImpl);
     expect(wrongTier).toMatchObject({ kind: 'deny', code: 'attempt_mismatch' });
@@ -1150,7 +1167,7 @@ describe('worker check verification (0.4.0)', () => {
       checks: [{ check_id: 'npm test', result: 'pass', note: text, observed_output: text, output: text, error: text } as WorkerReply['checks'][number]] });
     const post = await run(env, postWith(reply, workerTranscript([{ command: 'npm test', failed: false }])));
     const receipt = state(env).current.receipts[0];
-    expect.soft(receipt?.reply).toEqual({ status: 'done', checks: [{ check_id: '#1', result: 'pass' }] });
+    expect.soft(receipt?.reply).toEqual({ status: 'done', changed_files: [], interfaces: [], blockers: [], checks: [{ check_id: '#1', result: 'pass' }] });
     for (const output of [JSON.stringify(receipt), readFileSync(jobPath(env, 's1'), 'utf8'), context(post), JSON.stringify(readTraceRecords(dir))]) expect.soft(output).not.toContain(sentinel);
   });
 
@@ -1165,7 +1182,7 @@ describe('worker check verification (0.4.0)', () => {
     const post = await run(env, workerPost('toolu_1', { ...reply, checks }));
     const receipt = state(env).current.receipts[0];
     expect(receipt).toMatchObject({ verdict: 'invalid', reply: null });
-    expect.soft(receipt?.verdict_reason).toContain('check #2:');
+    expect.soft(receipt?.verdict_reason).toBe('invalid_reply');
     const traced = readdirSync(dir).map(f => readFileSync(join(dir, f), 'utf8')).join('\n');
     for (const output of [JSON.stringify(receipt), context(post), traced]) expect.soft(output).not.toContain(sentinel);
   });
@@ -1191,7 +1208,7 @@ describe('worker check verification (0.4.0)', () => {
     expect(context(post)).not.toContain(ACCEPTED);
     const receipt = state(env).current.receipts[0];
     expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { transcript: 'read', contradicted: ['#1'] } });
-    expect(receipt?.verdict_reason).toContain("reported pass, but its last run in the worker's own transcript failed");
+    expect(receipt?.verdict_reason).toBe('check_contradicted');
   });
 
   it('does not accept a later run that adds arguments when the exact check failed', async () => {
@@ -1201,7 +1218,7 @@ describe('worker check verification (0.4.0)', () => {
     const post = await run(env, postWith(workerReply(), t));
     expect(context(post)).not.toContain(ACCEPTED);
     expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verification: { contradicted: ['#1'], unobserved: [], stale: [] } });
-    expect(state(env).current.receipts[0]?.verdict_reason).toContain("last run in the worker's own transcript failed");
+    expect(state(env).current.receipts[0]?.verdict_reason).toBe('check_contradicted');
     expect(state(env).current.receipts[0]?.verdict_reason).not.toContain('npm test');
   });
 
@@ -1211,7 +1228,7 @@ describe('worker check verification (0.4.0)', () => {
     await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm run lint', failed: false }])));
     const receipt = state(env).current.receipts[0];
     expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { transcript: 'read', unobserved: ['#1'] } });
-    expect(receipt?.verdict_reason).toContain('shows no passing run of its command');
+    expect(receipt?.verdict_reason).toBe('check_unobserved');
   });
 
   it('does not let a later command that only mentions the check mask its failed run', async () => {
@@ -1229,7 +1246,7 @@ describe('worker check verification (0.4.0)', () => {
     await run(env, workerPost('toolu_1', workerReply(), { transcript_path: undefined }));
     const receipt = state(env).current.receipts[0];
     expect(receipt).toMatchObject({ verdict: 'incomplete', verification: { transcript: 'unavailable', contradicted: [], unobserved: ['#1'] } });
-    expect(receipt?.verdict_reason).toContain('could not be read');
+    expect(receipt?.verdict_reason).toBe('check_unobserved');
   });
 
   it('reads nothing when verifyWorkerChecks is off', async () => {
@@ -1305,11 +1322,11 @@ describe('worker check verification (0.4.0)', () => {
       if (row.verdict === 'accept') expect(context(post)).toContain(ACCEPTED);
       else expect(context(post)).not.toContain(ACCEPTED);
       if (row.stale && !row.contradicted && !row.unobserved) {
-        expect(receipt?.verdict_reason).toBe(`check ${row.stale.join(', ')}: 마지막 관측 변경 이후의 검사 결과 필요`);
+        expect(receipt?.verdict_reason).toBe('check_stale');
         expect(receipt?.verdict_reason).not.toContain('npm');
       }
-      if (row.contradicted) expect(receipt?.verdict_reason).toContain('last run');
-      if (row.unobserved) expect(receipt?.verdict_reason).toContain('shows no passing run');
+      if (row.contradicted) expect(receipt?.verdict_reason).toBe('check_contradicted');
+      if (row.unobserved) expect(receipt?.verdict_reason).toBe('check_unobserved');
     }
   });
 
@@ -1824,7 +1841,7 @@ describe('R15: the simple paths this change must not break', () => {
     expect(post.kind).not.toBe('deny');
     expect(state(env).current.active).toEqual({});
     // The historical receipt is preserved as it was recorded, not rewritten.
-    expect(state(env).current.receipts[0]).toMatchObject({ advisory: 'accept', verdict: 'accept' });
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'accept' });
     expect(await run(env, preEvent('Edit', {}))).toMatchObject({ kind: 'skip', code: 'not_agent_tool' });
     await run(env, { hook_event_name: 'Stop', session_id: 's1' });
     expect(state(env).current.outcome).not.toBeNull();

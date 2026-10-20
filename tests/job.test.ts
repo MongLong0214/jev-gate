@@ -46,6 +46,24 @@ describe('paths', () => {
 });
 
 describe('updateJob', () => {
+  it('C4: projects legacy current/history receipts and rebuilds raw background context on read and rewrite', () => {
+    const env = freshEnv(), original = seed(env), canary = 'sessionid=canary123';
+    const receipt = { task_id: 'single', contract_hash: '', rev: 0, attempt: 1, tool_use_id: 'call', provenance: 'worker_reported',
+      reply: { status: 'blocked', summary: 'Legacy functional result', changed_files: ['src/legacy.ts'], interfaces: ['legacy(): void'], blockers: ['Needs integration'],
+        checks: [1, 2, 3].map(i => ({ check_id: `echo ${i} ${canary}`, result: 'pass', note: canary })) }, verdict: 'invalid', verdict_reason: `check echo ${canary}: result malformed`,
+      verification: { transcript: 'read', contradicted: [`echo 1 ${canary}`], unobserved: [`legacy ${canary}`, `other ${canary}`], stale: [] }, observed_model: null, root_effort: null, recorded_at: '', advisory: canary };
+    const gen = { ...original.current, receipts: [receipt], background_job: true, background_context: `raw failure ${canary}`, legacy_report: canary,
+      active: { legacy: { role: 'worker', task_id: 'single', contract_hash: '', rev: 0, tier: 'standard', attempt: 1, deliverables: [], started_at: '', legacy_result: canary } } };
+    writeFileSync(jobPath(env, 's1'), JSON.stringify({ ...original, current: gen, history: [gen] }));
+    const read = readJob(env, 's1');
+    expect(JSON.stringify(read)).not.toContain(canary); expect(JSON.stringify(read)).toContain('Legacy functional result');
+    expect(read.ok && read.value?.current.background_context).toContain('confirmed command pass 0');
+    const rewritten = updateJob(env, 's1', prev => prev);
+    expect(rewritten.ok).toBe(true);
+    expect(readFileSync(jobPath(env, 's1'), 'utf8')).not.toContain(canary);
+    expect(JSON.stringify(read)).toContain('#1');
+  });
+
   it('creates a private directory and file and writes atomically', () => {
     const env = freshEnv();
     const state = seed(env);
@@ -89,7 +107,7 @@ describe('updateJob', () => {
     expect(updateJob(env, 's1', (prev) => prev)).toEqual({ ok: false, code: 'state_locked' });
     expect(Date.now() - started).toBeGreaterThanOrEqual(250);
     writeFileSync(join(lock, 'owner'), '2147483646');
-    expect(updateJob(env, 's1', (prev) => (prev ? { ...prev, current: { ...prev.current, denials: 7 } } : null))).toMatchObject({ ok: true, value: { current: { denials: 7 } } });
+    expect(updateJob(env, 's1', (prev) => (prev ? { ...prev, current: { ...prev.current, request: 'lock recovered' } } : null))).toMatchObject({ ok: true, value: { current: { request: 'lock recovered' } } });
     expect(existsSync(lock)).toBe(false);
   });
 

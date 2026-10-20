@@ -4,6 +4,7 @@ import { lstat, readdir, rmdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Env } from './config.js';
 import { recordingStatus } from './recording.js';
+import { workerTraceData } from './worker-record.js';
 
 /**
  * Local metadata recorder, enabled by default with a live owner switch. Writes one private file per phase with
@@ -101,7 +102,7 @@ export const openTraceDir = (dir: string, env: Env = process.env): { ok: true; w
         mkdirSync(marker, { mode: 0o700 });
         const fd = openSync(tmpPath, 'wx', 0o600);
         try {
-          const data = Buffer.from(JSON.stringify({ ...body, invocation_id: id, recording_id: recordingId, phase, version: 5, loss_marker: true, written_at: new Date().toISOString() }, null, 2));
+          const data = Buffer.from(JSON.stringify({ ...workerTraceData(phase, body), invocation_id: id, recording_id: recordingId, phase, version: 5, loss_marker: true, written_at: new Date().toISOString() }, null, 2));
           for (let offset = 0; offset < data.length;) {
             const count = writeSync(fd, data, offset, data.length - offset);
             if (count <= 0) throw new Error('short_write');

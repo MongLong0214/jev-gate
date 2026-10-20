@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { codexFailureReason, verdictReason } from './worker-record.js';
 import { allocatedTraceRecords } from './explain.js';
 import { codexOperations, codexRow, codexRunKey, codexSpanKey, firstRow } from './codex-operations.js';
 import { failed, operationState } from './operation-state.js';
@@ -214,37 +215,6 @@ const compactSelectionReason = (value: unknown): string | null => ({
   superseded: '새 턴으로 변경 · 판정 미적용', unauthorized: 'Jev 인증 실패 · 로컬 유지', payment_required: 'Jev 크레딧 소진 · 로컬 유지', credential_refused: 'Jev 인증 확인 필요 · 로컬 유지',
   error: '선별 오류 · 로컬 유지', network: 'Jev 연결 오류 · 로컬 유지', saturated: '실행 중인 Jev 요청 한도 · 로컬 유지',
 } as Record<string, string>)[String(value)] ?? token(value);
-/** #233: the closed Codex dispatch failure category, never the raw error. */
-const codexFailureReason = (r: Rec): string | null => ({
-  preflight_conflict: '실행 전 점검 충돌', permissions_unavailable: '부모 권한 전달 불가', worktree_unavailable: 'Worktree 생성 불가', allocation_unavailable: '배정 모델·effort 사용 불가',
-  cancelled: '시작 전 취소', reservation_unavailable: '실행 예약 기록 불가', native_start_rejected: 'Codex 워커 시작 거부',
-  native_failed_turn: 'Codex 워커 턴 실패', interrupted: '워커 중단', termination_unconfirmed: '워커 종료 미확인 · 예약 유지',
-} as Record<string, string>)[String(r['failure_category'])] ?? null;
-const WORKER_REASON: Record<string, string> = {
-  worker_check_duplicate: '검사 중복 보고',
-  worker_check_failed: '보고된 검사 실패',
-  worker_check_not_run: '필수 검사 미실행',
-  worker_checks_missing: '변경 후 검사 보고 없음',
-  worker_checks_unverified: '검사 실행 확인 불가',
-  worker_no_result: '워커 결과 미반환 · 예약 해제',
-  worker_failed: '워커 실행 실패',
-  worker_cancelled: '사용자가 워커 취소',
-};
-/** #232: the closed category of a refused or unreached verdict and its label. The recorded reason is free text that can quote a
- * reply, so only the engine's own wording is matched (src/plan.ts, src/verify.ts, src/hook.ts) and never shown. */
-const verdictReason = (verdict: string, v: unknown): [string, string] | null => {
-  const reason = typeof v === 'string' ? v : '';
-  if (WORKER_REASON[reason]) return [reason, WORKER_REASON[reason]!];
-  if (reason === 'generation_changed' || reason === 'the task is no longer in the current plan') return ['superseded', '새 작업으로 교체됨'];
-  if (verdict === 'invalid') return ['invalid_reply', '워커 응답 형식 오류'];
-  if (verdict === 'unknown') return /^the call (?:reported status|failed before)/.test(reason) ? ['no_reply', '워커 응답 없음'] : null;
-  if (/^check [^,]+(?:, [^,]+)* was reported pass, but its last run in the worker's own transcript failed$/.test(reason)) return ['check_contradicted', '통과 보고 검사가 실행 기록에서 실패'];
-  if (/^check [^,]+(?:, [^,]+)* was reported pass, but the (?:worker's own transcript|last [0-9.]+ MiB of the worker's transcript) shows no passing run|^check [^,]+(?:, [^,]+)* was reported pass, but the worker's transcript could not be read/.test(reason)) return ['check_unobserved', '통과 보고 검사의 실행 미관측'];
-  if (/^check .+: 마지막 관측 변경 이후의 검사 결과 필요$/.test(reason)) return ['check_stale', '마지막 변경 전의 통과 기록'];
-  if (/^worker reported (?:status |blockers )/.test(reason)) return ['worker_blocked', '워커가 차단·재계획 보고'];
-  if (/^(?:required check |unknown check id )|reported no passing check/.test(reason)) return ['check_report', '필수 검사 보고 미충족'];
-  return null;
-};
 const REFUSED = new Set(['incomplete', 'invalid', 'rework', 'replan']);
 /** Check ids named by their place in the reply (`#1`) are shown; any other id, a planned one included, only by count. */
 const checkIds = (v: unknown): string => {
@@ -389,7 +359,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     if (phase === 'background_launch') { state = closed ? 'done' : young(live, at) ? 'active' : 'unconfirmed'; summary = closed ? '시작과 실제 종료 연결됨' : state === 'active' ? '워커 실행 중 · 메인에서 질문 가능' : '시작 기록 있음 · 종료 결과 미관측'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
     if (phase === 'background_conversation') summary = `원래 작업 유지 · 종료 결과 대기 ${n(number(r['active']))}개`;
     if (phase === 'background_policy_delivery') { summary = '종료 정책 한 번 전달 · 다음 일반 요청은 Gate A 재개'; state = 'done'; }
-    if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : codexFailureReason(r) ?? WORKER_REASON[String(r['verdict_reason'])] ?? '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : r['not_executed'] === true ? 'error' : 'interrupted'; if (state === 'done') outcome = 'host_ended'; if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음'); if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 작업 미진행'); }
+    if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : codexFailureReason(r) ?? verdictReason('', r['verdict_reason'])?.[1] ?? '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : r['not_executed'] === true ? 'error' : 'interrupted'; if (state === 'done') outcome = 'host_ended'; if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음'); if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 작업 미진행'); }
   } else if (phase === 'dispatch_denied') {
     lane = 'policy'; state = 'skipped';
     summary = text('호출 거절', token(r['reason']));
@@ -418,7 +388,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   } else if (phase === 'stop') {
     lane = 'host'; summary = text('턴 종료', token(r['outcome']));
   } else if (phase === 'failure') {
-    lane = 'host'; summary = text(codexFailureReason(r) ?? WORKER_REASON[String(r['verdict_reason'])] ?? '호스트 호출 실패', token(r['subagent_type']));
+    lane = 'host'; summary = text(codexFailureReason(r) ?? verdictReason('', r['verdict_reason'])?.[1] ?? '호스트 호출 실패', token(r['subagent_type']));
     if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음');
     if (r['failure_category'] === 'interrupted' || r['failure_category'] === 'cancelled') state = 'interrupted';
     if (r['failure_category'] === 'termination_unconfirmed') state = 'unconfirmed';

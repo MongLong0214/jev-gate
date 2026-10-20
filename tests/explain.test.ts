@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
+import { loadActivity } from '../src/activity.js';
+import { buildOperations } from '../src/operations.js';
 import { TraceDirectoryReader, allocatedTraceRecords, EXPLAIN_CAVEATS, explainDir, explainRecords, readTraceRecords, type TraceCache } from '../src/explain.js';
 
 // What the gate did was already recorded; only reading it was missing. These drive the real reader over real record
@@ -25,6 +27,30 @@ const post = (at: number, toolUseId: string, resolvedModel: string | null, extra
 const render = (records: Rec[]): string => explainRecords({ records, unreadable: 0 }).join('\n');
 
 describe('explain (2026-09-20)', () => {
+  it('C4: projects legacy disk records before reader caches, dashboard data, operations and explain', async () => {
+    const dir = mkdtempSync(join(tmp, 'legacy-worker-')), canary = 'sessionid=canary123';
+    writeFileSync(join(dir, 'post-legacy.json'), JSON.stringify(post(1, 'call', canary, { verdict: 'invalid',
+      verdict_reason: `check curl --cookie ${canary}: result malformed`, tool_response: { content: canary, output: canary, status: canary },
+      verification: { transcript: canary, contradicted: [canary], unobserved: [], stale: [] }, legacy_free_text: canary })));
+    writeFileSync(join(dir, 'failure-legacy.json'), JSON.stringify(base('failure', 2, { error_first_line: canary, failure_category: canary })));
+    const sync = readTraceRecords(dir), reader = new TraceDirectoryReader();
+    await reader.prepare(dir);
+    const asyncRead = reader.read(dir);
+    for (const read of [sync, asyncRead]) {
+      expect(JSON.stringify(read)).not.toContain(canary);
+      expect(render(read.records)).not.toContain(canary);
+      expect(JSON.stringify(buildOperations(read.records, [], new Date(iso(3)), { trace: true }))).not.toContain(canary);
+    }
+    expect(JSON.stringify(loadActivity({ traceDir: dir, env: { HOME: tmp }, now: new Date(iso(3)) }))).not.toContain(canary);
+  });
+
+  it('C4: renders legacy failure prose, rejected commands and verification IDs only as categories or counts', () => {
+    const canary = 'sessionid=canary123';
+    const out = render([post(1, 'call', null, { verdict: 'invalid', verdict_reason: `check curl --cookie ${canary}: result malformed`, verification: { transcript: 'read', contradicted: [`curl --cookie ${canary}`] } }),
+      base('failure', 2, { error_first_line: `native failure ${canary}` })]);
+    expect(out).not.toContain(canary); expect(out).toContain('invalid_reply'); expect(out).toContain('1 check(s)');
+  });
+
   it('B2: screens credentials in legacy failure prose before rendering', () => {
     const sentinel = 'B2_SYNTHETIC_LEGACY_FAILURE_SENTINEL';
     const out = render([base('failure', 1, { error_first_line: `echo ${sentinel}; Bearer synthetic-${sentinel}` })]);
@@ -118,7 +144,7 @@ describe('explain (2026-09-20)', () => {
 
   it('prints what the worker transcript showed about each reported pass', () => {
     const out = render([post(1, 'toolu_a', 'claude-sonnet-5', { verdict: 'incomplete', verification: { transcript: 'read', contradicted: ['npm test'], unobserved: ['c2'], stale: [] } })]);
-    expect(out).toContain('transcript read, contradicted npm test, unobserved c2');
+    expect(out).toContain('transcript read, contradicted 1 check(s), unobserved 1 check(s)');
     expect(out).not.toContain('stale');
   });
 
@@ -148,7 +174,7 @@ describe('explain (2026-09-20)', () => {
 
   it('names the subagent and the requested → resolved models on a PostToolUseFailure', () => {
     const out = render([base('failure', 1, { subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: null, error_first_line: 'boom', duration_ms: 40 })]);
-    expect(out).toContain('failure  boom  after 40ms  (jev-gate:worker-frontier)');
+    expect(out).toContain('failure  no message recorded  after 40ms  (jev-gate:worker-frontier)');
     expect(out).toContain('opus → unrecorded');
   });
 
@@ -278,10 +304,10 @@ describe('incremental directory reconciliation', () => {
     writeFileSync(join(dir, 'b.json'), JSON.stringify(base('post', 2)));
     reader.read(dir, 1000);
     for (const [name, at] of [['a.json', 3], ['c.json', 1], ['d.json', 3]] as const) {
-      writeFileSync(join(dir, name), JSON.stringify(base('post', at, { name }))); reader.invalidate(dir, name);
+      writeFileSync(join(dir, name), JSON.stringify(base('post', at, { request_id: name }))); reader.invalidate(dir, name);
       expect(reader.read(dir, 1001)).toEqual(readTraceRecords(dir));
     }
-    expect(reader.read(dir, 1001).records.map(r => r['name'] ?? 'b.json')).toEqual(['c.json', 'b.json', 'a.json', 'd.json']);
+    expect(reader.read(dir, 1001).records.map(r => r['request_id'] ?? 'b.json')).toEqual(['c.json', 'b.json', 'a.json', 'd.json']);
   });
   it('rejects substituted file and directory symlinks and oversized records, and discovers a newly created directory', () => {
     const dir = join(tmp, 'later-reader'), outside = mkdtempSync(join(tmp, 'outside-reader-')), reader = new TraceDirectoryReader(100);

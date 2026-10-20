@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createWorkerWorktree, type WorkerWorktree } from '../worktree.js';
 import { looksSecret } from '../outbound-text.js';
-import { workerReceiptReply } from '../plan.js';
+import { parseWorkerReply } from '../plan.js';
+import { renderWorkerDelivery } from '../coordinator.js';
 import { runHook, type HookDeps } from '../hook.js';
 import { stateRoot, readJob, updateJob, own, codexExecutions, hostExited, pendingBackgroundPolicy } from '../job.js';
 import { OWNED_AGENTS, agentForTier, type CodexFailure, type HookInput, type Reservation } from '../types.js';
@@ -605,8 +606,7 @@ export class CodexPolicy {
     if (signal?.aborted || !result.stdout) return {};
     const output = obj(JSON.parse(result.stdout)) ?? {};
     if (result.kind === 'patch') return {}; // Only jev_agent consumes input replacements.
-    const specific = obj(output['hookSpecificOutput']);
-    if (specific && typeof specific['additionalContext'] === 'string') specific['additionalContext'] = codexGuidance(specific['additionalContext']);
+    // Shared coordinator guidance is host neutral. Rewriting the whole context would alter functional worker text.
     return output;
   }
   private async interruptChildren(parent: Session, includeBackground = false): Promise<void> {
@@ -830,15 +830,26 @@ export class CodexPolicy {
     d.settling = (async () => {
       const texts = worker.items.filter(i => i['type'] === 'agentMessage' && typeof i['text'] === 'string');
       const final = texts.filter(i => i['phase'] === 'final_answer').at(-1) ?? texts.at(-1);
-      let guidance = '';
       const status = d.ended!['status'];
       const failure: CodexFailure | null = status === 'completed' ? null : d.failure ?? { category: status === 'interrupted' ? 'interrupted' : 'native_failed_turn', stage: 'turn', not_executed: false };
-      const response = { status: 'completed', agentId: worker.id, resolvedModel: worker.requestModel ?? worker.settings['model'], content: [{ type: 'text', text: String(final?.['text'] ?? '') }], totalDurationMs: Date.now() - d.startedAt };
+      let report = String(final?.['text'] ?? '');
+      if (!failure && d.worktree) {
+        const status = spawnSync('git', ['status', '--porcelain'], { cwd: d.worktree.path, env: safeGitEnv(this.env), encoding: 'utf8', timeout: 10_000 });
+        if (status.status !== 0 || status.stdout.trim()) {
+          const parsed = parseWorkerReply(report);
+          if (parsed.ok) report = JSON.stringify({ ...parsed.value, status: 'blocked', blockers: [...parsed.value.blockers, 'Isolated worker edits are uncommitted or could not be inspected. Commit the worker changes on its worktree branch before applying the baseline-to-branch diff.'] });
+        }
+      }
+      const response = { status: 'completed', agentId: worker.id, resolvedModel: worker.requestModel ?? worker.settings['model'], content: [{ type: 'text', text: report }], totalDurationMs: Date.now() - d.startedAt };
       const post = !failure
         ? await this.hook(d.parent, { hook_event_name: 'PostToolUse', session_id: d.parent.id, prompt_id: d.prompt, tool_name: 'Agent', tool_use_id: d.tool, tool_input: d.input, tool_response: response, cwd: String(d.parent.settings['cwd']) })
         : await this.failure(d.parent, d.prompt, d.tool, d.input, failure, failure.category, d.startedAt);
-      if (!failure) guidance = codexGuidance(contextOf(post));
       if (post.code) d.pendingReason = post.code; else delete d.pendingReason;
+      if (d.worktree) updateJob(this.env, d.parent.id, prev => {
+        if (!prev) return null;
+        const change = (g: import('../types.js').JobGeneration) => g.prompt_id === d.prompt ? { ...g, receipts: g.receipts.map(r => r.tool_use_id === d.tool ? { ...r, worker_worktree: d.worktree! } : r) } : g;
+        return { ...prev, current: change(prev.current), history: prev.history.map(change) };
+      });
       const state = readJob(this.env, d.parent.id);
       const gen = state.ok && state.value ? [state.value.current, ...state.value.history].find(g => g.prompt_id === d.prompt) : null;
       const receipt = gen?.receipts.find(r => r.tool_use_id === d.tool);
@@ -849,10 +860,9 @@ export class CodexPolicy {
           reservation_id: worker.id, error_first_line: 'settlement_pending', settlement_reason: d.pendingReason, release_unconfirmed: true });
         return `${failure ? failureHead(failure) : 'Worker terminal observed'}; settlement pending. Internal execution identity: ${worker.id}. Reservation ${worker.id}: ${d.pendingReason}. Reservation and files remain protected. Retry jev_agent with action=status and agent_id=${worker.id} without restarting execution.`;
       }
-      const report = String(final?.['text'] ?? 'No worker final output.');
-      const integration = d.worktree ? `\nWorker worktree: ${d.worktree.path}\nBranch: ${d.worktree.branch}\nSnapshot baseline: ${d.worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : '';
       d.output = !failure
-        ? `${looksSecret(report) ? 'Worker report text omitted by the secret screen.' : report}\n\n${guidance}${integration}`
+        ? renderWorkerDelivery(receipt!, { single: gen.execution === 'single', rootFallback: !!gen.root_fallback,
+          ...(gen.root_fallback_reason === 'accepted' || gen.root_fallback_reason === 'attempt_cap' ? { rootFallbackReason: gen.root_fallback_reason } : {}) })
         : `${failureHead(failure)}. ${FAILURE_ADVICE[failure.category]} No completion or acceptance is claimed.`;
       d.settled = true;
       // An uncertain foreground call also needs its terminal output available by the returned identity.
@@ -860,7 +870,7 @@ export class CodexPolicy {
       while (this.backgroundResults.size > 64) this.backgroundResults.delete(this.backgroundResults.keys().next().value!);
       if (d.background) {
         // Replayed coordinator context uses the stored positional report, never raw check commands or invalid JSON.
-        const context = failure ? d.output! : `${receipt?.reply ? JSON.stringify(workerReceiptReply(receipt.reply)) : 'No usable worker report.'}\n\n${guidance}${integration}`;
+        const context = d.output!;
         updateJob(this.env, d.parent.id, prev => prev?.current.prompt_id === d.prompt ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: context, ...(d.interruptSent && d.ended!['status'] !== 'completed' && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) } } : null);
         this.trace?.write('background_terminal', { host: 'codex', session_id: d.parent.id, prompt_id: d.prompt, tool_use_id: d.tool, agent_id: worker.id, status: String(d.ended!['status']),
           ...(failure ? { failure_category: failure.category, failure_stage: failure.stage, not_executed: failure.not_executed } : {}) });

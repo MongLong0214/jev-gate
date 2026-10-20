@@ -1,11 +1,46 @@
 import type { DeterministicVerdict, PlannedTask, Receipt, WorkerCheckResult, WorkerReply, WorkerReceiptReply } from './types.js';
 import { TIERS } from './types.js';
+import { looksSecret } from './outbound-text.js';
+import { verdictReason } from './worker-record.js';
 
 // Explicit projection also strips free text from older receipts before coordinator replay.
 export const workerReceiptReply = (reply: WorkerReceiptReply): WorkerReceiptReply => ({
-  status: reply.status,
-  checks: reply.checks.map((check, i) => ({ check_id: `#${i + 1}`, result: check.result })),
+  status: reply.status === 'done' ? 'done' : 'blocked',
+  ...(typeof reply.summary === 'string' && !looksSecret(reply.summary) ? { summary: reply.summary } : {}),
+  ...Object.fromEntries((['changed_files', 'interfaces', 'blockers'] as const).flatMap(key =>
+    Array.isArray(reply[key]) ? [[key, reply[key]!.filter(value => typeof value === 'string' && !looksSecret(value))]] : [])),
+  checks: (Array.isArray(reply.checks) ? reply.checks : []).flatMap((check, i) =>
+    check && ['pass', 'fail', 'not_run'].includes(check.result) ? [{ check_id: `#${i + 1}`, result: check.result }] : []),
 });
+
+/** A receipt can outlive the parser that wrote it. Project on both reads and writes, including historical attempts. */
+export const workerReceipt = (receipt: Receipt): Receipt => {
+  const safe = (value: unknown): string | null => typeof value === 'string' && /^[A-Za-z0-9_.:/+@-]{1,512}(?:\[[A-Za-z0-9_-]{1,16}\])?$/.test(value) && !looksSecret(value) ? value : null;
+  const position = (id: string): string => {
+    if (/^#[0-9]{1,4}$/.test(id)) return id;
+    const index = receipt.reply?.checks?.findIndex(check => check.check_id === id) ?? -1;
+    return index < 0 ? 'unmapped' : `#${index + 1}`;
+  };
+  const verification = receipt.verification;
+  const worktree = receipt.worker_worktree;
+  const worktreePath = typeof worktree?.path === 'string' && worktree.path.startsWith('/') && !/[\r\n]/.test(worktree.path) && !looksSecret(worktree.path) ? worktree.path : null;
+  return {
+    task_id: safe(receipt.task_id) ?? '', contract_hash: safe(receipt.contract_hash) ?? '', rev: receipt.rev,
+    attempt: receipt.attempt, tool_use_id: safe(receipt.tool_use_id) ?? '', provenance: 'worker_reported',
+    reply: receipt.reply ? workerReceiptReply(receipt.reply) : null,
+    verdict: ['accept', 'incomplete', 'invalid', 'unknown', 'rework', 'replan'].includes(receipt.verdict) ? receipt.verdict : 'unknown',
+    verdict_reason: verdictReason(receipt.verdict, receipt.verdict_reason)?.[0] ?? null,
+    observed_model: safe(receipt.observed_model), root_effort: safe(receipt.root_effort), recorded_at: safe(receipt.recorded_at) ?? '',
+    ...(verification ? { verification: {
+      transcript: verification.transcript === 'read' || verification.transcript === 'truncated' ? verification.transcript : 'unavailable',
+      contradicted: (verification.contradicted ?? []).map(position), unobserved: (verification.unobserved ?? []).map(position), stale: (verification.stale ?? []).map(position),
+    } } : {}),
+    ...(receipt.evidence_format_only === true ? { evidence_format_only: true as const } : {}),
+    ...(receipt.requested_tier ? { requested_tier: TIERS.includes(receipt.requested_tier) ? receipt.requested_tier : null } : {}),
+    ...(receipt.requested_model !== undefined ? { requested_model: safe(receipt.requested_model) } : {}),
+    ...(worktree && worktreePath && safe(worktree.branch) && safe(worktree.baseline) ? { worker_worktree: { path: worktreePath, branch: worktree.branch, baseline: worktree.baseline } } : {}),
+  };
+};
 
 export const MAX_REPLY_BYTES = 64 * 1024;
 export const MAX_COMPOSED_BYTES = 64 * 1024;

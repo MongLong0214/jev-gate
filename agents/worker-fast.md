@@ -26,6 +26,7 @@ is unavailable or needs additional authorization or user input, report the speci
 repository you were given with your native permissions; do not widen scope.
 Do not start nested Claude or Jev processes through Bash, and do not commit, push, deploy
 or discard existing changes unless the user request explicitly asks for it.
+A `[Jev Gate isolation]` note in your prompt is that request for one commit: when it is there, commit your changes on your worktree's branch as it says, and do not push. Explicit user restrictions still take precedence.
 Use status `done` only when the checks passed and the requested outcome was completed; otherwise use `blocked`.
 
 If a previous attempt of this task was rejected for the format of its report, that rejection says nothing about the

@@ -21,6 +21,16 @@ const check = (checks: ActivityCheck[], name: string): ActivityCheck => {
 const level = (claude: Rec[], name: string, over: Partial<ActivityInput> = {}): string => check(run(claude, over), name).level;
 
 describe('dashboard activity facts from doctor', () => {
+  it.each(['claude', 'codex'] as const)('C3: never renders legacy cookie-bearing worker/background/failure reasons in %s doctor', host => {
+    const canary = 'sessionid=canary123', reason = `check curl --cookie ${canary}: result malformed`;
+    const records = [rec('post', { subagent_type: 'jev-gate:worker', verdict: 'invalid', verdict_reason: reason }),
+      rec('background_terminal', { status: 'failed', verdict_reason: reason }), rec('failure', { verdict_reason: reason, failure_category: reason, error_first_line: reason })];
+    const checks = run([], { traces: { [host]: { records, unreadable: 0 } } });
+    expect(JSON.stringify(checks)).not.toContain(canary);
+    expect(check(checks, 'worker').message).toContain('invalid_reply');
+    expect(check(checks, 'failures').message).toContain('worker_result_unknown');
+  });
+
   it('counts decisions, tier changes and owned terminal states without attributing native Agent calls', () => {
     const rows = [rec('admission_result', { decision: { shape: 'orchestrated' } }),
       rec('pre_result', { role: 'single_worker', called_tier: 'standard', decision: { tier: 'fast', reason: 'route_fast' } }),
@@ -147,7 +157,7 @@ describe('activity: worker', () => {
   it('warns about an incomplete result and an accept with no checks, and counts native calls apart', () => {
     const c = check(run([worker('accept', { pass: 0, fail: 0, not_run: 0 }), worker('incomplete', { pass: 2, fail: 0, not_run: 0 }, 'no passing run'), rec('post', { subagent_type: 'general-purpose' })]), 'worker');
     expect(c.level).toBe('warn');
-    expect(c.message).toMatch(/2 Gate worker results -- accept 1, incomplete 1; 1 accepted with no checks run; "no passing run"; 1 native Agent calls \(예약 외 호출/);
+    expect(c.message).toMatch(/2 Gate worker results -- accept 1, incomplete 1; 1 accepted with no checks run; "worker_result_unknown"; 1 native Agent calls \(예약 외 호출/);
   });
 
   it('is ok when every result was accepted with checks', () => expect(level([worker('accept', { pass: 2, fail: 0, not_run: 0 })], 'worker')).toBe('ok'));
