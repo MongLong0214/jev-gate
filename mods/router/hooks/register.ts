@@ -7,6 +7,7 @@ import { createRouter } from './router.ts';
 import { installedKeyPath, parseInstalledKey } from './key.ts';
 import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
 import { createRecorder, createRecordingState, type RecordingState } from './recording.ts';
+import type { RouterObservation } from '../../../src/router-observation.ts';
 import { childStepContext } from '../../../src/router-child-context.ts';
 import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel, hostFlag } from './models.ts';
 
@@ -71,7 +72,13 @@ const recorderOf = ($: EngineInterface, state: RecordingState) => createRecorder
  * The host's `$` as the Router's engine. `$.env.get` takes literal names only (validate lists what a module reads),
  * so every variable is spelled out here and nowhere else.
  */
-const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine => ({
+const engineOf = ($: EngineInterface, log: RouterEngine['log'], transcript?: { session: string; path: string }): RouterEngine => ({
+  observation: async (agent, since, usage) => {
+    if (!transcript || transcript.session !== await $.session.id()) return null;
+    const path = $.plugin.root + '/dist/router-observation-hook.js';
+    const result = await $.process.run(['node', path, transcript.path, transcript.session, agent ?? '', String(since), JSON.stringify(usage)], { timeoutMs: 500 });
+    return result.exitCode === 0 ? JSON.parse(result.stdout) as RouterObservation | null : null;
+  },
   frontierEnabled: async () => {
     try {
       const path = frontierConfigPath(await $.env.get('HOME'), await $.env.get('XDG_CONFIG_HOME'), await $.env.get('JEV_GATE_CONFIG'));
@@ -218,6 +225,11 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
   if (observer) observer.contextChanged = router.contextChanged;
   if (!ownedDispatch && !anyRouting(config)) return;
 
+  let transcript: { session: string; path: string } | undefined;
+  if (router.stepEnabled) {
+    on('classic.SessionStart', (_$, e, next) => { transcript = e.transcript_path ? { session: e.session_id, path: e.transcript_path } : undefined; return next(e); });
+    on('classic.UserPromptSubmit', (_$, e, next) => { transcript = e.transcript_path ? { session: e.session_id, path: e.transcript_path } : undefined; return next(e); });
+  }
   if (router.rootEnabled) {
     on('turn.start', ($, e, next) => {
       quietly(() => router.turnStart(e));
@@ -236,7 +248,7 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
   if (router.stepEnabled) {
     on('turn.step', async function* ($, e, next) {
       const recorder = recorderOf($, recording);
-      try { return yield* router.turnStep(engineOf($, recorder.log), e, next); }
+      try { return yield* router.turnStep(engineOf($, recorder.log, transcript), e, next); }
       finally { await recorder.flush(); }
     });
   }

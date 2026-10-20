@@ -73,6 +73,8 @@ beforeAll(() => {
   // The classic Compact bundle is build output too (esbuild, outside tsc's rootDir).
   const classic = spawnSync(process.execPath, [join(root, 'scripts', 'build-claude-compact.mjs'), join(pluginRoot, 'dist', 'compact-hook.js')], { encoding: 'utf8' });
   expect(classic.status, classic.stderr).toBe(0);
+  const router = spawnSync(process.execPath, [join(root, 'scripts', 'build-claude-router.mjs'), join(pluginRoot, 'dist', 'router-observation-hook.js')], { encoding: 'utf8' });
+  expect(router.status, router.stderr).toBe(0);
 }, 60_000);
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -87,9 +89,9 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier'].map((a) => `agents/${a}.md`);
-    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/compact-hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
+    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/compact-hook.js', 'dist/router-observation-hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('agents/'))).toEqual([...agents].sort());
-    expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
+    expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|observation|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
     // v0.6.0: the one plugin carries the two Mods from their source, the module that loads them, and the MCP
     // server bundle, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
     // #95 adds the feature READMEs beside that source, not the Mod tests.
@@ -187,9 +189,9 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const list = spawnSync('unzip', ['-Z1', join(outDir, `jev-gate-router-${manifest.version}.zip`)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const modules = readdirSync(join(root, 'mods', 'router', 'hooks')).filter((n) => n.endsWith('.ts'));
     const files = list.filter((f) => !f.endsWith('/')).sort();
-    expect(files).toEqual(['.claude-plugin/plugin.json', 'README.md', 'hooks/hooks.json', ...modules.map((n) => `hooks/${n}`), ...['cost','provider-prices','provider-prices-data','route-cost','claude-cache','router-answers','router-selection','router-context','router-child-context','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
-    // Declarations, host tests, compiled modules and agents stay out.
-    expect(list.some((f) => /^(types|tests|dist|agents)\//.test(f))).toBe(false);
+    expect(files).toEqual(['.claude-plugin/plugin.json', 'README.md', 'hooks/hooks.json', 'dist/router-observation-hook.js', ...modules.map((n) => `hooks/${n}`), ...['cost','provider-prices','provider-prices-data','route-cost','claude-cache','router-answers','router-selection','router-context','router-child-context','router-observation','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
+    // Only the bounded transcript reader is compiled; declarations, host tests and legacy agents stay out.
+    expect(list.filter(f => f !== 'dist/router-observation-hook.js').some((f) => /^(types|tests|dist|agents)\//.test(f))).toBe(false);
     const dest = join(tmp, 'router installed', 'jev router');
     mkdirSync(dest, { recursive: true });
     expect(dest.includes(' ')).toBe(true);

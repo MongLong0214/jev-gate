@@ -46,6 +46,7 @@
 - 불확실·invalid·timeout·키 없음은 **원래 호출 보존**. 낮은 confidence를 상위 tier로 올리지 않는다. deep/frontier는 구체적 upgrade basis가 있어야 한다. abstain은 호출된 프로필을 유지한다.
 - `prompt_id`가 없으면 오케스트레이션이 없다. 새 프롬프트는 이전 세대를 히스토리로 밀어내고, 늦게 도착한 결과는 기록만 한다. HTTP 후에는 세대와 rev를 다시 확인한 뒤 적용한다.
 - TypeSafe로 가는 것: auto에서 현재 사용자 요청(Gate A 1회, needs_context도 재판정 없음), 합성된 단일 워커 계약(Gate B). 저장소·transcript·credential을 훅이 스스로 읽지 않는다. 키는 Authorization 헤더 외 어디에도 없다. 신뢰 순서는 사용자 제약·네이티브 권한 > 계약 > worker 보고 사실 > route note.
+- trace 보존: Claude·Codex 판단 기록은 공통 `src/trace.ts` 정책으로 48시간 보관한다. doctor activity 판정은 최근 24시간만 쓴다.
 - 회계: intent 기록이 없으면 "안 보냄"이 아니라 "모름". 실패 후에도 소비는 가능. 빈 usage는 0이 아니다. 요청한 프로필·실제 모델·실제 effort는 서로 다른 사실이다. haiku는 frontmatter effort가 적용되지 않는다(2026-09-18 관측). job state가 없다고 기록을 안 남기지 않는다(#48) -- root-caller Agent 호출은 job 유무와 무관하게 `off` 모드를 제외한 모든 모드에서 `requested_model`/`resolved_model`/`subagent_type`을 trace에 남긴다.
 - 벤치: 계획 행이 분모. 누락 파일은 not_started가 아니다. 측정 세션은 부모 환경을 상속하지 않는다(`CLAUDE_*` 제거). 유리한 결과 선택·checker 사후 조정 금지(결함은 기록하고 전원 재채점, 이력 보존). arm을 뺄 때는 결과를 보기 전에 근거를 기록한다.
 - 변경 후 `npm run typecheck && npm test && npm run build && claude plugin validate . --strict`를 실제 실행하고 결과를 그대로 보고한다. 테스트는 fake HTTP·fake CLI만 사용하며 키/로그인이 필요 없다.

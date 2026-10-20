@@ -1,3 +1,4 @@
+import type { RouterObservation } from '../../../src/router-observation.ts';
 import type { Transport, Usage } from './client.ts';
 import { createClient, estimateTokens, JEV_MODEL } from './client.ts';
 import type { RouterConfig } from './config.ts';
@@ -40,6 +41,7 @@ export interface HostPins {
 }
 
 export interface RouterEngine extends Transport {
+  observation?: (agent: string | undefined, since: number, usage: unknown) => Promise<RouterObservation | null>;
   envKey: () => Promise<string | undefined>;
   pins: (scope?: 'effort' | 'root' | 'spawn') => Promise<HostPins>;
   /** The settings allowlist when one is set. */
@@ -661,7 +663,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const observedCache = rootCaches.get(id, String(cacheEpoch));
       const cache = observedCache && observedCache.read !== null ? { ...observedCache, input: observedCache.input ?? null, ageMs: Math.max(0, engine.now() - observedCache.at) } : undefined;
       const result = await client.assess(engine, key.key, routingContext(text, context ?? undefined, recentRequests.slice(0, -1), cache), offer.questions, live,
-        usage => log(engine, { event: 'late', scope: 'root', turn: turnId, usage: loggable(usage) }), () => log(engine, { event: 'request', scope: 'root', turn: turnId, sent: true }));
+        usage => log(engine, { event: 'late', scope: 'root', turn: turnId, jev_model: JEV_MODEL, usage: loggable(usage) }), () => log(engine, { event: 'request', scope: 'root', turn: turnId, jev_model: JEV_MODEL, sent: true }));
       const decision = result.ok ? selectPair(offer, result.answers) : { patch: {} as RoutingPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
       // #274: a switch serves only the requests after which a return still reaches the baseline's cache.
       t.baselineSeq = observedCache?.seq;
@@ -1099,12 +1101,11 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'step_abandoned' });
   };
 
-  const observeStep = (engine: RouterEngine, e: TurnStepEvent, patch: RoutingPatch | null, result: TurnStepOutcome | void): void => {
+  const observeStep = (engine: RouterEngine, e: TurnStepEvent, patch: RoutingPatch | null, result: TurnStepOutcome | void, observation: RouterObservation | null): void => {
     try {
       const requested = patch?.model ?? e.model;
       const seen = result && typeof result.usage?.model === 'string' ? result.usage.model : null;
-      // `applied` is what was sent to next, not a confirmation: the host reports the model that answered, never the
-      // effort it ran at.
+      // `applied` is what was sent to next; only the linked api-request establishes applied effort.
       log(engine, {
         event: 'root_result',
         turn: e.turnId,
@@ -1114,7 +1115,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         applied: patch ?? { model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}) },
         observed: seen,
         confirmation: seen === null ? 'unobserved' : patch?.model !== undefined ? sameModel(patch.model, seen) ? 'confirmed' : 'mismatch' : answeredBy(e.model, seen) ? 'confirmed' : 'mismatch',
-        observed_effort: 'unknown',
+        observed_effort: observation?.effort ?? 'unknown',
+        effort_evidence: observation?.effort != null ? 'transcript_api_request' : 'unobserved',
+        request_ref: observation?.request ?? null,
         usage: result ? loggable(countsOf(result.usage)) : null,
         accounting: result ? normalizeUsage('claude', result.usage) : null,
         cost: usageCost(normalizeUsage('claude', result?.usage), providerPrice('claude', seen ?? requested, (() => { const u = normalizeUsage('claude', result?.usage); return u.input !== null && u.read !== null && u.write !== null ? u.input + u.read + u.write : null; })())),
@@ -1229,20 +1232,26 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       }
       throw err;
     }
-    if (e.agentId === undefined) observeStep(engine, e, patch, result);
+    let observation: RouterObservation | null = null;
+    try { if (result?.usage) observation = await engine.observation?.(e.agentId, startedAt, result.usage) ?? null; } catch { /* Observation cannot replay a completed native request. */ }
+    // Keep the host's return untouched. Only the accounting/cache view gains the linked transcript's TTL counters.
+    const accounted = result && observation ? { ...result, usage: { ...result.usage!, cache_creation: { ephemeral_5m_input_tokens: observation.usage.write5m, ephemeral_1h_input_tokens: observation.usage.write1h } } } : result;
+    if (e.agentId === undefined) observeStep(engine, e, patch, accounted, observation);
     if (e.agentId !== undefined) {
       const requested = patch?.model ?? e.model;
-      const observed = result?.usage?.model ?? null;
+      const observed = accounted?.usage?.model ?? null;
       log(engine, {
         event: 'child_result', agent_id: e.agentId, turn: e.turnId, index: e.index,
-        requested, observed, requested_effort: patch?.effortEdit?.kind === 'omit' ? null : patch?.effort ?? e.effort ?? null, observed_effort: 'unknown',
+        requested, observed, requested_effort: patch?.effortEdit?.kind === 'omit' ? null : patch?.effort ?? e.effort ?? null, observed_effort: observation?.effort ?? 'unknown',
+        effort_evidence: observation?.effort != null ? 'transcript_api_request' : 'unobserved',
+        request_ref: observation?.request ?? null,
         confirmation: observed === null ? 'unobserved' : patch?.model ? sameModel(requested, observed) ? 'confirmed' : 'mismatch' : answeredBy(requested, observed) ? 'confirmed' : 'mismatch',
-        usage: result ? loggable(countsOf(result.usage)) : null,
-        accounting: result ? normalizeUsage('claude', result.usage) : null, native_identity_coverage: 'unavailable_in_turn_step_api',
+        usage: accounted ? loggable(countsOf(accounted.usage)) : null,
+        accounting: accounted ? normalizeUsage('claude', accounted.usage) : null, native_identity_coverage: 'unavailable_in_turn_step_api',
       });
       const child = children.get(e.agentId);
       if (child && !own.aborted && observed !== null && answeredBy(requested, observed)) {
-        const u = normalizeUsage('claude', result?.usage);
+        const u = normalizeUsage('claude', accounted?.usage);
         const effort = patch?.effort ?? e.effort;
         if (child.cache && !answeredBy(requested, child.cache.model)) { child.cachePreserved = false; child.cacheMiss = false; }
         if (child.cache && answeredBy(requested, child.cache.model) && child.cacheEffort !== effort && floorLive(child.cache, engine.now())) {
@@ -1253,7 +1262,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
           log(engine, { event: 'effort_cache', scope: 'child', agent_id: e.agentId, turn: e.turnId, index: e.index, hit, floor_restored: hit === false, miss_cause: 'unknown' });
         }
         if (effort !== undefined) child.cacheEffort = effort; else delete child.cacheEffort;
-        const counts = countsOf(result?.usage);
+        const counts = countsOf(accounted?.usage);
         child.cache = { at: engine.now(), model: requested, ageMs: 0, input: counts?.['input_tokens'] ?? null,
           read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null };
       }
@@ -1261,17 +1270,17 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (e.agentId === undefined && !own.aborted && currentRootTurn === e.turnId) {
       const sent = patch?.effortEdit?.kind === 'omit' ? undefined : patch?.effort ?? e.effort;
       const asked = patch?.model ?? e.model;
-      const seen = typeof result?.usage?.model === 'string' ? result.usage.model : null;
+      const seen = typeof accounted?.usage?.model === 'string' ? accounted.usage.model : null;
       // A resume restores the main loop to the model of the last answer.
       const routed: RootPair = { model: seen !== null && !answeredBy(asked, seen) ? seen : asked, effort: sent ?? null };
       if (rootRecord && (rootRecord.routed?.model !== routed.model || rootRecord.routed.effort !== routed.effort)) rootRecord = { ...rootRecord, routed };
       const seq = ++rootSeq;
-      if (seen === null || !answeredBy(asked, seen)) rootCaches.observe({ ...cacheSeen(asked, seen, result?.usage, String(cacheEpoch), startedAt), seq });
+      if (seen === null || !answeredBy(asked, seen)) rootCaches.observe({ ...cacheSeen(asked, seen, accounted?.usage, String(cacheEpoch), startedAt), seq });
       // Only a response the asked model gave wrote the cache a later turn on that model reads.
       if (seen !== null && answeredBy(asked, seen)) {
         const id = cacheId(asked);
         const previous = rootCaches.get(id, String(cacheEpoch));
-        const nextUsage = normalizeUsage('claude', result?.usage);
+        const nextUsage = normalizeUsage('claude', accounted?.usage);
         // #277: only a request right after this model's own tells an effort change; after another model's, its cache may be out of reach.
         if (previous && previous.seq === seq - 1 && previous.effort !== (sent ?? null) && floorLive(previous, engine.now())) {
           const hit = effortCacheHit(previous, nextUsage);
@@ -1280,10 +1289,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
           if (hit !== null) void engine.saveEffortCache?.(id, hit).catch(() => undefined);
           log(engine, { event: 'effort_cache', scope: 'root', turn: e.turnId, index: e.index, model: id, hit, floor_restored: hit === false, ttl_known: previous.ttlMs !== null, miss_cause: 'unknown' });
         }
-        const counts = countsOf(result?.usage);
-        rootCaches.observe({ ...cacheSeen(asked, seen, result?.usage, String(cacheEpoch), startedAt), effort: isSymbolicEffort(sent) ? sent : null, seq });
+        const counts = countsOf(accounted?.usage);
+        rootCaches.observe({ ...cacheSeen(asked, seen, accounted?.usage, String(cacheEpoch), startedAt), effort: isSymbolicEffort(sent) ? sent : null, seq });
         lastRoot = { at: engine.now(), model: asked, effort: isSymbolicEffort(sent) ? sent : null,
-          cache: { model: asked, ageMs: 0, epoch: String(cacheEpoch), ttlMs: observedTtl(normalizeUsage('claude', result?.usage)), output: normalizeUsage('claude', result?.usage).output, input: counts?.['input_tokens'] ?? null, read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null } };
+          cache: { model: asked, ageMs: 0, epoch: String(cacheEpoch), ttlMs: observedTtl(normalizeUsage('claude', accounted?.usage)), output: normalizeUsage('claude', accounted?.usage).output, input: counts?.['input_tokens'] ?? null, read: counts?.['cache_read_input_tokens'] ?? null, write: counts?.['cache_creation_input_tokens'] ?? null } };
       }
       // ponytail: one store write per root response; save at turn end if store writes ever show in step latency.
       rootCache = e.messageCount !== undefined ? { messages: e.messageCount, seen: rootCaches.list(String(cacheEpoch)) } : null;

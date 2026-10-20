@@ -123,15 +123,15 @@ describe('pruneTraceDir', () => {
     return path;
   };
 
-  it('deletes only its own records older than 14 days and leaves everything else, including symlink targets', async () => {
+  it('deletes only its own records older than 48 hours and leaves everything else, including symlink targets', async () => {
     const dir = join(tmp, 'prune'); mkdirSync(dir);
     const outside = join(tmp, 'prune-outside'); mkdirSync(outside);
     const target = file(outside, `post-${uuid}.json`, 30);
-    file(dir, `mod_router-${uuid}.json`, 15);
-    file(dir, `.pre_intent-${uuid}.tmp`, 15);
-    file(dir, `connection_failed-${'a'.repeat(32)}.seen`, 15);
-    file(dir, `connection_failed-${'b'.repeat(32)}.seen`, 13);
-    file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 13);
+    file(dir, `mod_router-${uuid}.json`, 2 + 1 / DAY);
+    file(dir, `.pre_intent-${uuid}.tmp`, 2 + 1 / DAY);
+    file(dir, `connection_failed-${'a'.repeat(32)}.seen`, 2 + 1 / DAY);
+    file(dir, `connection_failed-${'b'.repeat(32)}.seen`, 2);
+    file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 2);
     file(dir, 'notes.json', 30);
     file(dir, `post-${uuid}.json.bak`, 30);
     mkdirSync(join(dir, 'sub'));
@@ -148,9 +148,9 @@ describe('pruneTraceDir', () => {
 
   it('deletes old loss markers, the writer\'s empty directory and the Mods\' file', async () => {
     const dir = join(tmp, 'prune-markers'); mkdirSync(dir);
-    const at = (now - 15 * DAY) / 1000;
+    const at = (now - (2 * DAY + 1)) / 1000;
     mkdirSync(join(dir, `.pre_intent-${uuid}.failed`)); utimesSync(join(dir, `.pre_intent-${uuid}.failed`), at, at);
-    file(dir, `.mod_router-${uuid}.failed`, 15);
+    file(dir, `.mod_router-${uuid}.failed`, 2 + 1 / DAY);
     file(dir, `.mod_compact-${uuid}.failed`, 1);
     expect(await pruneTraceDir(dir, now)).toBe(2);
     expect(readdirSync(dir).sort()).toEqual([`.mod_compact-${uuid}.failed`, '.retention']);

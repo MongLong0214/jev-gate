@@ -36,7 +36,7 @@ export const finishDoctor = (host: DoctorReport['host'], root: string, checks: D
   return { host, checkedAt: new Date().toISOString(), ok: counts.fail === 0, status: counts.fail ? 'blocked' : counts.warn ? 'attention' : 'ready', version: { package: packageVersion(root, host), release }, checks, counts };
 };
 export const renderDoctor = (report: DoctorReport, verbose = false): string => {
-  const out = [`Jev Gate ${report.version.package ? `v${report.version.package}` : '(version unknown)'} · ${report.host} · ${report.status.toUpperCase()}`, `${report.counts.fail} failures · ${report.counts.warn} warnings · ${report.counts.ok} local checks passed`, 'Install checks are local; activity judges each feature from the last 24 h of trace records (no inference, no network).'];
+  const out = [`Jev Gate ${report.version.package ? `v${report.version.package}` : '(version unknown)'} · ${report.host} · ${report.status.toUpperCase()}`, `${report.counts.fail} failures · ${report.counts.warn} warnings · ${report.counts.ok} local checks passed`, 'Install checks are local; activity judges each feature from the last 24 h of trace records (48 h retention; no inference, no network).'];
   for (const group of ['runtime', 'package', 'host', 'configuration', 'models', 'credentials', 'storage', 'activity', 'version'] as const) {
     const all = report.checks.filter(c => c.group === group); if (!all.length) continue;
     const visible = all.filter(c => verbose || c.level === 'fail' || c.level === 'warn' || ['runtime', 'host', 'models', 'version', 'credentials', 'activity'].includes(group));

@@ -76,6 +76,18 @@ describe('observed usage and cost', () => {
     expect(observed).toBeDefined();
     expect(delegationCost(25, 86700, { coordinatorTurns: 11, workerTokensPerCall: 40000, prices: observed! })).toMatchObject({ basis: 'tokens', savingUsd: null, components: { m1: expect.any(Number), m2: [.039, .041], m3: null, m4: null, m5: null } });
   });
+  it('lets the switch guard decide with the transcript TTL, instead of an unknown expiry or write price range', () => {
+    const observed = (ttlMs: number | null) => {
+      const cache = new ModelCache();
+      cache.observe({ model: 'claude-opus-5-5', epoch: 'one', at: 0, ttlMs, ttlBoundsMs: [300_000, 3_600_000], input: 0, read: 49_000, write: 1000, output: 3000 });
+      return cache;
+    };
+    const cost = (ttl: number | null, now = 1000) => routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', observed(ttl), 'one', now, 1, TURN_HORIZON);
+    expect(cost(null)).toMatchObject({ hold: true, reason: 'cost_hold' });
+    expect(cost(300_000)).toMatchObject({ hold: false, reason: 'cost_allows' });
+    expect(cost(null, 600_000)).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
+    expect(cost(3_600_000, 600_000)).toMatchObject({ hold: true, reason: 'cost_hold' });
+  });
   it('guards observed switches by exact price band, holds the unobserved and leaves effort and upgrades alone', () => {
     const bounds = [300_000, 3_600_000] as const;
     const opus = (read: number, at = 0) => ({ model: 'claude-opus-5-5', epoch: 'one', at, ttlMs: null, ttlBoundsMs: bounds, input: 10, read, write: 1000, output: 100 });
