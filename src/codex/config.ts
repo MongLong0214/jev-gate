@@ -12,6 +12,9 @@ export interface CodexPolicyConfig {
   router: { enabled: boolean; model: boolean; effort: boolean; allowAstra: boolean; minUpgradeConfidence: number; minDowngradeConfidence: number; timeoutMs: number };
   compact: { enabled: boolean; manual: boolean; budgetChars: number; jevEnabled?: boolean; jevTimeoutMs?: number };
 }
+export const resolveCodexConfigPath = (env: Env): string =>
+  env['JEV_CODEX_CONFIG'] ?? join(env['XDG_CONFIG_HOME'] ?? join(env['HOME'] || homedir(), '.config'), 'jev-gate', 'codex.json');
+
 export const catalogTierModels = (baseline: string, catalog: readonly CodexModel[]): Record<Tier, string> => {
   // Use this account's model descriptions, never invented IDs or hidden specialist/review models.
   const general = catalog.filter(m => generalCodexModel(m) && !codexSuccessor(m.model, catalog));
@@ -25,7 +28,7 @@ export const catalogTierModels = (baseline: string, catalog: readonly CodexModel
 /** `gateOffOnInvalid`: a Gate value that does not validate turns only the Gate off, so Router and Compact keep their own settings. */
 export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = [], gateOffOnInvalid = false): CodexPolicyConfig => {
   let raw: Record<string, unknown> = {};
-  const path = env['JEV_CODEX_CONFIG'] ?? join(env['XDG_CONFIG_HOME'] ?? join(env['HOME'] || homedir(), '.config'), 'jev-gate', 'codex.json');
+  const path = resolveCodexConfigPath(env);
   try { raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>; }
   catch (e) { if (env['JEV_CODEX_CONFIG'] || (e as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('invalid Codex policy config'); }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !['gate', 'router', 'compact'].includes(k))) throw new Error('invalid Codex policy config');

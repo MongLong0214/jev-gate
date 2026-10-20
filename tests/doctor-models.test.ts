@@ -7,6 +7,7 @@ import { codexCompatibility, codexModelInventory, type CodexInventory } from '..
 import { claudeDoctor } from '../src/cli.js';
 import { parseFrontmatter } from '../src/claude-models.js';
 import { codexDoctor } from '../src/codex/cli.js';
+import { loadCodexPolicy } from '../src/codex/config.js';
 import { storageIssue, moduleIssues, renderDoctor } from '../src/doctor.js';
 
 const dirs: string[] = [];
@@ -131,6 +132,28 @@ describe('Doctor reports', () => {
     const rows = codexCompatibility(inventory, { HOME: dir, JEV_CODEX_CONFIG: config });
     expect(rows.find(c => c.model === 'gpt-6-luna')?.state).toBe('compatible');
     expect(rows.find(c => c.model === 'unavailable-legacy-fast')?.state).toBe('incompatible');
+  });
+  it.each([
+    ['workerIsolation', 'worktree'], ['maxParallelWorkers', 3], ['plannerDefaultTier', 'fast'],
+    ['guardAllowTools', []], ['workerIsolation', 42], ['maxParallelWorkers', 'many'], ['plannerDefaultTier', false], ['guardAllowTools', 'invalid'],
+  ])('reports withdrawn Codex Gate key %s even when its value is malformed', async (key, value) => {
+    const fake = fixture('codex', [codexModel()]), config = join(fake.dir, 'codex.json');
+    writeFileSync(config, JSON.stringify({ gate: { [key]: value } }));
+    const env = { ...fake.env, JEV_CODEX_CONFIG: config };
+    const result = await codexDoctor(join(__dirname, '../plugins/codex'), env, fake.dir);
+    const notice = result.report.checks.find(c => c.group === 'configuration' && c.level === 'info' && c.message.includes(key) && c.message.includes('withdrawn key'));
+    expect(notice).toBeDefined();
+    expect(result.lines).toContain(`[info] ${notice!.message}`);
+    expect(renderDoctor(result.report, true)).toContain(`[info] ${notice!.message}`);
+    expect(result.report.checks.some(c => c.group === 'configuration' && c.level === 'ok' && c.message.startsWith('policy: Gate'))).toBe(true);
+    expect(loadCodexPolicy(env).gate).not.toHaveProperty(key);
+  });
+  it.each(['home', 'xdg'])('reports withdrawn Codex Gate keys from the default %s config path', async location => {
+    const fake = fixture('codex', [codexModel()]), base = location === 'home' ? join(fake.dir, '.config') : join(fake.dir, 'xdg');
+    const dir = join(base, 'jev-gate'); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'codex.json'), JSON.stringify({ gate: { workerIsolation: null, guardAllowTools: [] } }));
+    const result = await codexDoctor(join(__dirname, '../plugins/codex'), { ...fake.env, ...(location === 'xdg' ? { XDG_CONFIG_HOME: base } : {}) }, fake.dir);
+    expect(result.lines.some(line => line.startsWith('[info]') && line.includes('workerIsolation, guardAllowTools are withdrawn keys'))).toBe(true);
   });
   it.each(['hooks/register.ts', 'mods/router/hooks/config.ts', 'src/provider-prices-data.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md'])('rejects a missing declared package dependency: %s', async missing => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);

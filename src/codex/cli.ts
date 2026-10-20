@@ -9,7 +9,8 @@ import { ensureDashboard, serveAutomaticDashboard } from '../dashboard-launch.js
 import { dashboardPreferenceCommand } from '../dashboard-settings.js';
 import { recordingCommand } from '../recording.js';
 import { launchCodex } from './launch.js';
-import { loadCodexPolicy } from './config.js';
+import { loadCodexPolicy, resolveCodexConfigPath } from './config.js';
+import { IGNORED_KEYS } from '../config.js';
 import { connectionDiagnostic, serveConnection } from './connection.js';
 import { withApiKey, validApiKey, apiKeyOverride } from '../credentials.js';
 import { doctorChecks, finishDoctor, renderDoctor, readableFile, storageIssue, dashboardDiagnostic, versionDiagnostic, type DoctorReport } from '../doctor.js';
@@ -69,6 +70,14 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
   say('info', `hooks: ${env['JEV_CODEX_ENABLED'] === '0' ? 'disabled by JEV_CODEX_ENABLED=0' : 'enabled by configuration; use /hooks in Codex to review trust and execution'}`);
   try {
     const policy = loadCodexPolicy(env);
+    const configPath = resolveCodexConfigPath(env);
+    try {
+      const raw: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
+      if (obj(raw) && obj(raw['gate'])) {
+        const ignored = Object.keys(raw['gate']).filter(key => IGNORED_KEYS.has(key));
+        if (ignored.length) say('info', `Codex Gate config ${configPath}: ${ignored.join(', ')} ${ignored.length === 1 ? 'is a withdrawn key' : 'are withdrawn keys'}: loaded, never read, and safe to delete`);
+      }
+    } catch { /* defaults or environment-only policy */ }
     check(true, `policy: Gate ${policy.gate.mode}; Router ${policy.router.enabled ? 'on' : 'off'}; Compact ${policy.compact.enabled ? 'on' : 'off'}`);
     say('info', `Router automatic Astra: ${policy.router.allowAstra ? 'opted in' : 'off (default)'}; model/effort: ${policy.router.model ? 'on' : 'off'}/${policy.router.effort ? 'on' : 'off'}`);
     say('info', 'Account model candidates: unknown until native model/list is observed. Submitted request values do not confirm response model or actual effort.');
