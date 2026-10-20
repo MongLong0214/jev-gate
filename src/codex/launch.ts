@@ -103,7 +103,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           const parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
           if (path === '/responses' && !isCodexCompactRequest(parsed['input'], marker)) {
             const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
-            const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal);
+            const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator']);
             if (selected.stop) { res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(compactResponse(selected.stop)); return; }
             payload = Buffer.from(JSON.stringify(selected.request)); modified = true;
           }

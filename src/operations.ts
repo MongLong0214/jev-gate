@@ -368,8 +368,9 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     if (estimate && number(estimate['saving_tokens']) !== null) details.push(`위임 가격 계산 ${n(number(estimate['saving_tokens']))} 토큰 · 측정된 절감 아님`);
   } else if (phase === 'codex_router_skipped') {
     lane = 'policy';
-    summary = ({ disabled: 'Jev 기능이 꺼져 있음', router_disabled: 'Router가 꺼져 있음', key_missing: 'Jev API 키 없음', aborted: '턴 중단으로 판단 생략', model_catalog_missing: '호스트 모델 목록에서 현재 모델을 확인할 수 없음', nothing_to_change: '변경 가능한 모델·effort 없음' } as Record<string, string>)[String(r['reason'])] ?? '원래 호스트 설정 유지';
-    details.push('Jev 전송 없음 · 원래 모델·effort 유지');
+    summary = ({ disabled: 'Jev 기능이 꺼져 있음', router_disabled: 'Router가 꺼져 있음', key_missing: 'Jev API 키 없음', aborted: '턴 중단으로 판단 생략', model_catalog_missing: '호스트 모델 목록에서 현재 모델을 확인할 수 없음', nothing_to_change: '변경 가능한 모델·effort 없음', pinned: 'codex exec 실행 · 모델·effort 고정' } as Record<string, string>)[String(r['reason'])] ?? '원래 호스트 설정 유지';
+    const moved = field(r, 'superseded_baseline');
+    details.push(moved ? text('Jev 전송 없음', `${token(moved['from']) ?? '?'}에서 후속 모델 ${token(moved['to']) ?? '?'}로 변경`, 'effort 유지') : 'Jev 전송 없음 · 원래 모델·effort 유지');
   } else if (phase === 'codex_route_applied') {
     lane = 'host'; summary = text('Codex 요청에 설정 제출', token(r['submitted_model'] ?? r['observed_model']), token(r['submitted_effort']));
     details.push('요청 전송 관측 · 응답 모델과 실제 effort는 아직 미확인');

@@ -1,4 +1,5 @@
-import { mkdtempSync, readdirSync, readFileSync, lstatSync, rmSync, symlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, lstatSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -53,6 +54,66 @@ describe('native Codex hook', () => {
       const result = await runCodexHook({ stdin: stdin({ ...input, hook_event_name: 'SessionStart', cwd: dir() }), env: { JEV_CODEX_TRACE_DIR: dir() } });
       expect(JSON.stringify(result)).toContain('native Codex plugin');
       expect(request).not.toHaveBeenCalled();
+    } finally { request.mockRestore(); }
+  });
+
+  it.each([
+    ['openai', 'codex-tui', 'startup', 'without the Jev Gate connection'],
+    ['jev-gate-native', 'codex-tui', 'startup', '-m/--model'],
+    ['jev-gate-native', 'codex_exec', 'startup', null],
+    ['openai', 'codex-tui', 'resume', null],
+  ])('tells the user how a session started on %s by %s (%s) is routed', async (provider, originator, source, notice) => {
+    const path = dir(); const transcript = join(dir(), 'rollout.jsonl');
+    writeFileSync(transcript, `${JSON.stringify({ type: 'session_meta', payload: { id: 'session', model_provider: provider, originator, base_instructions: { text: 'PRIVATE_INSTRUCTIONS' } } })}\n{"type":"turn_context"}\n`);
+    const request = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no connection owner'));
+    try {
+      // CODEX_HOME holds no connection owner, so the connection stays unavailable and no helper starts from src/.
+      const result = await executeCodexHook({ stdin: stdin({ hook_event_name: 'SessionStart', session_id: 'session', source, model: 'native-model', cwd: dir(), transcript_path: transcript, permission_mode: 'default' }), env: { JEV_CODEX_TRACE_DIR: path, CODEX_HOME: dir() } });
+      if (notice) expect(result['systemMessage']).toContain(notice); else expect(result).not.toHaveProperty('systemMessage');
+      expect(JSON.stringify(result)).toContain('native Codex plugin');
+      const event = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
+      if (provider === 'openai' && source === 'startup') expect(event).toMatchObject({ event: 'SessionStart', routed: false, model_provider: 'openai' });
+      else expect(event).not.toHaveProperty('routed');
+      expect(JSON.stringify(event)).not.toContain('PRIVATE_INSTRUCTIONS');
+    } finally { request.mockRestore(); }
+  });
+
+  it.each([
+    ['no', null, null, false, 'without the Jev Gate connection'],
+    ['a live', process.pid, null, 'unknown', 'is unknown'],
+    ['a stopped', spawnSync(process.execPath, ['-e', '']).pid, null, 'unknown', 'is unknown'],
+    ['a live', process.pid, 'unreadable', 'unknown', 'is unknown'],
+    ['a live', process.pid, 'mismatched', 'unknown', 'is unknown'],
+  ] as const)('judges an ephemeral start without usable start metadata from %s connection owner and %s transcript', async (_owner, pid, transcript, routed, notice) => {
+    const path = dir(); const home = dir(); const token = 'f'.repeat(64);
+    if (pid) {
+      mkdirSync(join(home, 'jev-gate', 'connection'), { recursive: true, mode: 0o700 });
+      writeFileSync(join(home, 'jev-gate', 'connection', 'owner.json'), JSON.stringify({ version: 1, pid, port: 1, token, marker: 'marker', root: dir(), original: {}, installed: {} }), { mode: 0o600 });
+    }
+    const file = join(dir(), 'rollout.jsonl');
+    if (transcript === 'mismatched') writeFileSync(file, `${JSON.stringify({ type: 'session_meta', payload: { id: 'other', model_provider: 'jev-gate-native' } })}\n`);
+    const request = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no connection'));
+    try {
+      const result = await executeCodexHook({ stdin: stdin({ hook_event_name: 'SessionStart', session_id: 'session', source: 'startup', model: 'native-model', cwd: dir(), transcript_path: transcript ? file : null, permission_mode: 'default' }), env: { JEV_CODEX_TRACE_DIR: path, CODEX_HOME: home } });
+      expect(result['systemMessage']).toContain(notice);
+      expect(String(result['systemMessage'])).not.toContain('"unknown"');
+      const event = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
+      expect(event).toMatchObject({ event: 'SessionStart', routed, model_provider: null });
+      expect(JSON.stringify([result, event])).not.toContain(token);
+    } finally { request.mockRestore(); }
+  });
+
+  it('does not trust a helper that is available when the hook checks it: the session may have loaded another provider', async () => {
+    const path = dir(); const home = dir();
+    mkdirSync(join(home, 'jev-gate', 'connection'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, 'jev-gate', 'connection', 'owner.json'), JSON.stringify({ version: 1, pid: process.pid, port: 1, token: 'e'.repeat(64), marker: 'marker', root: dir(), original: {}, installed: {} }), { mode: 0o600 });
+    // The helper answers every request: the MCP started it independently, before this session's provider was fixed.
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', { status: 200 }));
+    try {
+      const result = await executeCodexHook({ stdin: stdin({ hook_event_name: 'SessionStart', session_id: 'session', source: 'startup', model: 'native-model', cwd: dir(), transcript_path: null, permission_mode: 'default' }), env: { JEV_CODEX_TRACE_DIR: path, CODEX_HOME: home } });
+      expect(String(result['systemMessage'])).toContain('is unknown');
+      const event = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
+      expect(event).toMatchObject({ event: 'SessionStart', routed: 'unknown' });
     } finally { request.mockRestore(); }
   });
 

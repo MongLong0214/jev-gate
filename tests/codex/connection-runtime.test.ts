@@ -82,9 +82,12 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
       expect(existsSync(ownerPath), warm.output).toBe(true);
       expect(readFileSync(config, 'utf8')).toContain('model_provider = "jev-gate-native"');
       const at = requests.length; const connected = await run(); expect(connected.code, connected.output).toBe(0);
-      expect(requests.slice(at).some(r => (r['reasoning'] as Obj)?.['effort'] === 'low'), JSON.stringify({ requests: requests.slice(at), output: connected.output })).toBe(true);
+      // #282: `codex exec` keeps its model and effort (here config's high) although the fake Jev answers low.
+      const efforts = requests.slice(at).map(r => (r['reasoning'] as Obj)?.['effort']);
+      expect(efforts.includes('high') && !efforts.includes('low'), JSON.stringify({ requests: requests.slice(at), output: connected.output })).toBe(true);
       const rows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
-      expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === true)).toBe(true);
+      expect(rows.some(r => r['phase'] === 'codex_router_skipped' && r['reason'] === 'pinned')).toBe(true);
+      expect(rows.some(r => r['phase'] === 'codex_route_applied')).toBe(false);
       expect(rows.some(r => r['phase'] === 'codex_router_response' && r['reason'] === 'response_model_confirmed' && r['observed_model'] === 'gpt-6.1-sol')).toBe(true);
       expect(rows.some(r => r['phase'] === 'codex_model_request')).toBe(true);
       expect(JSON.stringify(rows)).not.toContain('fake-local-');

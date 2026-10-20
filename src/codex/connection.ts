@@ -9,7 +9,7 @@ import type { Env } from '../config.js';
 import type { CodexRpc } from './rpc.js';
 import { resolveApiKey, withApiKey } from '../credentials.js';
 
-const PROVIDER = 'jev-gate-native';
+export const PROVIDER = 'jev-gate-native';
 export interface Connection { version: 1; pid: number; port: number; token: string; marker: string; root: string; original: Obj; installed: Obj }
 const home = (env: Env): string => {
   const path = env['CODEX_HOME'] ?? join(env['HOME'] ?? homedir(), '.codex');
@@ -101,6 +101,8 @@ export const connectionDiagnostic = async (env: Env): Promise<{ state: 'disabled
   if (!state) return { state: existsSync(statePath(env)) ? 'invalid' : 'absent', version: null };
   return { state: await healthy(state) ? 'ready' : 'unreachable', version: (await import('../release-info.js')).packageVersion(state.root, 'codex') };
 };
+/** #282: whether a connection owner record exists. Its liveness proves nothing about the provider a session loaded; the MCP can start the helper independently. */
+export const connectionOwner = (env: Env): 'absent' | 'present' => existsSync(statePath(env)) ? 'present' : 'absent';
 const enabled = (env: Env): boolean => env['JEV_CODEX_AUTO_CONNECT'] !== '0' && env['JEV_CODEX_ENABLED'] !== '0' && !env['JEV_CODEX_BRIDGE_URL'];
 const packageVersion = (root: string): number => {
   try { const v = obj(JSON.parse(readFileSync(join(root, '.codex-plugin', 'plugin.json'), 'utf8')))?.['version']; const m = typeof v === 'string' && /^(\d+)\.(\d+)\.(\d+)$/.exec(v); return m ? Number(m[1]) * 1_000_000 + Number(m[2]) * 1000 + Number(m[3]) : -1; }

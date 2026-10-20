@@ -237,6 +237,29 @@ describe('original Codex root execution boundaries', () => {
     }
     expect(f.policy.sessions.size).toBe(1); expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
   });
+  it.each([['codex_exec',false],['codex-tui',true],[undefined,true]] as const)('a %s root keeps its own model and effort only for codex exec, whatever Jev answers',async(originator,routed)=>{
+    // Jev would move fixture-A/high to fixture-B/max; the request names fixture-A as a -m run or a config default would.
+    const f = await fixture(true,'fixture-B','max');
+    for (let i=0;i<2;i++) {
+      const r = await f.policy.externalRequest('root',f.request,new AbortController().signal,originator);
+      expect(r.request).toEqual(routed ? {...f.request,model:'fixture-B',reasoning:{...f.request.reasoning,effort:'max'}} : f.request);
+    }
+    expect(f.fetchImpl).toHaveBeenCalledTimes(routed ? 1 : 0);
+    const rows = readdirSync(join(dir,'trace')).map(file => JSON.parse(readFileSync(join(dir,'trace',file),'utf8')));
+    if (!routed) expect(rows).toContainEqual(expect.objectContaining({phase:'codex_router_skipped',session_id:'root',reason:'pinned',known_not_sent:true}));
+    f.rpc.close();
+  });
+  it.each(['gpt-6-sol','fixture-A'])('a codex exec root pinned to %s keeps it on every request, superseded or the configured model',async model=>{
+    // gpt-6.1-sol supersedes gpt-6-sol; fixture-A is the session's configured model. Jev would move either to fixture-B/max.
+    const f = await fixture(true,'fixture-B','max');
+    f.policy.catalog = [...catalog,...['gpt-6.1-sol','gpt-6-sol'].map(id => ({ model: id, description: 'Workhorse model for coding.', supportedReasoningEfforts: ['high','xhigh'].map(reasoningEffort => ({ reasoningEffort })) }))];
+    const request = {...f.request,model};
+    for (let i=0;i<2;i++) expect((await f.policy.externalRequest('root',request,new AbortController().signal,'codex_exec')).request).toEqual(request);
+    expect(f.fetchImpl).not.toHaveBeenCalled();
+    const rows = readdirSync(join(dir,'trace')).map(file => JSON.parse(readFileSync(join(dir,'trace',file),'utf8')));
+    expect(rows).not.toContainEqual(expect.objectContaining({superseded_baseline:expect.objectContaining({from:model})}));
+    f.rpc.close();
+  });
   it('shares pending assessment across concurrent external requests and keeps manual C',async()=>{
     let release!:()=>void; const wait = new Promise<void>(r=>{release=r;}); const f = await fixture(true,'fixture-B','max',wait);
     const one = f.policy.externalRequest('root',f.request,new AbortController().signal);

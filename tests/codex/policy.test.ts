@@ -185,6 +185,11 @@ describe('Codex ordered routing and recorded application', () => {
     expect((await superseded('gpt-5.6-luna', 'key_missing', { effort: 'ultra', catalog: account.map(m => m.model === 'gpt-5.6-luna' ? { ...m, supportedReasoningEfforts: levels() } : m) })).patch).toEqual({});
     expect((await superseded('gpt-5.6-terra', 'key_missing')).patch).toEqual({});
     expect((await superseded('gpt-6-sol', 'key_missing', { modelPinned: true })).patch).toEqual({});
+    // A pinned model is kept exactly, superseded or not; a run pinning both is never assessed.
+    const pinned = await superseded('gpt-6-sol', 'complex', { modelPinned: true, effortPinned: true });
+    expect(pinned.patch).toEqual({}); expect(pinned.fetchImpl).not.toHaveBeenCalled();
+    expect(pinned.rows).toEqual([expect.objectContaining({ phase: 'codex_router_skipped', reason: 'pinned' })]);
+    expect(pinned.rows[0]).not.toHaveProperty('superseded_baseline');
   });
 });
 describe('native workspace authentication routing', () => {
