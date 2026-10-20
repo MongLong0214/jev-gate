@@ -64,15 +64,14 @@ export const foregroundDispatchPossible = (env: Env): boolean =>
   (env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] === '1' || env['CLAUDE_CODE_FORK_SUBAGENT'] === '0');
 
 /**
- * Why no owned Agent call this session makes could reach a worker, or null when one could. A subagent model override
+ * Why no owned Agent call this session makes could reach a worker, or null when one could. A forced subagent model
  * is refused by checkEligibility just as a background-only call is, so an orchestrated job is locked out either way:
  * its guard refuses the main session's edits while every brief is declined. Both are fixed at launch, so admission,
  * the forced arm and the SessionStart notice all read this one answer.
  */
 export const dispatchBlocker = (env: Env): 'background_only' | 'subagent_model_override' | null => {
   if (!foregroundDispatchPossible(env)) return 'background_only';
-  const override = subagentModelOverride(env);
-  return override.concrete || override.force ? 'subagent_model_override' : null;
+  return subagentModelOverride(env).force ? 'subagent_model_override' : null;
 };
 
 /**
@@ -97,8 +96,8 @@ export const checkEligibility = (hook: HookInput, env: Env, config: ConfigV5): E
   const bg = input['run_in_background'];
   if (bg !== undefined && typeof bg !== 'boolean') return { eligible: false, code: 'not_foreground' };
   if (EXECUTION_CONTROL_KEYS.some((k) => Object.prototype.hasOwnProperty.call(input, k))) return { eligible: false, code: 'execution_control_present' };
-  const override = subagentModelOverride(env);
-  if (override.concrete || override.force) return { eligible: false, code: 'subagent_model_override' };
+  // A concrete CLAUDE_CODE_SUBAGENT_MODEL alone is a default the owned role's own `model:` outranks (src/auth.ts).
+  if (subagentModelOverride(env).force) return { eligible: false, code: 'subagent_model_override' };
   if (env['CLAUDE_CODE_FORK_SUBAGENT'] === '1') return { eligible: false, code: 'fork_or_background_override' };
   const descriptionText = typeof description === 'string' ? description : '';
   if (!prompt.isWellFormed() || !descriptionText.isWellFormed()) return { eligible: false, code: 'prompt_invalid_unicode' };

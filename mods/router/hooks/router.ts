@@ -28,8 +28,13 @@ export interface HostPins {
   mainModel: boolean;
   /** CLAUDE_CODE_EFFORT_LEVEL: the root effort was chosen outside this plugin. */
   mainEffort: boolean;
-  /** CLAUDE_CODE_SUBAGENT_MODEL or its _FORCE form: the host overrides every child model anyway. */
+  /** CLAUDE_CODE_SUBAGENT_MODEL_FORCE: the host overrides every child model anyway. */
   subagentModel: boolean;
+  /**
+   * CLAUDE_CODE_SUBAGENT_MODEL without _FORCE, as written: no pin but the model of a child whose call and definition
+   * name none (2.1.251+); a call's or a definition's model, a routed one among them, outranks it.
+   */
+  subagentDefault?: string;
   /** ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL: an alias no longer names the model this table describes. */
   aliasRemap: boolean;
 }
@@ -141,6 +146,8 @@ export const hostSupported = (base: string | undefined): boolean => {
   return m !== null && Number(m[1]) >= 282;
 };
 const INHERITING_BUILT_INS = new Set(['general-purpose', 'claude', 'Plan', 'Explore']);
+/** The inheriting built-ins whose definitions name no model; Plan's and Explore's `inherit` is a definition's own. */
+const UNNAMED_BUILT_INS = new Set(['general-purpose', 'claude']);
 const EXPLORE_FAMILIES = new Set(['haiku', 'sonnet', 'opus']);
 /** The built-ins whose definitions withhold Edit, Write and NotebookEdit (2.1.301); the other two hold every tool. */
 const READ_ONLY_BUILT_INS = new Set(['Plan', 'Explore']);
@@ -1296,13 +1303,20 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
 
   /**
    * The model the host's own selection should run for a spawn this Router left native: the call's `model`, else the
-   * parent's for a fork or a verified inheriting built-in. Any other agent's profile model is not in the event, so it
-   * stays unknown here (null) rather than being read as the parent's.
+   * host's default subagent model (`fallback`, undefined while unread) or the parent's for a fork or a verified
+   * inheriting built-in. Any other agent's profile model is not in the event, so it stays unknown here (null) rather
+   * than being read as the parent's.
    */
-  const nativeExpected = (e: SpawnEvent): string | null => {
+  const nativeExpected = (e: SpawnEvent, fallback: string | null | undefined): string | null => {
     const explicit = e.fork ? null : e.model?.trim() || null;
-    return explicit ?? (e.fork || inheritSkip(e) === null ? e.parentModel : null);
+    return explicit ?? (e.fork || inheritSkip(e) === null ? fallback === undefined ? null : fallback ?? e.parentModel : null);
   };
+
+  /**
+   * A built-in whose definition names no model, called without one: the host runs it on its default subagent model, if
+   * set. Only the verified built-in: a project's or a plugin's agent of that name declares its own model.
+   */
+  const takesDefault = (e: SpawnEvent): boolean => !e.fork && !e.model?.trim() && UNNAMED_BUILT_INS.has(e.subagentType) && inheritSkip(e) === null;
 
   /**
    * Whether a differing model is really a mismatch: a model pin overrides every child model, and an alias remap changes
@@ -1322,9 +1336,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    * A spawn is asked about its model, its subagent's effort, or both. The model moves for an inheriting built-in and,
    * unless configured otherwise, for any call that names one: `model: "opus"` on an Agent call is the caller's default,
    * and in a week of the owner's traffic 161 of 174 routable spawns named it. Effort is asked for every spawn but a
-   * fork, whose loop shares the parent's context.
+   * fork, whose loop shares the parent's context. `fallback` is the host's default subagent model this spawn runs on.
    */
-  const spawnDecision = async (engine: RouterEngine, e: SpawnEvent, live: AbortSignal): Promise<SpawnPlan | null> => {
+  const spawnDecision = async (engine: RouterEngine, e: SpawnEvent, fallback: string | null, live: AbortSignal): Promise<SpawnPlan | null> => {
     const allowFable = await within(frontierFor(engine), live);
     const owned = e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt);
     if (owned) {
@@ -1348,7 +1362,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         return { target: pair.model, answers: {}, ...(pair.effort_edit && !pins.mainEffort ? { allocation: pair.effort_edit } : {}) };
       }
       const aliases = await within(aliasesOf(engine), live);
-      const id = e.model ?? e.parentModel;
+      const id = e.model ?? fallback ?? e.parentModel;
       const resolved = aliases[id] ?? id;
       if (!claudeTargetAllowed(resolved, allowFable)) return denied('no_eligible_model', 'No eligible automatic child model. Continue in the main session; no child started.');
       spawnSkip(engine, e, 'gate_routed');
@@ -1369,7 +1383,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const key = await keyFor(engine, live); if (key === ABORTED) throw ENDED;
     if (!('key' in key)) {
       const aliases = await within(aliasesOf(engine), live);
-      return !claudeTargetAllowed(aliases[e.model ?? e.parentModel] ?? e.model ?? e.parentModel, allowFable) ? denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.') : spawnSkip(engine, e, key.reason);
+      const id = e.model ?? fallback ?? e.parentModel;
+      return !claudeTargetAllowed(aliases[id] ?? id, allowFable) ? denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.') : spawnSkip(engine, e, key.reason);
     }
     const hostBase = await versionFor(engine, live);
     if (!hostSupported(hostBase)) return spawnSkip(engine, e, 'host_unverified');
@@ -1377,7 +1392,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (pins.aliasRemap && !engine.modelAliases) return spawnSkip(engine, e, 'alias_remapped');
     const aliases = await within(aliasesOf(engine), live);
     const available = await within(engine.availableModels().catch(() => []), live);
-    const native = explicit ?? (declared && declared !== 'inherit' ? declared : e.parentModel);
+    const native = explicit ?? (declared && declared !== 'inherit' ? declared : fallback ?? e.parentModel);
     const baselineModel = aliases[native] ?? native;
     const catalog = claudeCandidates({ baseline: baselineModel, aliases, allowFable,
       ...(available !== undefined ? { available } : {}), ...(hostBase ? { hostBase } : {}), scope: 'spawn', preferences: Object.values(config.tiers) });
@@ -1436,10 +1451,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    * Every wait of a dispatch ends with it or with `own`, the session it began in, rather than the one current when a
    * wait ends: a session that ends meanwhile gets nothing from this dispatch, and no request is sent for it.
    */
-  const spawnTarget = async (engine: RouterEngine, e: SpawnEvent, signal: AbortSignal, own: AbortSignal): Promise<SpawnPlan | null> => {
+  const spawnTarget = async (engine: RouterEngine, e: SpawnEvent, fallback: string | null, signal: AbortSignal, own: AbortSignal): Promise<SpawnPlan | null> => {
     const live = linked(signal, own);
     try {
-      return await spawnDecision(engine, e, live.signal);
+      return await spawnDecision(engine, e, fallback, live.signal);
     } catch (err) {
       if (err !== ENDED) throw err;
       if (own.aborted) log(engine, { event: 'spawn_stop', tool_use_id: e.tool_use_id, reason: 'session_ended' });
@@ -1459,15 +1474,21 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const ev: E = native ? { ...e, parentModel: native } : e;
     let plan: SpawnPlan | null = null;
     let baselineAllowed = claudeTargetAllowed(ev.model ?? ev.parentModel, config.allowFable);
-    // Only an agent that inherits its parent's model runs on the native one; a declared model is the agent's own.
+    // Only an agent that inherits its parent's model runs on the native one; a declared model, or the host's default
+    // subagent model for one that names none, is the agent's own.
     let inherits = false;
+    // The host's default subagent model, read once before any outcome: routing, the fallback checks and the
+    // confirmation all compare against it. Unread, it stays unknown (undefined).
+    let fallback: string | null | undefined = takesDefault(ev) ? undefined : null;
     try {
       const allowFable = await within(frontierFor(engine), wait.signal);
       const aliases = await within(aliasesOf(engine), wait.signal);
-      baselineAllowed = claudeTargetAllowed(aliases[ev.model ?? ev.parentModel] ?? ev.model ?? ev.parentModel, allowFable);
-      plan = await spawnTarget(engine, ev, wait.signal, own);
+      if (fallback === undefined) { const d = (await within(pinsOf(engine, 'spawn', wait.signal), wait.signal)).subagentDefault; fallback = d ? aliases[d] ?? d : null; }
+      const base = ev.model ?? fallback ?? ev.parentModel;
+      baselineAllowed = claudeTargetAllowed(aliases[base] ?? base, allowFable);
+      plan = await spawnTarget(engine, ev, fallback, wait.signal, own);
       // The native model is restored only while it may still be sent, by the checks every target passes.
-      inherits = native !== null && !e.model?.trim() && (inheritSkip(ev) === null ||
+      inherits = native !== null && !e.model?.trim() && (inheritSkip(ev) === null && fallback === null ||
         await within(engine.agentModel?.(e.subagentType).catch(() => null) ?? Promise.resolve(null), wait.signal) === 'inherit') &&
         await nativeAllowed(engine, native, wait.signal).catch(() => false);
     } catch {
@@ -1535,7 +1556,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
           // Response diagnostics never invalidate unrelated dispatches.
         }
       } else {
-        let requested = nativeExpected(e);
+        let requested = nativeExpected(e, fallback);
         if (requested !== null && result.deny === undefined && !sameModel(requested, result.model)) requested = await nativeMismatch(engine, requested, result.model, own);
         log(engine, result.deny !== undefined
           ? { event: 'spawn_native_result', tool_use_id: e.tool_use_id, caller_model: e.model ?? null, requested, denied: true }

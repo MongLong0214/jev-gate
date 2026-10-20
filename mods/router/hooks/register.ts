@@ -8,9 +8,15 @@ import { installedKeyPath, parseInstalledKey } from './key.ts';
 import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
 import { createRecorder } from './recording.ts';
 import { childStepContext } from '../../../src/router-child-context.ts';
-import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel } from './models.ts';
+import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel, hostFlag } from './models.ts';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
+/**
+ * CLAUDE_CODE_SUBAGENT_MODEL without _FORCE: since Claude Code 2.1.251 the model of a child whose call and definition
+ * name none, and nothing more (the Router runs on 2.1.282+). `inherit` is unset.
+ */
+const subagentDefault = (model: string | undefined, force: string | undefined): string | undefined =>
+  set(model) && model!.trim() !== 'inherit' && !hostFlag(force) ? model!.trim() : undefined;
 /** Each session's root record lives under this prefix in the plugin's store, so a resume finds its native pair. */
 const ROOT_KEY = 'router-root:';
 const MAX_ROOT_RECORDS = 200;
@@ -100,10 +106,12 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
       $.env.get('ANTHROPIC_DEFAULT_SONNET_MODEL'),
       $.env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL'),
     ]);
+    const fallback = subagentDefault(subagent, subagentForce);
     return {
       mainModel: set(mainModel),
       mainEffort: set(mainEffort),
-      subagentModel: set(subagent) || set(subagentForce),
+      subagentModel: hostFlag(subagentForce),
+      ...(fallback ? { subagentDefault: fallback } : {}),
       aliasRemap: set(opus) || set(sonnet) || set(haiku),
     };
   },
@@ -163,7 +171,10 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     if (!out || typeof out !== 'object') throw new Error('dispatch policy unavailable');
     return out;
   },
-  agentModel: async type => { const text = await agentFile($, type); return text === null ? null : frontmatterModel(text); },
+  agentModel: async type => {
+    const [text, model, force] = await Promise.all([agentFile($, type), $.env.get('CLAUDE_CODE_SUBAGENT_MODEL'), $.env.get('CLAUDE_CODE_SUBAGENT_MODEL_FORCE')]);
+    return text === null ? null : frontmatterModel(text, subagentDefault(model, force));
+  },
   agentEdits: async type => { const text = await agentFile($, type); return text === null ? null : frontmatterEdits(text); },
   resumes: async name => (await $.agent.list()).some(a => a.name === name || a.id === name),
   hostBase: async () => (await $.session.version()).base,

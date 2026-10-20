@@ -86,6 +86,9 @@ describe('parseFrontmatter', () => {
     expect(frontmatterModel('---\nname: x\n---\n')).toBe('inherit');
     expect(frontmatterModel('---\nmodel: inherit\n---\n')).toBe('inherit');
     expect(frontmatterModel('no block')).toBeNull();
+    // A host default subagent model is what a file with no `model:` runs; an explicit inherit stays the file's own.
+    expect(frontmatterModel('---\nname: x\n---\n', 'haiku')).toBe('haiku');
+    expect(frontmatterModel('---\nmodel: inherit\n---\n', 'haiku')).toBe('inherit');
   });
 
   it('reads whether an agent file\'s tools can edit', () => {

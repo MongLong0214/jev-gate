@@ -822,15 +822,15 @@ describe('#48: a session whose Agent calls can only run in the background', () =
   });
 });
 
-describe('#48: a subagent model override every owned Agent call refuses', () => {
+describe('#48: a forced subagent model every owned Agent call refuses', () => {
   const admission = (dir: string): Record<string, unknown> | undefined =>
     readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
 
   it.each([
-    ['a concrete model', { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }],
+    ['a forced model', { CLAUDE_CODE_SUBAGENT_MODEL: 'opus', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }],
     ['the force flag', { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }],
   ])('stays direct before Gate A under %s', async (_label, override) => {
-    const dir = join(tmp, `trace-override-${Object.keys(override)[0]}`);
+    const dir = join(tmp, `trace-override-${Object.keys(override).length}`);
     const env = makeEnv({ ...override, JEV_GATE_TRACE_DIR: dir });
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     const r = await run(env, promptEvent(), fetchImpl);
@@ -841,21 +841,23 @@ describe('#48: a subagent model override every owned Agent call refuses', () => 
   });
 
   it('refuses the forced arm under the override too', async () => {
-    const env = makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: 'haiku', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' });
+    const env = makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: 'haiku', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' });
     expect((await run(env, promptEvent())).code).toBe('host_unsupported');
     expect(state(env).current.shape).toBe('direct');
   });
 
-  it('still asks Gate A when the override is inherit, which pins nothing', async () => {
+  it.each(['inherit', 'opus'])('still asks Gate A, and says nothing at SessionStart, when CLAUDE_CODE_SUBAGENT_MODEL is %s without _FORCE', async (value) => {
+    // A concrete value is only the default of a child that names no model; every owned role names one.
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
-    await run(makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: 'inherit' }), promptEvent(), fetchImpl);
+    await run(makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: value }), promptEvent(), fetchImpl);
     expect(fetchImpl).toHaveBeenCalled();
+    expect(await run(makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: value }), { hook_event_name: 'SessionStart', session_id: 's1' })).toMatchObject({ kind: 'skip', stdout: null });
   });
 
   it('names the override at SessionStart', async () => {
-    const r = await run(makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }), { hook_event_name: 'SessionStart', session_id: 's1' });
+    const r = await run(makeEnv({ CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }), { hook_event_name: 'SessionStart', session_id: 's1' });
     expect(r).toMatchObject({ kind: 'notice', code: 'host_unsupported' });
-    expect(String((JSON.parse(r.stdout as string) as Record<string, unknown>)['systemMessage'])).toContain('CLAUDE_CODE_SUBAGENT_MODEL');
+    expect(String((JSON.parse(r.stdout as string) as Record<string, unknown>)['systemMessage'])).toContain('CLAUDE_CODE_SUBAGENT_MODEL_FORCE');
   });
 });
 

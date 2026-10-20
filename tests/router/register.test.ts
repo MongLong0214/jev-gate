@@ -262,15 +262,25 @@ describe('register', () => {
   });
 
   it('keeps model pins independent from effort, and resolves aliases without treating them as pins', async () => {
-    for (const name of ['CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE']) {
-      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), host)).toBeUndefined();
-      expect(host.requests).toHaveLength(0);
-      const effort = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), effort)).toBeUndefined();
-      expect(effort.requests).toHaveLength(1);
-      expect(effort.logs.join('\n')).toContain('"effort_asked":true');
-    }
+    const forced = { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' };
+    const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, ...forced } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), host)).toBeUndefined();
+    expect(host.requests).toHaveLength(0);
+    const effort = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, ...forced } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), effort)).toBeUndefined();
+    expect(effort.requests).toHaveLength(1);
+    expect(effort.logs.join('\n')).toContain('"effort_asked":true');
+    // Without _FORCE the value is a default a routed spawn's model outranks, not a pin (Claude Code 2.1.251+).
+    const fallback = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5' } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), fallback)).toBe('claude-haiku-5-5');
+    expect(fallback.logs.join('\n')).toContain('"model_asked":true');
+    // _FORCE is read as Claude Code reads a boolean: `0` is off like unset, `true` is on like `1`.
+    const off = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '0' } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), off)).toBe('claude-haiku-5-5');
+    expect(off.requests).toHaveLength(1);
+    const on = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: 'true' } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), on)).toBeUndefined();
+    expect(on.requests).toHaveLength(0);
     for (const name of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) {
       const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
       expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-5-5');
@@ -376,9 +386,15 @@ describe('owned dispatch through the packaged policy process (#211)', () => {
     // 0.8.14 let this throw past its cleanup and named it "could not be verified"; the reservation stays protected.
     ['times out', 'timeout' as const, 'Automatic child unavailable; continue in the main session.', true],
   ])('keeps a user subagent pin and releases once when the cleanup %s', async (_, failure, deny, kept) => {
-    const r = await dispatch({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5' }, fail: eligible => eligible ? undefined : failure });
+    const r = await dispatch({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }, fail: eligible => eligible ? undefined : failure });
     expect(r.out).toEqual({ deny });
     expect([r.calls, r.runs, r.denials, r.kept]).toEqual([[], [true, false], denial('subagent_model_pinned'), kept]);
+  });
+
+  it('delivers an owned dispatch under a default subagent model, which its own model outranks', async () => {
+    const r = await dispatch({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5' } });
+    expect(r.out).toEqual({ model: 'claude-haiku-5-5', agentId: 'child' });
+    expect([r.calls, r.runs, r.denials, r.kept]).toEqual([['claude-haiku-5-5'], [true], [], true]);
   });
 
   it.each([false, true])('keeps the frontier opt-in for an owned frontier pair: %s', async enabled => {

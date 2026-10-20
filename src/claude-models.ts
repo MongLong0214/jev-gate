@@ -161,13 +161,22 @@ export const parseFrontmatter = (text: string): Frontmatter => {
   return { fields, lists, error: null };
 };
 
-/** The `model:` an agent file declares: absent or `inherit` is 'inherit', unparsable is null. */
-export const frontmatterModel = (text: string): string | null => {
+/**
+ * The `model:` an agent file declares: `inherit` is 'inherit', absent is `absent` (the host's default subagent model
+ * when one is set, else 'inherit'), unparsable is null.
+ */
+export const frontmatterModel = (text: string, absent = 'inherit'): string | null => {
   const { fields, error } = parseFrontmatter(text);
   if (error) return null;
   const model = fields['model']?.replace(/^(["'])(.*)\1$/, '$2').trim();
-  return model && model !== 'inherit' ? model : 'inherit';
+  return model || absent;
 };
+
+/**
+ * A boolean environment value as Claude Code reads one (2.1.304, its `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` among them):
+ * `1`, `true`, `yes` or `on` in any case, trimmed; anything else is off. Core and the Router both read this one parse.
+ */
+export const hostFlag = (v: string | undefined): boolean => v !== undefined && ['1', 'true', 'yes', 'on'].includes(v.toLowerCase().trim());
 
 /** The tools that change files. Bash can too (a shell or Python write), so it is read with them below. */
 const EDITING_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit'];
