@@ -212,7 +212,7 @@ export class CodexPolicy {
   }
 
   /** Selection is made once from the actual submitted prompt; every original Responses field is preserved. */
-  async externalRequest(id: string, request: Obj, signal: AbortSignal): Promise<{ request: Obj; stop?: string }> {
+  async externalRequest(id: string, request: Obj, signal: AbortSignal, originator?: unknown): Promise<{ request: Obj; stop?: string }> {
     const session = this.sessions.get(id);
     if (requestedUpdateEffort(request).present) {
       this.trace?.write('codex_router_skipped', { host: 'codex', session_id: id, prompt_id: session?.prompt ?? null, reason: 'configuration_update_native_history', known_not_sent: true, effective_effort: 'unknown' });
@@ -243,6 +243,9 @@ export class CodexPolicy {
       session.routeDeadline = Date.now() + session.policy.router.timeoutMs;
       const deadline = session.routeDeadline;
       const task = session.task; const previousReply = session.previousReply; const baseline = { ...session.baseline };
+      // #282: no request field tells `-m`/`-c model_reasoning_effort` from configuration defaults, so a scripted
+      // `codex exec` caller (Codex's own originator header) keeps both. An interactive `--model` stays a baseline.
+      const pinned = originator === 'codex_exec';
       const pending = (async () => {
         await this.waitCatalog(deadline);
         const epoch = this.catalogEpoch;
@@ -253,7 +256,7 @@ export class CodexPolicy {
         // Host control modes are not raw Responses API efforts.
         const catalog = this.catalog.map(m => { const out = { ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) };
           if (out.defaultReasoningEffort && !out.supportedReasoningEfforts.some(e => e.reasoningEffort === out.defaultReasoningEffort)) delete out.defaultReasoningEffort; return out; });
-        const patch = await routeCodex({ ...baseline, task, ...(previousReply ? { previousReply } : {}),
+        const patch = await routeCodex({ ...baseline, task, ...(previousReply ? { previousReply } : {}), modelPinned: pinned, effortPinned: pinned,
           recentRequests: session.recentRequests ?? [], session: id, prompt, ...(session.modelCache ? { modelCache: session.modelCache, epoch: session.epoch } : {}), catalog, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded,
           ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
           config: { ...config, router: { ...config.router, timeoutMs: remaining } }, env: this.env,

@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, lstatSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, lstatSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -53,6 +53,27 @@ describe('native Codex hook', () => {
       const result = await runCodexHook({ stdin: stdin({ ...input, hook_event_name: 'SessionStart', cwd: dir() }), env: { JEV_CODEX_TRACE_DIR: dir() } });
       expect(JSON.stringify(result)).toContain('native Codex plugin');
       expect(request).not.toHaveBeenCalled();
+    } finally { request.mockRestore(); }
+  });
+
+  it.each([
+    ['openai', 'codex-tui', 'startup', 'without the Jev Gate connection'],
+    ['jev-gate-native', 'codex-tui', 'startup', '-m/--model'],
+    ['jev-gate-native', 'codex_exec', 'startup', null],
+    ['openai', 'codex-tui', 'resume', null],
+  ])('tells the user how a session started on %s by %s (%s) is routed', async (provider, originator, source, notice) => {
+    const path = dir(); const transcript = join(dir(), 'rollout.jsonl');
+    writeFileSync(transcript, `${JSON.stringify({ type: 'session_meta', payload: { id: 'session', model_provider: provider, originator, base_instructions: { text: 'PRIVATE_INSTRUCTIONS' } } })}\n{"type":"turn_context"}\n`);
+    const request = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no connection owner'));
+    try {
+      // CODEX_HOME holds no connection owner, so the connection stays unavailable and no helper starts from src/.
+      const result = await executeCodexHook({ stdin: stdin({ hook_event_name: 'SessionStart', session_id: 'session', source, model: 'native-model', cwd: dir(), transcript_path: transcript, permission_mode: 'default' }), env: { JEV_CODEX_TRACE_DIR: path, CODEX_HOME: dir() } });
+      if (notice) expect(result['systemMessage']).toContain(notice); else expect(result).not.toHaveProperty('systemMessage');
+      expect(JSON.stringify(result)).toContain('native Codex plugin');
+      const event = readdirSync(path).map(f => JSON.parse(readFileSync(join(path, f), 'utf8')) as Record<string, unknown>).find(r => r['phase'] === 'codex_event');
+      if (provider === 'openai' && source === 'startup') expect(event).toMatchObject({ event: 'SessionStart', routed: false, model_provider: 'openai' });
+      else expect(event).not.toHaveProperty('routed');
+      expect(JSON.stringify(event)).not.toContain('PRIVATE_INSTRUCTIONS');
     } finally { request.mockRestore(); }
   });
 

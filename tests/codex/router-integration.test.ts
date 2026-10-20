@@ -237,6 +237,18 @@ describe('original Codex root execution boundaries', () => {
     }
     expect(f.policy.sessions.size).toBe(1); expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
   });
+  it.each([['codex_exec',false],['codex-tui',true],[undefined,true]] as const)('a %s root keeps its own model and effort only for codex exec, whatever Jev answers',async(originator,routed)=>{
+    // Jev would move fixture-A/high to fixture-B/max; the request names fixture-A as a -m run or a config default would.
+    const f = await fixture(true,'fixture-B','max');
+    for (let i=0;i<2;i++) {
+      const r = await f.policy.externalRequest('root',f.request,new AbortController().signal,originator);
+      expect(r.request).toEqual(routed ? {...f.request,model:'fixture-B',reasoning:{...f.request.reasoning,effort:'max'}} : f.request);
+    }
+    expect(f.fetchImpl).toHaveBeenCalledTimes(routed ? 1 : 0);
+    const rows = readdirSync(join(dir,'trace')).map(file => JSON.parse(readFileSync(join(dir,'trace',file),'utf8')));
+    if (!routed) expect(rows).toContainEqual(expect.objectContaining({phase:'codex_router_skipped',session_id:'root',reason:'pinned',known_not_sent:true}));
+    f.rpc.close();
+  });
   it('shares pending assessment across concurrent external requests and keeps manual C',async()=>{
     let release!:()=>void; const wait = new Promise<void>(r=>{release=r;}); const f = await fixture(true,'fixture-B','max',wait);
     const one = f.policy.externalRequest('root',f.request,new AbortController().signal);

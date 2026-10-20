@@ -9,7 +9,7 @@ import type { Env } from '../config.js';
 import type { CodexRpc } from './rpc.js';
 import { resolveApiKey, withApiKey } from '../credentials.js';
 
-const PROVIDER = 'jev-gate-native';
+export const PROVIDER = 'jev-gate-native';
 export interface Connection { version: 1; pid: number; port: number; token: string; marker: string; root: string; original: Obj; installed: Obj }
 const home = (env: Env): string => {
   const path = env['CODEX_HOME'] ?? join(env['HOME'] ?? homedir(), '.codex');
