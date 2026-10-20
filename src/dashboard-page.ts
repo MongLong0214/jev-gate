@@ -247,8 +247,9 @@ const policyOf=(s,r)=>r?.steps.find(x=>x!==s&&x.lane==='policy'&&!x.lifecycle&&x
 // A circuit card reads a step's detail only when it is already fetched; the card never fetches by itself.
 const loaded=(id,s)=>{const d=stepDetails.get(id+' '+s.id);return d?.base===s&&d.step||s};
 // One line on why: a routed change names the baseline it left, else the routing reason; a Gate decision names its policy summary.
-// The line never repeats the decision the card already shows.
-const note=(s,r)=>{const g=s.routing;if(g){const v=decisionText(s),from=g.baseline&&modelName(g.baseline);return from&&s.receipt?.choice&&!v.startsWith(from)?label(from+'에서 변경','Changed from '+from):why(g)}const n=tr((policyOf(s,r)||s).summary||'');return n===decisionText(s)?'':n};
+// The line never repeats the decision the card already shows. #290: a routing step outside the root turn names its scope first,
+// so a child step's or an Agent spawn's choice does not read as the main session's.
+const note=(s,r)=>{const g=s.routing;if(g){const v=decisionText(s),from=g.baseline&&modelName(g.baseline),n=from&&s.receipt?.choice&&!v.startsWith(from)?label(from+'에서 변경','Changed from '+from):why(g);return [g.scope!=='root'&&SCOPE[g.scope]&&scopeOf(s),n].filter(Boolean).join(' · ')}const n=tr((policyOf(s,r)||s).summary||'');return n===decisionText(s)?'':n};
 const RC_ROWS=14,BASIS_ROWS=12;let rcHold=false;
 // The call log keeps fourteen rows of fixed height and columns, so nothing around it moves. A request without its response
 // counts up in its row until the response replaces it.

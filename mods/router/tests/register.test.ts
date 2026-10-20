@@ -84,8 +84,9 @@ describe('register', () => {
 });
 
 // These dispatch the installed Function Hooks through the real host engine with a scripted HTTP/model bottom.
-for (const mode of ['keep', 'effort', 'model', 'both'] as const) {
-  test(`root request and later tool steps use one pair assessment: ${mode}`, async ($, on) => {
+// #283: host 2.1.300+ raises turn.start with an agentId for every subagent run; the root turn's later step stays routed past it.
+for (const mode of ['keep', 'effort', 'model', 'both'] as const) for (const child of [false, true]) {
+  test(`root request and later tool steps use one pair assessment: ${mode}${child ? ', past a subagent turn.start (#283)' : ''}`, async ($, on) => {
     mock.env(on, { TYPESAFE_API_KEY: 'sk-router-testonlynotakey' });
     mock.clock(on);
     on('session.version', () => ({ value: { version: '2.1.287', base: '2.1.287' } }));
@@ -115,7 +116,10 @@ for (const mode of ['keep', 'effort', 'model', 'both'] as const) {
       return { turnId: e.turnId, index: e.index, answer: 'fixture', toolUses: [], stopReason: 'end_turn', usage: null };
     });
     await $.turn.start({ text: 'Implement the clear local fixture.', turnId: 'root' });
+    const childRun = { text: 'List the files under src/.', turnId: 'child-run', agentId: 'child' };
     for (const index of [0, 1]) {
+      // The kit's TurnStartInput predates the host's agentId, so the run is passed as a value, not a literal.
+      if (child && index === 1) await $.turn.start(childRun);
       const stream = $.turn.step({ turnId: 'root', index, model: 'claude-sonnet-5', effort: 'high', messageCount: 1 });
       while (!(await stream.next()).done) { /* preserve the host stream */ }
     }

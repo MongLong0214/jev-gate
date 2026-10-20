@@ -61,13 +61,13 @@ describe('pruneTraceDir', () => {
     return path;
   };
 
-  it('deletes only its own records older than 3 days and leaves everything else, including symlink targets', async () => {
+  it('deletes only its own records older than 14 days and leaves everything else, including symlink targets', async () => {
     const dir = join(tmp, 'prune'); mkdirSync(dir);
     const outside = join(tmp, 'prune-outside'); mkdirSync(outside);
     const target = file(outside, `post-${uuid}.json`, 30);
-    file(dir, `mod_router-${uuid}.json`, 4);
-    file(dir, `.pre_intent-${uuid}.tmp`, 4);
-    file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 2);
+    file(dir, `mod_router-${uuid}.json`, 15);
+    file(dir, `.pre_intent-${uuid}.tmp`, 15);
+    file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 13);
     file(dir, 'notes.json', 30);
     file(dir, `post-${uuid}.json.bak`, 30);
     mkdirSync(join(dir, 'sub'));
@@ -85,7 +85,7 @@ describe('pruneTraceDir', () => {
   it('runs at most once a day per directory', async () => {
     const dir = join(tmp, 'prune-throttle'); mkdirSync(dir);
     expect(await pruneTraceDir(dir, now)).toBe(0);
-    file(dir, `post-${uuid}.json`, 10);
+    file(dir, `post-${uuid}.json`, 20);
     expect(await pruneTraceDir(dir, now + DAY / 2)).toBe(0);
     expect(readdirSync(dir)).toContain(`post-${uuid}.json`);
     expect(await pruneTraceDir(dir, now + DAY + 1)).toBe(1);

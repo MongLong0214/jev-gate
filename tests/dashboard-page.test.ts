@@ -345,6 +345,14 @@ it('names the reason under each circuit card and draws its recorded confidence a
   expect(node(p, 'router').querySelector('.nt')!.textContent).toBe(''); expect(node(p, 'router').querySelector('.pb i')!.getAttribute('style')).toContain('width: 0%');
 });
 
+it('names the scope on the Router card when its last routing step is not the root turn (#290)', () => {
+  const later = new Date(Date.parse(stamp) + 1000).toISOString(), routing = (scope: 'root' | 'child') => ({ scope, baseline: 'claude-opus-5-5', modelReason: 'same_value', effortReason: 'selected' });
+  const p = page(); p.push(snapshot([run('scoped', 'claude', [step('root', 'router', 'host', { routing: routing('root') }), step('child', 'router', 'host', { at: later, routing: routing('child') })])]));
+  const nt = () => node(p, 'router').querySelector('.nt')!.textContent!;
+  expect(nt()).toMatch(/^하위 단계 · \S/); p.click('#language'); expect(nt()).toMatch(/^Child step · \S/);
+  p.push(snapshot([run('rooted', 'claude', [step('root', 'router', 'host', { routing: routing('root') })])])); expect(nt()).not.toMatch(/Child step|Root turn/);
+});
+
 it('makes connection loss explicit and freezes the displayed clock at disconnect', async () => {
   const p = page(); p.push(snapshot([run('r', 'claude', [step('r', 'router', 'jev', { state: 'active' })], { state: 'active', firstAt: new Date(Date.now() - 5000).toISOString() })]));
   const since = () => p.get('runs').querySelector('[data-since]')!.textContent;

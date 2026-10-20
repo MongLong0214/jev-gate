@@ -2640,7 +2640,7 @@ describe('dist/hook.js (process)', () => {
     const traces = mkdtempSync(join(tmp, 'proc-traces-'));
     const old = join(traces, 'post-00000000-0000-4000-8000-000000000000.json'), fresh = join(traces, 'post-11111111-1111-4111-8111-111111111111.json');
     writeFileSync(old, '{}'); writeFileSync(fresh, '{}');
-    const past = (Date.now() - 4 * 86_400_000) / 1000;
+    const past = (Date.now() - 15 * 86_400_000) / 1000;
     utimesSync(old, past, past);
     expect(exec({ hook_event_name: 'SessionStart', session_id: 's1' }, { JEV_GATE_MODE: 'auto', JEV_GATE_TRACE_DIR: traces }).status).toBe(0);
     await vi.waitFor(() => expect(existsSync(old)).toBe(false), { timeout: 10_000, interval: 50 });

@@ -483,6 +483,54 @@ describe('root effort', () => {
     expect(g.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 0, reason: 'effort_pinned' });
   });
 
+  it('keeps a routed root turn routed past a subagent run that raises its own turn.start (#283)', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const first = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step(), first.next));
+    expect(first.calls[0]?.effort).toBe('low');
+    // 2.1.300+ starts a turn for each Agent, SendMessage or forked Skill run, carrying its agentId.
+    router.turnStart({ turnId: 'child-run', text: 'Find the failing test and repair it.', agentId: 'a70a7c70ce9c8992d' });
+    const second = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ index: 1 }), second.next));
+    expect(second.calls).toEqual([step({ index: 1, effort: 'low' })]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'prepared', turn: 't1', index: 1, routed: true }));
+  });
+
+  it('records why a routed root turn goes out native, once, where no record said so as it stopped (#283)', async () => {
+    const routed = async () => {
+      const router = createRouter(configOf(EFFORT_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+      router.turnStart({ turnId: 't1', text: TEXT });
+      await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>().next));
+      const later = async (index: number) => { const n = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step({ index }), n.next)); return n.calls[0]; };
+      return { router, f, later };
+    };
+    const stops = (f: { logs: Record<string, unknown>[] }) => f.logs.filter(l => l['event'] === 'root_stop');
+
+    const reset = await routed();
+    reset.router.contextChanged();
+    expect(await reset.later(1)).toEqual(step({ index: 1 }));
+    await reset.later(2);
+    expect(stops(reset.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'context_reset' }]);
+
+    const next = await routed();
+    next.router.turnStart({ turnId: 't2', text: TEXT });
+    expect(await next.later(1)).toEqual(step({ index: 1 }));
+    expect(stops(next.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'next_turn' }]);
+
+    const failing = await routed();
+    failing.f.engine.availableModels = () => { throw new Error('host read failed'); };
+    expect(await failing.later(1)).toEqual(step({ index: 1 }));
+    expect(stops(failing.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'internal_error' }]);
+
+    const ended = await routed();
+    ended.router.sessionEnd();
+    expect(await ended.later(1)).toEqual(step({ index: 1 }));
+    expect(stops(ended.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'session_ended' }]);
+  });
+
   it('keeps the selected request independent of missing or mismatched response diagnostics', async () => {
     for (const observed of ['claude-haiku-5-5', 'claude-sonnet-5-5', null]) {
       const router = createRouter(configOf(EFFORT_ONLY));
@@ -1052,6 +1100,24 @@ describe('spawn model', () => {
         expect(f.sent).toHaveLength(0);
         expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'resumed' }));
       }
+    });
+    it('sends nothing for a SendMessage resumption of a finished, unnamed agent (#290)', async () => {
+      // SendMessage({ to: <agent id> }) of an agent spawned without a name: no list holds a finished agent.
+      const { router, f, e } = custom('opus', { tool_use_id: 'send', resume: { agentId: 'a986b732adfdb860c' } });
+      f.engine.resumes = async () => false;
+      f.engine.childContext = async () => ({ messages: 0, coverage: 'available', tools: [] });
+      const n = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a986b732adfdb860c' }));
+      await router.agentSpawn(f.engine, e, n.next);
+      expect(n.calls).toEqual([e]);
+      expect(f.sent).toHaveLength(0);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', tool_use_id: 'send', skipped: 'resumed' }));
+      expect(f.logs.filter(l => l.event === 'spawn_result')).toEqual([]);
+      // Its resumed run is a continuation: its steps stay native too.
+      const resumed = step({ agentId: 'a986b732adfdb860c', turnId: 'resumed-run' });
+      const s = streamNext<TurnStepEvent>();
+      await drain(router.turnStep(f.engine, resumed, s.next));
+      expect(s.calls).toEqual([resumed]);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_route', agent_id: 'a986b732adfdb860c', skipped: 'child_unregistered' }));
     });
   });
 
