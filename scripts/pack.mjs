@@ -4,7 +4,7 @@
 //                                                              the two Mods and the MCP server (the one plugin)
 //   router (JGR-01)  → <outDir>/jev-gate-router-<version>.zip  the Function Hooks Mod in mods/router, at its own version
 //   codex → <outDir>/jev-gate-codex-<version>.zip native Codex hooks, MCP server, skills and dashboard
-// legacy and codex require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
+// All profiles require `npm run build` first (which clears dist, so a deleted module cannot reappear here).
 // The archive is written here rather than by the zip CLI, so one tree gives the same bytes on any machine: the marketplace pins
 // the legacy archive's SHA-256 before a release is tagged, and scripts/release.mjs check rebuilds it to compare.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -40,8 +40,8 @@ const agents = LEGACY_AGENTS;
 
 const walk = (p) => (statSync(p).isDirectory() ? readdirSync(p).flatMap((n) => walk(join(p, n))) : [p]);
 
-// The host loads a Function Hooks Mod from its TypeScript source, so the router archive holds no dist, no Node
-// entrypoint and nothing of legacy. Its declarations and host tests stay in the repository.
+// The host loads Function Hooks from TypeScript. The router archive also carries the bounded Node metadata reader;
+// legacy entrypoints, declarations and host tests stay out of that profile.
 const ROUTER = 'mods/router';
 const routerHooks = () =>
   existsSync(join(root, ROUTER, 'hooks')) ? readdirSync(join(root, ROUTER, 'hooks')).filter((n) => n.endsWith('.ts') || n === 'hooks.json').sort() : [];
@@ -57,7 +57,7 @@ const modSources = () =>
       .sort()
       .map((n) => `mods/${m}/hooks/${n}`),
   );
-const ROUTER_SHARED = ['cost', 'provider-prices', 'provider-prices-data', 'route-cost', 'claude-cache', 'router-answers', 'router-selection', 'router-context', 'router-child-context', 'router-secret', 'claude-models', 'claude-candidates', 'frontier-routing'].map(n => `src/${n}.ts`);
+const ROUTER_SHARED = ['cost', 'provider-prices', 'provider-prices-data', 'route-cost', 'claude-cache', 'router-answers', 'router-selection', 'router-context', 'router-child-context', 'router-observation', 'router-secret', 'claude-models', 'claude-candidates', 'frontier-routing'].map(n => `src/${n}.ts`);
 const shared = () => ['hooks/register.ts', ...modSources(), ...ROUTER_SHARED, 'plugins/evidence/dist/server.mjs'];
 // Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo and results banner are the
 // README's images, each with its dark-theme variant. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.
@@ -88,6 +88,7 @@ const entries =
           .filter((n) => n !== 'hooks.json')
           .map((n) => [`${ROUTER}/hooks/${n}`, `hooks/${n}`]),
         [`${ROUTER}/README.md`, 'README.md'],
+        ['dist/router-observation-hook.js', 'dist/router-observation-hook.js'],
         ...ROUTER_SHARED.map(f => [f, f]),
       ]
     : [
@@ -104,6 +105,8 @@ if (hostsDist && !existsSync(join(root, 'dist/hook.js'))) missing.push('dist/hoo
 if (hostsDist && !existsSync(join(root, 'dist/entry.js'))) missing.push('dist/entry.js');
 // hooks.json also commands dist/compact-hook.js on PreCompact, SessionStart(compact) and PostCompact (the classic Compact path).
 if (hostsDist && !existsSync(join(root, 'dist/compact-hook.js'))) missing.push('dist/compact-hook.js');
+// turn.step reads applied effort and TTL through the bounded Node helper.
+if (hostsDist && !existsSync(join(root, 'dist/router-observation-hook.js'))) missing.push('dist/router-observation-hook.js');
 if (missing.length) {
   process.stderr.write(`pack: missing ${missing.join(', ')}${profile === 'router' ? '' : ' — run npm run build first'}\n`);
   process.exit(1);

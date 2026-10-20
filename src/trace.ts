@@ -127,13 +127,13 @@ export const openTraceDir = (dir: string, env: Env = process.env): { ok: true; w
 };
 
 const DAY_MS = 86_400_000;
-export const TRACE_RETENTION_MS = 14 * DAY_MS;
+export const TRACE_RETENTION_MS = 2 * DAY_MS;
 /** Only names this writer and the mods produce: `<phase>-<uuid>.json`, an abandoned `.<phase>-<uuid>.tmp`, a loss marker `.<phase>-<uuid>.failed` and the Codex hook's
  * once-per-session connection failure marker `connection_failed-<hash>.seen` (#287), which goes with its row. */
 const OWN_TRACE = /^(?:[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json|\.[a-z][a-z_]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:tmp|failed)|connection_failed-[0-9a-f]{32}\.seen)$/;
 
 /**
- * Deletes this tool's trace files older than 14 days, directly in `dir`. At most once a day per directory across
+ * Deletes this tool's trace files older than 48 hours, directly in `dir`. At most once a day per directory across
  * processes: the `.retention` stamp's mtime is the last run. Records are written once, so mtime is their write time;
  * the file names carry no time. Symlinks, other names and subdirectories other than an empty loss marker are never
  * touched. Never throws.

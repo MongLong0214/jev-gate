@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { JEV_MODEL } from '../mods/router/hooks/client.ts';
 import { activityChecks, type ActivityCheck, type ActivityInput } from '../src/doctor-activity.js';
 
 /** #279: every activity check against a fixture trace that breaks it and one that does not. Fake records only. */
@@ -132,8 +133,8 @@ describe('activity: router_cost', () => {
   const result = (observed: string, usage: Rec, minutes: number, session = 's1'): Rec[] => {
     const at = { session_id: session, scope: 'root', turn: `t-${session}-${index++}`, index: 0 };
     return [
-      ...(observed.includes('opus') ? [] : [router('root', { ...at, from: { model: 'claude-opus-5-5' }, patch: { model: 'claude-haiku-5-5' } }, minutes), router('prepared', { ...at, routed: true }, minutes)]),
-      router('root_result', { ...at, requested: observed, applied: { model: observed }, observed, usage }, minutes),
+      ...(observed.includes('opus') ? [] : [router('root', { ...at, sent: false, from: { model: 'claude-opus-5-5' }, patch: { model: 'claude-haiku-5-5' } }, minutes), router('prepared', { ...at, routed: true }, minutes)]),
+      router('root_result', { ...at, requested: observed, applied: { model: observed }, observed, usage, accounting: { write5m: 0, write1h: usage['cache_creation'] } }, minutes),
     ];
   };
   const losing = (): Rec[] => [
@@ -141,10 +142,10 @@ describe('activity: router_cost', () => {
     ...result('claude-haiku-5-5', { input: 2, output: 100, cache_read: 0, cache_creation: 90_000 }, 29),
     ...result('claude-opus-5-5', { input: 2, output: 100, cache_read: 0, cache_creation: 90_000 }, 28),
   ];
-  it('fails when the Opus rewrite on return outweighs a short switch at both TTLs', () => {
+  it('fails when the Opus rewrite on return outweighs a short switch at the observed TTL', () => {
     const c = check(run(losing()), 'router_cost');
     expect(c.level).toBe('fail');
-    expect(c.message).toMatch(/1 routed root requests off their turn's baseline model over 1 switches; net -\$0\.\d\d at 5m \/ -\$0\.\d\d at 1h/);
+    expect(c.message).toMatch(/1 routed root requests off their turn's baseline model over 1 switches; net -\$0\.\d\d at observed TTL/);
   });
 
   it.each(['input', 'cache_read', 'cache_creation', 'output'])('ACT-USAGE-01 keeps a losing return with missing %s unknown', (counter) => {
@@ -159,11 +160,11 @@ describe('activity: router_cost', () => {
   it('ACT-USAGE-01 computes explicit zero counters', () => {
     const c = check(run(result('claude-haiku-5-5', { input: 0, cache_read: 0, cache_creation: 0, output: 2000 }, 5)), 'router_cost');
     expect(c.level).toBe('ok');
-    expect(c.message).toMatch(/net \+\$0\.04 at 5m \/ \+\$0\.04 at 1h/);
+    expect(c.message).toMatch(/net \+\$0\.04 at observed TTL/);
     expect(c.message).not.toContain('unknown');
     const zero = check(run(result('claude-haiku-5-5', { input: 0, cache_read: 0, cache_creation: 0, output: 0 }, 5)), 'router_cost');
     expect(zero.level).toBe('ok');
-    expect(zero.message).toContain('net +$0.00 at 5m / +$0.00 at 1h');
+    expect(zero.message).toContain('net +$0.00 at observed TTL');
   });
 
   it.each(['input', 'cache_read', 'cache_creation', 'output'])('ACT-USAGE-01 distinguishes mixed zero and missing %s', (counter) => {
@@ -189,11 +190,11 @@ describe('activity: router_cost', () => {
   });
 
   it('gives native requests in another session no savings, so they cannot hide a loss', () => {
-    const native = (minutes: number): Rec => router('root_result', { session_id: 's2', turn: 'n', index: minutes, requested: 'claude-haiku-5-5', observed: 'claude-haiku-5-5', usage: { input: 2, output: 2000, cache_read: 50_000, cache_creation: 1000 } }, minutes);
+    const native = (minutes: number): Rec => router('root_result', { session_id: 's2', turn: 'n', index: minutes, requested: 'claude-haiku-5-5', observed: 'claude-haiku-5-5', usage: { input: 2, output: 2000, cache_read: 50_000, cache_creation: 1000 }, accounting: { write5m: 0, write1h: 1000 } }, minutes);
     const rows = losing(), alone = check(run(rows), 'router_cost');
-    const c = check(run([...rows, router('root_result', { session_id: 's2', turn: 'n', index: 99, requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', usage: { input: 2, output: 100, cache_read: 50_000, cache_creation: 1000 } }, 60), ...times(50, i => native(59 - i))]), 'router_cost');
+    const c = check(run([...rows, router('root_result', { session_id: 's2', turn: 'n', index: 99, requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', usage: { input: 2, output: 100, cache_read: 50_000, cache_creation: 1000 }, accounting: { write5m: 0, write1h: 1000 } }, 60), ...times(50, i => native(59 - i))]), 'router_cost');
     expect(c.level).toBe('fail');
-    expect(c.message).toMatch(/^router_cost: 1 routed root requests off their turn's baseline model over 1 switches; net -\$0\.\d\d at 5m/);
+    expect(c.message).toMatch(/^router_cost: 1 routed root requests off their turn's baseline model over 1 switches; net -\$0\.\d\d at observed TTL/);
     expect(c.message.match(/; net .*?write prices/)?.[0]).toBe(alone.message.match(/; net .*?write prices/)?.[0]);
   });
 
@@ -219,7 +220,7 @@ describe('activity: router_cost', () => {
       ...Array.from({ length: 10 }, (_, i) => result('claude-haiku-5-5', { input: 2, output: 2000, cache_read: 50_000, cache_creation: 1000 }, 58 - i)).flat(),
     ]), 'router_cost');
     expect(c.level).toBe('ok');
-    expect(c.message).toMatch(/11 routed root requests off their turn's baseline model over 1 switches; net \+\$\d+\.\d\d at 5m \/ \+\$\d+\.\d\d at 1h/);
+    expect(c.message).toMatch(/11 routed root requests off their turn's baseline model over 1 switches; net \+\$\d+\.\d\d at observed TTL/);
   });
 
   it('charges no rewrite when the return comes after the cache would have expired anyway', () => {
@@ -228,13 +229,56 @@ describe('activity: router_cost', () => {
       ...result('claude-haiku-5-5', { input: 2, output: 100, cache_read: 0, cache_creation: 90_000 }, 199),
       ...result('claude-opus-5-5', { input: 2, output: 100, cache_read: 0, cache_creation: 90_000 }, 199 - gap),
     ];
-    expect(check(run(rows(120)), 'router_cost').message).toMatch(/net \+\$0\.\d\d at 5m \/ \+\$0\.\d\d at 1h/);
-    expect(check(run(rows(10)), 'router_cost').message).toMatch(/net \+\$0\.\d\d at 5m \/ -\$0\.\d\d at 1h/);
+    expect(check(run(rows(120)), 'router_cost').message).toMatch(/net \+\$0\.\d\d at observed TTL/);
+    expect(check(run(rows(10)), 'router_cost').message).toMatch(/net -\$0\.\d\d at observed TTL/);
+  });
+
+  it('prices the actual prefix growth including the previous output, rather than a fixed new-content guess', () => {
+    const rows = [
+      ...result('claude-opus-5-5', { input: 0, output: 100, cache_read: 99_000, cache_creation: 1000 }, 30),
+      ...result('claude-haiku-5-5', { input: 0, output: 20_000, cache_read: 0, cache_creation: 110_100 }, 29),
+      ...result('claude-opus-5-5', { input: 0, output: 100, cache_read: 0, cache_creation: 130_100 }, 28),
+    ];
+    // New content is 10,000, then zero. Savings .33992 minus the return rewrite 1.01478 = -.67486.
+    expect(check(run(rows), 'router_cost')).toMatchObject({ level: 'fail', message: expect.stringContaining('net -$0.67 at observed TTL') });
+  });
+
+  it('uses the observed five-minute TTL on a return after ten minutes', () => {
+    const rows = losing();
+    for (const r of rows.filter(r => r['event'] === 'root_result')) r['accounting'] = { write5m: (r['usage'] as Rec)['cache_creation'], write1h: 0 };
+    rows.at(-1)!['written_at'] = ago(19);
+    expect(check(run(rows), 'router_cost')).toMatchObject({ level: 'ok', message: expect.stringContaining('net +$0.') });
+  });
+
+  it.each(['ttl', 'prefix'])('keeps missing %s evidence unknown', missing => {
+    const rows = losing();
+    if (missing === 'ttl') delete rows.at(-1)!['accounting'];
+    else rows.splice(0, 1);
+    const c = check(run(rows), 'router_cost');
+    expect(c.level).toBe('warn'); expect(c.message).toContain('missing TTL, price or prefix evidence'); expect(c.message).not.toContain('net ');
+  });
+
+  it('subtracts one recorded Jev charge, joining intent and duplicate late usage to the same root call', () => {
+    const rows = result('claude-haiku-5-5', { input: 0, output: 2000, cache_read: 0, cache_creation: 0 }, 5);
+    const call = rows[0]!; Object.assign(call, { sent: true, jev_model: JEV_MODEL, usage: { input: 2_000_000 } });
+    const c = check(run([...rows, { ...call, event: 'request' }, { ...call, event: 'late' }]), 'router_cost');
+    expect(c).toMatchObject({ level: 'fail', message: expect.stringContaining('minus Jev $0.0840') });
+    expect(c.message).toContain('net -$0.05');
+  });
+
+  it.each(['usage', 'model', 'receipt'])('keeps Jev cost unknown without recorded %s', missing => {
+    const rows = result('claude-haiku-5-5', { input: 0, output: 2000, cache_read: 0, cache_creation: 0 }, 5), call = rows[0]!;
+    Object.assign(call, { sent: true, jev_model: JEV_MODEL, usage: { input: 0 } });
+    if (missing === 'usage') call['usage'] = {};
+    if (missing === 'model') delete call['jev_model'];
+    if (missing === 'receipt') call['event'] = 'request';
+    const c = check(run(rows), 'router_cost');
+    expect(c.level).toBe('warn'); expect(c.message).toContain('1 Jev calls without recorded cost'); expect(c.message).not.toContain('net ');
   });
 
   it('is ok with no switch at all', () => expect(check(run(result('claude-opus-5-5', { input: 2, output: 1, cache_read: 1, cache_creation: 1 }, 5)), 'router_cost').message).toMatch(/no routed root model switch/));
   it('does not credit a native non-Opus session as a Router switch', () => {
-    expect(check(run([router('root_result', { requested: 'claude-haiku-5-5', observed: 'claude-haiku-5-5', usage: { input: 2, output: 2000, cache_read: 50_000, cache_creation: 1000 } })]), 'router_cost').message).toMatch(/no routed root model switch/);
+    expect(check(run([router('root_result', { requested: 'claude-haiku-5-5', observed: 'claude-haiku-5-5', usage: { input: 2, output: 2000, cache_read: 50_000, cache_creation: 1000 }, accounting: { write5m: 0, write1h: 1000 } })]), 'router_cost').message).toMatch(/no routed root model switch/);
   });
 });
 

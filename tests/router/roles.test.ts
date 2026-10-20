@@ -53,9 +53,8 @@ describe('capability offer', () => {
     expect(offer(OPUS, 'high', { scope: 'spawn' }).questions['capability']!.instructions).toContain('complete this task reliably from the task text alone');
     expect(offer(OPUS, 'high', { scope: 'child' }).questions['capability']!.instructions).toContain('perform the NEXT inference after the observed tool outcomes');
   });
-  it('tells a spawn that a model named for another tool is not its own lock', () => {
-    expect(offer(OPUS, 'high', { scope: 'spawn' }).questions['control']!.instructions).toContain('is not a lock on this worker\'s model');
-    expect(offer(OPUS, 'high').questions['control']!.instructions).not.toContain('this worker\'s model');
+  it.each(['root', 'child', 'spawn'] as const)('tells the %s caller that a model named for another tool is not its own lock', scope => {
+    expect(offer(OPUS, 'high', { scope }).questions['control']!.instructions).toContain("is not a lock on the current caller's model or effort");
   });
   it('names every capability option as a situation with examples and a boundary', () => {
     for (const c of CAPABILITY) expect(c.situation).toMatchObject({ what: expect.any(String), examples: expect.arrayContaining([expect.any(String)]), not_for: expect.any(String) });

@@ -47,14 +47,14 @@ describe('the one plugin’s hooks module', () => {
 
   it('keeps owned dispatch eligibility with all Mods off and reads only plugin option names', async () => {
     const off = { compactEnabled: false, routerEnabled: false };
-    expect([...(await registered(off)).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end', 'session.compact']);
-    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual(['session.start', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end', 'session.compact']);
+    expect([...(await registered(off)).keys()]).toEqual(['session.start', 'classic.SessionStart', 'classic.UserPromptSubmit', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end', 'session.compact']);
+    expect([...(await registered({ ...off, enabled: true })).keys()]).toEqual(['session.start', 'classic.SessionStart', 'classic.UserPromptSubmit', 'turn.complete', 'turn.step', 'agent.offer', 'agent.spawn', 'session.end', 'session.compact']);
   });
 
   it('registers each event once with every option at its default, both Mods on', async () => {
     const defaults = Object.fromEntries(Object.entries(readJson('.claude-plugin/plugin.json').userConfig!).map(([k, v]) => [k, (v as { default?: unknown }).default]));
     for (const options of [{}, defaults]) {
-      expect([...(await registered(options)).keys()].sort()).toEqual(['session.start', 'agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step'].sort());
+      expect([...(await registered(options)).keys()].sort()).toEqual(['session.start', 'classic.SessionStart', 'classic.UserPromptSubmit', 'agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step'].sort());
     }
   });
 
@@ -69,7 +69,7 @@ describe('the one plugin’s hooks module', () => {
   it('keeps the other Mod when one option is unusable, and ignores an option no Mod owns any more', async () => {
     // A removed Mod's option, or a Mod option with a bad value, never throws or turns off the Mod beside it.
     const compactOff = await registered({ compactEnabled: true, compactMode: 'fast', routerEnabled: true });
-    expect([...compactOff.keys()].filter((k) => !k.startsWith('turn.') && !k.startsWith('agent.'))).toEqual(['session.start', 'session.end', 'session.compact']);
+    expect([...compactOff.keys()].filter((k) => !k.startsWith('turn.') && !k.startsWith('agent.'))).toEqual(['session.start', 'classic.SessionStart', 'classic.UserPromptSubmit', 'session.end', 'session.compact']);
     expect([...compactOff.keys()]).toContain('turn.step');
     const ignored = await registered({ compactEnabled: true, routerEnabled: true, outputEnabled: true });
     expect([...ignored.keys()].sort()).toEqual([...(await registered({ compactEnabled: true, routerEnabled: true })).keys()].sort());

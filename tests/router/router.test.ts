@@ -12,6 +12,7 @@ import type { HostPins, RootRecord, SpawnEvent, SpawnOutcome, TurnStepEvent } fr
 import { cachePatch, createRouter, hostSupported, ROUTER_HOOK_VERSION, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
 import { sessionFacts } from '../../src/bench/ab.js';
 import { buildOperations } from '../../src/operations.js';
+import { normalizeUsage } from '../../src/cost.ts';
 import type { Responder } from './fake-engine.ts';
 import { answering, choice, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext, warmRoot } from './fake-engine.ts';
 
@@ -377,7 +378,7 @@ describe('root effort', () => {
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', assessment: 'timeout', sent: true }));
     // What the late reply cost is still recorded, against the turn that asked, under the short trace keys (`input`, not
     // `input_tokens`).
-    expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', usage: { input: 900, output: 40 } });
+    expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', jev_model: JEV_MODEL, usage: { input: 900, output: 40 } });
   });
 
   it('stops asking for the rest of the activation after a 401, including one that arrives late', async () => {
@@ -2336,6 +2337,35 @@ describe('#81: control correctness', () => {
     await drain(router.turnStep(f.engine, childStep({ index: 1 }), a.next));
     expect(a.calls).toEqual([childStep({ effort: 'low' }), childStep({ index: 1, effort: 'low' })]);
     expect(b.calls).toEqual([childStep({ agentId: 'a2', turnId: 'c2', effort: 'medium' }), childStep({ agentId: 'a2', turnId: 'c2', index: 1, effort: 'medium' })]);
+  });
+
+  it.each([
+    ['root', false], ['child', false], ['root', true], ['child', true],
+  ] as const)('records independent applied evidence and never replays the completed %s response when observation fails: %s', async (scope, fails) => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', .95] }) });
+    const host = { usage: { model: 'claude-opus-5-5', input_tokens: 2, output_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 } };
+    const linked = { ...host.usage, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 20 } };
+    f.engine.observation = vi.fn(async () => {
+      if (fails) throw new Error('transcript unavailable');
+      return { effort: 'medium', request: 'linked-request', model: host.usage.model, usage: normalizeUsage('claude', linked) };
+    });
+    const calls: TurnStepEvent[] = [];
+    const next = Object.assign(async function* (e: TurnStepEvent) { calls.push(e); yield 'chunk'; return host; }, { signal: new AbortController().signal });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const e = step(scope === 'child' ? { agentId: 'native-child' } : {});
+    const result = await drain(router.turnStep(f.engine, e, next));
+    expect(result).toEqual({ chunks: ['chunk'], result: host });
+    expect(result.result).toBe(host);
+    expect(calls).toHaveLength(1);
+    expect(f.engine.observation).toHaveBeenCalledExactlyOnceWith(e.agentId, 0, host.usage);
+    const row = f.logs.find(l => l.event === `${scope}_result`);
+    expect(row).toMatchObject({ observed_effort: fails ? 'unknown' : 'medium', effort_evidence: fails ? 'unobserved' : 'transcript_api_request',
+      accounting: { write5m: fails ? null : 0, write1h: fails ? null : 20 } });
+    if (scope === 'root') {
+      expect(row).toMatchObject({ applied: { effort: 'low' }, cost: fails ? { usd: null, reason: 'write_ttl_unknown' } : { usd: expect.any(Number) } });
+    } else expect(row).toMatchObject({ requested_effort: 'high' });
+    expect(host.usage).not.toHaveProperty('cache_creation');
   });
 
   it('records a requested effort as requested, and the effort it ran at as unknown', async () => {

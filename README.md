@@ -189,7 +189,7 @@ When enabled and eligible, these inputs can leave the machine:
 
 The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. The dashboard is local.
 
-Recording stores private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (`$XDG_STATE_HOME` supported). Records older than 14 days are deleted automatically. Prompt text, source bodies, tool output, and keys do not appear in the dashboard.
+Recording stores private metadata under `~/.local/state/jev-gate/{claude,codex}/traces` (`$XDG_STATE_HOME` supported). Records older than 48 hours are deleted automatically. Prompt text, source bodies, tool output, and keys do not appear in the dashboard.
 
 ## Update and troubleshoot
 
