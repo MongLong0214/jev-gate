@@ -580,6 +580,23 @@ describe('Gate A admission', () => {
     expect(late).toMatchObject({ kind: 'skip', code: 'generation_changed' });
     expect(state(env).current.receipts).toEqual([]);
   });
+
+  it('#284: a late Gate A answer for an older generation of the same prompt_id is recorded, never applied to the newer one', async () => {
+    const env = makeEnv();
+    let newer: string | undefined;
+    // The host re-sends the prompt_id (a queued prompt or a notice) while the first answer is still in flight.
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      if (newer === undefined) {
+        await run(env, promptEvent(), fakeJev({ forbidsDelegation: 0.95 }));
+        newer = state(env).current.generation_id;
+      }
+      return await (fakeJev({ execution: 'orchestrated' }) as unknown as typeof fetch)(url, init);
+    });
+    expect(await run(env, promptEvent(), fetchImpl)).toMatchObject({ kind: 'skip', code: 'generation_changed' });
+    const after = state(env);
+    expect(after.current).toMatchObject({ prompt_id: after.history[0]?.prompt_id, generation_id: newer, shape: 'direct', request: null });
+    expect(after.history[0]?.generation_id).not.toBe(newer);
+  });
 });
 
 describe('liveness ring (#48 P2)', () => {

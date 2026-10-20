@@ -256,6 +256,8 @@ export interface JobAttempts {
 /** One generation = one (session_id, prompt_id) pair (A2). A new prompt supersedes the previous one into history. */
 export interface JobGeneration {
   prompt_id: string | null;
+  /** #284: the host reuses a prompt_id for queued prompts and notices, so a late answer is matched to this, not to it. Absent in older state. */
+  generation_id?: string;
   /**
    * A17: the admitted request, verbatim, carried to the worker as its task. Null when the turn carried none, or when
    * it was larger than REQUEST_MAX_BYTES: the absence is stated in the prompt, never truncated into a half-spec.
@@ -285,6 +287,10 @@ export interface JobGeneration {
   background_delivery?: { result: string; prompt_id: string; stalled_since: string };
   /** Terminal policy guidance delivered to the root, rather than to a SubagentStop child context. */
   background_context?: string;
+  /** #281: executions a native TaskStop ended, each awaiting the host's one killed notice (taken once, `notices_taken`). */
+  background_stopped?: Array<{ agent_id: string; tool_use_id: string }>;
+  /** #281: notices taken as the host's before their row was written (noticeClaim). A later copy is a person's. */
+  notices_taken?: string[];
 }
 
 export interface JobState {

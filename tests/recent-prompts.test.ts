@@ -37,6 +37,27 @@ describe('readRecentPrompts (#115)', () => {
     expect(readRecentPrompts(p, 'now')).toEqual(['real', 'blocks \njoined']);
   });
 
+  it('#281: keeps what a person typed and skips host notices, compact summaries and scheduled turns by their row, not their text', () => {
+    const notice = '<task-notification>\n<task-id>b6w41xrqn</task-id>\n<status>completed</status>\n</task-notification>';
+    const p = write([
+      user('typed', { promptSource: 'typed', turnOrigin: 'human', origin: { kind: 'human' } }),
+      user('queued while busy', { promptSource: 'queued', turnOrigin: 'human', origin: { kind: 'human' } }),
+      user('accepted suggestion', { promptSource: 'suggestion_accepted', turnOrigin: 'human' }),
+      user('from -p', { promptSource: 'sdk', turnOrigin: 'sdk' }),
+      user(`pasted ${notice}`, { promptSource: 'typed', turnOrigin: 'human', origin: { kind: 'human' } }),
+      // 2.1.30x, 2.1.27x (no producer, no turnOrigin) and transcript-only queue variants of a native notice.
+      user(notice, { promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' } }),
+      user(notice, { promptSource: 'system', origin: { kind: 'task-notification' } }),
+      user(notice, { promptSource: 'system', origin: { kind: 'task-notification', producer: 'session-task', runId: 'r' }, queueTranscriptOnly: true }),
+      user('This session is being continued from a previous conversation.', { isCompactSummary: true, isVisibleInTranscriptOnly: true, turnOrigin: 'human' }),
+      user('scheduled fire', { promptSource: 'system', turnOrigin: 'scheduled', isMeta: true }),
+      user('peer message', { origin: { kind: 'peer' } }),
+      { type: 'attachment', attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: notice } },
+      { type: 'queue-operation', operation: 'enqueue', content: notice },
+    ]);
+    expect(readRecentPrompts(p, 'now', 10)).toEqual(['typed', 'queued while busy', 'accepted suggestion', 'from -p', `pasted ${notice}`]);
+  });
+
   it('drops a turn that looks like a secret instead of redacting it, and truncates long turns', () => {
     const long = 'x'.repeat(RECENT_PROMPT_MAX_CHARS + 50);
     const p = write([user('password = correct-horse-battery-staple-0000'), user(long)]);

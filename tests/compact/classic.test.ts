@@ -159,6 +159,14 @@ describe('classic path: restore', () => {
     expect((await runClassicCompact(input('SessionStart', { source: 'compact' }), jev))).toContain('"additionalContext"');
   });
 
+  it('#281: the current task is the person\'s last request, never a task notice or an earlier compact summary', async () => {
+    const notice = '<task-notification>\n<task-id>b6w41xrqn</task-id>\n<status>completed</status>\n<summary>Background command completed</summary>\n</task-notification>';
+    write([...session(), { type: 'user', uuid: 'n1', promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' }, message: { role: 'user', content: notice } },
+      { type: 'user', uuid: 'c1', isCompactSummary: true, isVisibleInTranscriptOnly: true, turnOrigin: 'human', message: { role: 'user', content: 'This session is being continued from a previous conversation.' } }]);
+    const out = await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    expect(out).toContain('The current task: "Rename parseRow to readRow in src/rows.ts and keep the tests green."');
+  });
+
   it('a Jev that fails or answers wrongly costs the selection only: the guidance and the restore stand', async () => {
     const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' };
     const down: Transport = { sleep: () => new Promise<void>(() => undefined), fetch: async () => { throw new Error('network'); } };
