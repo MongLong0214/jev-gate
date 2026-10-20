@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { isHostNoticeRow } from './recent-prompts.js';
@@ -7,10 +8,10 @@ import type { HookInput } from './types.js';
 export const dispatchMarker = (token: string): string => `\n\n[JEV_DISPATCH token=${token}]`;
 
 /** #281: why a prompt was or was not taken as a native notice. Gate A records it, so notice inflow can be counted. */
-export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'task_stop' | 'unproven';
+export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'task_stop' | 'launch_receipt' | 'unproven';
 
 /** Suppress host-authored notice turns; this never establishes worker termination. */
-export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: NoticeBasis } => {
+export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: NoticeBasis; launched?: true } => {
   const human = (basis: NoticeBasis) => ({ notice: false, basis });
   if (!input.session_id || !input.prompt_id || !input.transcript_path || !/^\s*<task-notification>/.test(input.prompt ?? '')) return human('not_notice');
   if (input.source !== undefined && input.source !== 'system') return human('source');
@@ -19,33 +20,58 @@ export const taskNoticeVerdict = (input: HookInput): { notice: boolean; basis: N
   // Older payloads lack source: only the host's own notice row, under this prompt's identity, can establish it.
   // #281 review: before that row is flushed nothing names the author. On 2.1.304 a person's input queued mid-turn gets
   // the running turn's prompt ID and the same enqueue record as a notice, and idle input of either author a fresh ID
-  // (fake-API probe, Monitor/Bash/Agent). Such a prompt stays a person's, so Gate A is asked rather than skipped.
+  // (fake-API probe, Monitor/Bash/Agent). Such a prompt is `launched` at most: exactly one envelope naming a launch receipt
+  // of this session. The hook takes that claim once under its lock (noticeClaim); anything else is a person's, for Gate A.
   let fd: number | undefined;
   try {
     fd = openSync(input.transcript_path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const st = fstatSync(fd); if (!st.isFile()) return human('unproven');
-    const offset = Math.max(0, st.size - 1024 * 1024), buffer = Buffer.alloc(st.size - offset);
+    // #281: a launch receipt sat up to 6.1 MiB before its notice (p90 2.3 MiB, 2026-10-17..20); 8 MiB parses in ~17 ms.
+    const offset = Math.max(0, st.size - 8 * 1024 * 1024), buffer = Buffer.alloc(st.size - offset);
     readSync(fd, buffer, 0, buffer.length, offset);
     const rows = buffer.toString().split('\n').flatMap(line => { if (!line.includes('"user"')) return []; try { const row: unknown = JSON.parse(line); return row && typeof row === 'object' && !Array.isArray(row) ? [row as Record<string, unknown>] : []; } catch { return []; } });
     const textOf = (row: Record<string, unknown>): string | null => {
       const content = (row['message'] as { content?: unknown } | undefined)?.content;
       return typeof content === 'string' ? content : Array.isArray(content) && content.every(c => c?.type === 'text' && typeof c.text === 'string') ? content.map(c => c.text).join('\n') : null;
     };
-    return rows.some(row => isHostNoticeRow(row) && row['sessionId'] === input.session_id && (row['promptId'] === input.prompt_id || row['uuid'] === input.prompt_id) && textOf(row) === input.prompt) ? { notice: true, basis: 'transcript_row' } : human('unproven');
+    if (rows.some(row => isHostNoticeRow(row) && row['sessionId'] === input.session_id && (row['promptId'] === input.prompt_id || row['uuid'] === input.prompt_id) && textOf(row) === input.prompt)) return { notice: true, basis: 'transcript_row' };
+    // The receipt is the host's tool_result row for the launching call: Agent `agentId`, background Bash `backgroundTaskId`,
+    // Monitor `taskId`. A Monitor event names no call, so only a Monitor receipt can launch it.
+    const envelope = noticeEnvelope(input.prompt ?? '');
+    const launched = envelope !== null && rows.some(row => {
+      const result = row['toolUseResult'] as Record<string, unknown> | undefined;
+      const content = (row['message'] as { content?: unknown } | undefined)?.content;
+      return row['type'] === 'user' && row['sessionId'] === input.session_id && row['isSidechain'] !== true && !!result && typeof result === 'object' &&
+        (envelope.tool === null ? result['taskId'] === envelope.task : [result['agentId'], result['backgroundTaskId'], result['taskId']].includes(envelope.task)) &&
+        Array.isArray(content) && content.some(c => c?.type === 'tool_result' && (envelope.tool === null || c.tool_use_id === envelope.tool));
+    });
+    return launched ? { notice: false, basis: 'unproven', launched: true } : human('unproven');
   } catch { return human('unproven'); }
   finally { if (fd !== undefined) closeSync(fd); }
 };
 export const isNativeTaskNotification = (input: HookInput): boolean => taskNoticeVerdict(input).notice;
+
+/** #281: the one task-notification a whole prompt is: a terminal notice names its task, launching call and status, a Monitor event only its task. */
+const noticeEnvelope = (prompt: string): { task: string; tool: string | null; status: string | null } | null => {
+  if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(prompt) || prompt.split('<task-notification>').length !== 2) return null;
+  const fields = (name: string): string[] => [...prompt.matchAll(new RegExp(`<${name}>([^<>]*)</${name}>`, 'g'))].map(m => m[1]!);
+  const [task, tool, status] = [fields('task-id'), fields('tool-use-id'), fields('status')];
+  return task.length === 1 && tool.length <= 1 && status.length === tool.length ? { task: task[0]!, tool: tool[0] ?? null, status: status[0] ?? null } : null;
+};
+
+/** #281: what taking a notice before its row uses up: a launch's one terminal notice, or one distinct Monitor event. */
+export const noticeClaim = (prompt: string): string | null => {
+  const envelope = noticeEnvelope(prompt);
+  return envelope && `${envelope.task} ${envelope.tool ?? createHash('sha256').update(prompt).digest('hex')}`;
+};
 
 /**
  * #281: the host's killed notice for an execution a native TaskStop just ended. Its hook runs before its row, so
  * taskNoticeVerdict cannot prove it; the recorded stop can. Exactly one task, its launching tool call, status killed.
  */
 export const isStopNotice = (prompt: string, stop: { agent_id: string; tool_use_id: string }): boolean => {
-  if (!/^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/.test(prompt)) return false;
-  const fields = (name: string): string[] => [...prompt.matchAll(new RegExp(`<${name}>([^<>]*)</${name}>`, 'g'))].map(m => m[1]!);
-  const [task, tool, status] = [fields('task-id'), fields('tool-use-id'), fields('status')];
-  return task.length === 1 && task[0] === stop.agent_id && tool.length === 1 && tool[0] === stop.tool_use_id && status.length === 1 && status[0] === 'killed';
+  const envelope = noticeEnvelope(prompt);
+  return envelope?.task === stop.agent_id && envelope.tool === stop.tool_use_id && envelope.status === 'killed';
 };
 
 /** Native terminal evidence, never a launch receipt or a string taken from a newer root prompt. */

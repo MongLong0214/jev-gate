@@ -4,7 +4,7 @@ import { prepareDispatchAllocation, selectedDispatchPair, type DispatchAllocatio
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
-import { claudeTerminal, dispatchMarker, isStopNotice, taskNoticeVerdict, type NoticeBasis } from './claude-background.js';
+import { claudeTerminal, dispatchMarker, isStopNotice, noticeClaim, taskNoticeVerdict, type NoticeBasis } from './claude-background.js';
 import { hasWorktreeHead } from './worktree.js';
 import { observedDelegationPrices } from './delegation-prices.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -548,22 +548,22 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   let taskNotice: { notice: boolean; basis: NoticeBasis } | undefined;
   const noticeVerdict = (): { notice: boolean; basis: NoticeBasis } => {
     const verdict = taskNoticeVerdict(input);
-    if (verdict.basis !== 'unproven' || !input.session_id) return verdict;
-    // #281: a killed notice whose row is not yet written is the host's only if a native TaskStop of that exact
-    // execution is on record here. Taking the record makes it one notice: a later copy is a person's again.
-    let stopped = false;
+    const claim = noticeClaim(input.prompt ?? '');
+    if (verdict.basis !== 'unproven' || !input.session_id || claim === null) return { notice: verdict.notice, basis: verdict.basis };
+    // #281: before its row is written a notice is the host's only as exactly one envelope naming a launch receipt of this
+    // session or an execution a native TaskStop here ended, and only once: the claim is taken under the lock, so a later
+    // copy is a person's. 2.1.304 names no author until the row, so a person pasting such an envelope, with IDs only this
+    // session shows, skips Gate A for that one input; it gains no permission or tool, and the host's notice after it is a person's.
+    let taken = null as NoticeBasis | null;
     updateJob(deps.env, input.session_id, prev => {
-      const take = (gen: JobGeneration): JobGeneration => {
-        const i = stopped ? -1 : (gen.background_stopped ?? []).findIndex(stop => isStopNotice(input.prompt ?? '', stop));
-        if (i < 0) return gen;
-        stopped = true;
-        return { ...gen, background_stopped: gen.background_stopped!.filter((_, j) => j !== i) };
-      };
-      if (!prev) return null;
-      const next = { ...prev, current: take(prev.current), history: prev.history.map(take) };
-      return stopped ? next : null;
+      if (!prev || [prev.current, ...prev.history].some(gen => gen.notices_taken?.includes(claim))) return null;
+      const stopped = [prev.current, ...prev.history].some(gen => gen.background_stopped?.some(stop => isStopNotice(input.prompt ?? '', stop)));
+      if (!stopped && !verdict.launched) return null;
+      taken = stopped ? 'task_stop' : 'launch_receipt';
+      // ponytail: the last 256 claims per generation keep a long Monitor watch under the state cap; an older copy can pass again.
+      return { ...prev, current: { ...prev.current, notices_taken: [...(prev.current.notices_taken ?? []), claim].slice(-256) } };
     });
-    return stopped ? { notice: true, basis: 'task_stop' } : verdict;
+    return taken ? { notice: true, basis: taken } : { notice: false, basis: 'unproven' };
   };
   const isTaskNotice = (): boolean => (taskNotice ??= noticeVerdict()).notice;
   /** #281: every Gate A record says whether the prompt was taken as a person's and why, so notice inflow is countable. */
