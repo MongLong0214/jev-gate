@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.31 — 2026-10-20 — A version badge that fits its text
+
+- The dashboard's version badge was a fixed 14.4em, sized for its longest text, so `v0.8.31 · 최신` sat in a 158 px pill with most of it empty. It now fits its text in place (86 px for the current-version text, 145 px with an update named, up to the old width). Its text arrived from `/api/version` after the first frame, which is why it had a fixed width: the server now puts the version it would answer in the page, so the badge has its text and width in the first frame and the header does not move. A badge hidden for an unknown version keeps no text, so it no longer grows while invisible.
+
 ## v0.8.30 — 2026-10-20 — Root switches within the cache's reach
 
 - Price a root model switch by whether the cache it reads is still in reach, and return to the baseline before its cache leaves reach (#274). A request reads an earlier cache entry only from at most 20 blocks back, but the cost guard read a model's cache as warm for its whole TTL. Over 100 returns to a model within 55 minutes in three transcripts (2026-10-16 to 10-19), every return with at most 5 requests between read its cache (47 of 47), 4 of 6 with 6, 1 of 6 with 7, none of 41 with 8 or more. On 2026-10-19 a Haiku move was priced as reading 99,448 cached tokens after 18 Opus requests and read 30,040 (estimated −$0.128 to −$0.118, about −$0.088 to −$0.052 by the recorded usage); in a v0.8.22 session the return to Opus after 11 Haiku requests read 29,836 and wrote 123,451. Root requests are now numbered: a target last answering more than 5 requests back is priced as an unknown cache, 8 or more as cold, and a switch serves at most 5 requests counted from the baseline's last one, after which the turn runs on its native pair (`root_stop`, `baseline_reach`); a turn with none left keeps the baseline. Codex and spawns are unchanged. The dashboard names `cost_unknown_hold` and `baseline_reach`.
