@@ -30,7 +30,7 @@ const fixture = async (direct = false) => {
   const root = mkdtempSync('/tmp/jev-bg-unit-'); roots.push(root);
   const cfg = join(root, 'config.json');
   writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'native' }));
-  const env = { HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' };
+  const env = { JEV_GATE_TRACE_DIR: join(root, 'trace'), HOME: root, JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(root, 'state'), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' };
   const parent = join(root, 's.jsonl'); writeFileSync(parent, '');
   const run = (event: Record<string, unknown>, fetchImpl?: typeof fetch) => runHook({ env, ...(fetchImpl ? { fetchImpl } : {}), stdin: (async function* () { yield JSON.stringify({ session_id: 's', transcript_path: parent, ...event }); })() });
   await run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'original', prompt: 'Implement the original request.' });
@@ -264,6 +264,10 @@ describe('responsive native background contracts', () => {
     expect(f.job().current.receipts).toHaveLength(settled ? 1 : 0);
     expect(f.job().current.receipts.some(r => r.verdict === 'accept')).toBe(false);
     if (settled) {
+      expect(f.job().current.receipts[0]).toMatchObject({ verdict: 'unknown', verdict_reason: 'worker_cancelled' });
+      const rows = readdirSync(join(f.root, 'trace')).filter(f => f.endsWith('.json')).map(file => JSON.parse(readFileSync(join(f.root, 'trace', file), 'utf8')));
+      expect(rows.filter(r => r.phase === 'background_terminal')).toMatchObject([{ status: 'cancelled', verdict_reason: 'worker_cancelled' }]);
+      expect(rows.some(r => r.phase === 'background_terminal' && r.status === 'failed')).toBe(false);
       await f.run({ hook_event_name: 'UserPromptSubmit', prompt_id: 'notice', source: 'system', prompt: '<task-notification>native cancellation notice</task-notification>' });
       expect(f.job().current.prompt_id).toBe('original'); expect(f.job().current.outcome).toBe('incomplete');
     }

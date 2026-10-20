@@ -42,10 +42,8 @@ import {
 import { DEFAULT_CONFIG, effectiveDepthFloor, hookDefaultMode, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
 import { readHostCompactWindow } from './host-window.js';
 import { readSessionDepth, type DepthReading } from './depth.js';
-import { readRecentPrompts, withRecentPrompts } from './recent-prompts.js';
 import { looksSecret } from './outbound-text.js';
 import {
-  renderDirectGuidance,
   renderDispatchDeny,
   renderSingleGuidance,
   renderSingleResult,
@@ -95,7 +93,6 @@ export interface HookDeps {
   delegationPrices?: () => import('./admission.js').DelegationPrices | undefined;
   host?: {
     id: 'codex';
-    recentRequests?: () => readonly string[];
     config: ConfigV5;
     depth: () => DepthReading;
     compactWindow: number | null;
@@ -538,7 +535,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_job: true, active: { ...prev.current.active, [input.tool_use_id!]: { ...owner, background_execution: { token, agent_id: null, subagent_type: String(patched['subagent_type']), resolved_model: null } } } } };
     });
     if (!saved.ok || !registered) return emitDeny('dispatch_ineligible', 'Background execution reservation unavailable; no worker started.');
-    trace?.write('background_dispatch', { ...base, execution_prompt_id: gen.prompt_id, role: r.role, task_id: r.task_id });
+    trace?.write('background_dispatch', { ...base, execution_prompt_id: gen.prompt_id, role: r.role, task_id: r.task_id, subagent_type: agentForTier(r.role, r.tier ?? 'standard') });
     return { kind: 'patch', code: result.code, stdout };
   };
 
@@ -564,8 +561,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     return skip();
   };
 
-  const backgroundResult = async (owner: { gen: JobGeneration; id: string; r: Reservation }, observed: { completed: boolean; text: string; model: string | null }, agentId: string): Promise<HookResult> => {
+  const backgroundResult = async (owner: { gen: JobGeneration; id: string; r: Reservation }, observed: { completed: boolean; cancelled?: boolean; text: string; model: string | null }, agentId: string): Promise<HookResult> => {
     const sessionId = input.session_id!;
+    const status = observed.cancelled ? 'cancelled' : observed.completed ? 'completed' : 'failed';
+    const verdict_reason = observed.cancelled ? 'worker_cancelled' : observed.completed ? null : 'worker_failed';
     const state = readJob(deps.env, sessionId);
     if (!state.ok || !state.value) return skip('no_state');
     if (!sameGeneration(owner.gen, state.value.current)) {
@@ -577,16 +576,16 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           requested_model: r.allocation_pair?.model ?? null, observed_model: observed.model, root_effort: null, recorded_at: new Date().toISOString() };
         return { ...release(g, owner.id), receipts: [...g.receipts, receipt] };
       }) } : null);
-      trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, orphaned: true, accepted: false, status: observed.completed ? 'completed' : 'failed' });
+      trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, orphaned: true, accepted: false, status, verdict_reason });
       return skip();
     }
     const event: HookInput = { hook_event_name: 'PostToolUse', session_id: sessionId, ...(owner.gen.prompt_id === null ? {} : { prompt_id: owner.gen.prompt_id }), ...(input.transcript_path ? { transcript_path: input.transcript_path } : {}), ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       tool_name: 'Agent', tool_use_id: owner.id, tool_input: { subagent_type: owner.r.background_execution!.subagent_type },
-      tool_response: { status: observed.completed ? 'completed' : 'failed', agentId, resolvedModel: observed.model, content: [{ type: 'text', text: observed.text }] } };
+      tool_response: { status, agentId, resolvedModel: observed.model, content: [{ type: 'text', text: observed.text }] } };
     const result = await runHook({ ...deps, stdin: (async function* () { yield JSON.stringify(event); })() });
     const context = result.stdout ? JSON.parse(result.stdout)?.hookSpecificOutput?.additionalContext : null;
     if (typeof context === 'string') updateJob(deps.env, sessionId, prev => prev && sameGeneration(prev.current, owner.gen) ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: context } } : null);
-    trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, task_id: owner.r.task_id, status: observed.completed ? 'completed' : 'failed' });
+    trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, task_id: owner.r.task_id, status, verdict_reason });
     return skip();
   };
 
@@ -620,7 +619,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const owners = [state.value.current, ...state.value.history].flatMap(gen => Object.entries(gen.active).flatMap(([id, r]) => r.background_execution?.agent_id === taskId ? [{ gen, id, r }] : []));
     if (owners.length !== 1) return skip();
     const owner = owners[0]!;
-    const result = await backgroundResult(owner, { completed: false, text: '', model: owner.r.background_execution!.resolved_model }, taskId);
+    const result = await backgroundResult(owner, { completed: false, cancelled: true, text: '', model: owner.r.background_execution!.resolved_model }, taskId);
     // The host then queues a killed notice for this execution; its record lets that notice settle here, not open a new job.
     const stop = { agent_id: taskId, tool_use_id: owner.id };
     const mark = (gen: JobGeneration): JobGeneration => sameGeneration(gen, owner.gen) ? { ...gen, background_stopped: [...(gen.background_stopped ?? []), stop] } : gen;
@@ -640,6 +639,31 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         if (observed?.token === execution.token) await backgroundResult({ gen, id, r }, observed, execution.agent_id);
       }
     }
+  }
+  // A prompt/Stop boundary closes reservations that never acquired a native execution identity.
+  // Actual background/Codex executions retain protection until native terminal evidence arrives.
+  if (input.session_id && !caller.agent_id && !caller.agent_type &&
+      (input.hook_event_name === 'Stop' || input.hook_event_name === 'UserPromptSubmit' && typeof input.prompt === 'string' && input.prompt.trim() && !isSlashCommand(input.prompt) && !isTaskNotice())) {
+    const expired: { prompt_id: string | null; tool_use_id: string; task_id: string | null; subagent_type: string }[] = [];
+    const written = updateJob(deps.env, input.session_id, prev => {
+      if (!prev) return null;
+      const settle = (gen: JobGeneration): JobGeneration => {
+        let next = gen;
+        for (const [id, r] of Object.entries(gen.active)) {
+          if (r.codex_execution || r.background_execution) continue;
+          const receipt: Receipt = { task_id: r.task_id ?? '', contract_hash: r.contract_hash ?? '', rev: r.rev ?? 0,
+            attempt: r.attempt, tool_use_id: id, provenance: 'worker_reported', reply: null, verdict: 'unknown',
+            verdict_reason: 'worker_no_result', requested_model: r.allocation_pair?.model ?? null,
+            observed_model: null, root_effort: null, recorded_at: new Date().toISOString() };
+          next = { ...release(next, id), receipts: [...next.receipts, receipt] };
+          expired.push({ prompt_id: gen.prompt_id, tool_use_id: id, task_id: r.task_id, subagent_type: agentForTier(r.role, r.tier ?? 'standard') });
+        }
+        return next;
+      };
+      const current = settle(prev.current), history = prev.history.map(settle);
+      return expired.length ? { ...prev, current, history } : null;
+    });
+    if (written.ok) for (const item of expired) trace?.write('post', { ...base, ...item, owned: true, role: 'worker', verdict: 'unknown', verdict_reason: 'worker_no_result' });
   }
   if (input.hook_event_name === 'SubagentStop') return backgroundStop();
   if (input.hook_event_name === 'PostToolUse' && input.tool_name === 'TaskStop') return backgroundCancel();
@@ -666,9 +690,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // #48 P2: a host that never sends a prompt id would make Gate A unreachable on every turn, which is exactly
       // what liveness exists to catch, so this counts even though it is not the depth/admission branch below.
       if (mode === 'auto') appendLiveness(deps.env, { at: new Date().toISOString(), attempted: false, reason: 'prompt_id_absent' });
-      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'prompt_id_absent');
+      return skip('prompt_id_absent');
     }
-    // A host-authored completion notice is not a person's request: asking Gate A about it would spend two calls on
+    // A host-authored completion notice is not a person's request: asking Gate A about it would spend a call on
     // machine text, and a new generation would push the job it reports on into history.
     if (isTaskNotice()) {
       trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'task_notification', changed_default: false } });
@@ -702,7 +726,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       return forced ? { ...change.state, current: { ...change.state.current, forced: true as const } } : change.state;
     });
     // Without durable state there is no job, so the turn falls back to native behavior.
-    if (!registered.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), registered.code);
+    if (!registered.ok) return skip(registered.code);
     const currentAdmission = (): boolean => {
       if (deps.signal?.aborted) return false;
       const state = readJob(deps.env, sessionId);
@@ -717,7 +741,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (explicitlyForbidsDelegation(prompt)) {
       trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: true, reason: 'admission_forbids_delegation', changed_default: false } });
       if (mode === 'auto') appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'admission_forbids_delegation' });
-      return emitContext('UserPromptSubmit', renderDirectGuidance(mode, true), 'admission_forbids_delegation');
+      return skip('admission_forbids_delegation');
     }
     if (blocker !== null && (mode === 'auto' || forcedRequested)) {
       trace?.write('admission_result', {
@@ -732,16 +756,16 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       });
       // Like the forced arm itself, a refused forced request is a bench configuration, not an admission outage.
       if (!forcedRequested) appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'host_unsupported' });
-      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'host_unsupported');
+      return skip('host_unsupported');
     }
     if (mode === 'auto' && !forced && !apiKey) {
       trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'key_missing', changed_default: false } });
       appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'key_missing' });
-      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'key_missing');
+      return skip('key_missing');
     }
 
     const atomicAdmission = config.admissionQuestionShape === 'atomic';
-    let dispatchRequest = prompt;
+    const dispatchRequest = prompt;
     const requiredAdmission = mode === 'auto' && !forced && atomicAdmission;
     const minimumSingleFits = Buffer.byteLength(composeSingleWorkerPrompt('', prompt, true), 'utf8') <= MAX_COMPOSED_BYTES;
     if (requiredAdmission && (Buffer.byteLength(prompt, 'utf8') > REQUEST_MAX_BYTES || !minimumSingleFits)) {
@@ -753,7 +777,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         decision: { shape: 'direct', decided: false, reason: 'admission_delivery_failed', changed_default: false },
       });
       appendLiveness(deps.env, { at: nowIso(), attempted: false, reason: 'admission_delivery_failed' });
-      return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'admission_delivery_failed');
+      return skip('admission_delivery_failed');
     }
 
     /**
@@ -869,27 +893,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           currentAdmission,
           );
         };
-        let gate = await askGateA(prompt, {});
+        const gate = await askGateA(prompt, {});
         if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
-        /**
-         * #115: a short follow-up ("e2e 해봐") reads as `needs_context` on its own, and the context it needs is the
-         * turns before it. One re-ask with the last few user prompts attached, once, only for that reason. The
-         * second record carries `context_turns` so accounting can tell the two requests apart.
-         */
-        const needsContext = 'outcome' in gate && gate.outcome.ok && admitted !== null && (admitted as AdmissionDecision).reason === 'admission_needs_context';
-        if (needsContext && admissionDeadline - Date.now() < MIN_NETWORK_MS) {
-          gate = { blocked: 'deadline_exhausted' };
-          trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, retry_skipped: true, skip_code: 'deadline_exhausted' });
-        } else if (needsContext) {
-          const recent = deps.host ? [...(deps.host.recentRequests?.() ?? [])] : readRecentPrompts(input.transcript_path, prompt);
-          if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
-          const contextual = withRecentPrompts(prompt, recent);
-          if (recent.length > 0 && Buffer.byteLength(contextual, 'utf8') <= REQUEST_MAX_BYTES && Buffer.byteLength(composeSingleWorkerPrompt('', contextual, true), 'utf8') <= MAX_COMPOSED_BYTES) {
-            gate = await askGateA(contextual, { context_turns: recent.length });
-            if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
-            dispatchRequest = contextual;
-          } else trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, retry_skipped: true, skip_code: recent.length > 0 ? 'context_too_large' : 'no_recent_prompts' });
-        }
         // #48 P2: `'outcome' in gate` is the one place that tells whether a Gate A request was actually attempted --
         // `'blocked' in gate` means callGate itself declined to send it (bad request, byte cap, etc).
         const attempted = 'outcome' in gate;
@@ -908,8 +913,11 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // #114: an unreadable depth is the one direct reason the user cannot see coming -- the first prompt of a session
     // and every headless `claude -p` single turn have no transcript yet -- so it is the one that is said out loud.
     if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
-    if (Date.now() >= hookDeadline) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'deadline_exhausted');
-    if (shape === 'direct') return emitContext('UserPromptSubmit', renderDirectGuidance(mode), reason, reason === 'depth_unknown' ? DEPTH_UNKNOWN_NOTICE : null);
+    if (Date.now() >= hookDeadline) return skip('deadline_exhausted');
+    if (shape === 'direct') {
+      const stdout = reason === 'depth_unknown' ? renderSystemMessage(DEPTH_UNKNOWN_NOTICE) : null;
+      return stdout === null ? skip(reason) : { kind: 'notice', code: reason, stdout };
+    }
     // A17: an orchestrated turn keeps its request, because the worker receives it verbatim as the task. Stored whole or
     // not at all -- never truncated into a half-specification that reads as complete.
     const carriedRequest = Buffer.byteLength(dispatchRequest, 'utf8') <= REQUEST_MAX_BYTES ? dispatchRequest : null;
@@ -932,8 +940,8 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       };
     });
     // A newer prompt owns the session now; this turn does not get to turn orchestration on behind it.
-    if (stale) return currentAdmission() ? emitContext('UserPromptSubmit', renderDirectGuidance(mode), 'deadline_exhausted') : skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
-    if (!applied.ok) return emitContext('UserPromptSubmit', renderDirectGuidance(mode), applied.code);
+    if (stale) return currentAdmission() ? skip('deadline_exhausted') : skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
+    if (!applied.ok) return skip(applied.code);
     return emitContext('UserPromptSubmit', renderSingleGuidance({ mode, confidence, superseded, preferFastWorker }), reason);
   };
 
@@ -1252,7 +1260,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const parsed = status === 'completed' ? parseWorkerReply(replyText(input.tool_response)) : null;
     let finalVerdict: Receipt['verdict'] = 'unknown';
     let reason: string | null = null;
-    if (parsed === null) reason = `the call reported status ${String(status)}`;
+    if (parsed === null) reason = status === 'cancelled' ? 'worker_cancelled' : status === 'failed' ? 'worker_failed' : 'worker_no_result';
     else if (!parsed.ok) {
       finalVerdict = 'invalid';
       reason = parsed.error;
@@ -1268,6 +1276,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     let observedClaimCount = 0;
     let formatOnly = false;
     let formatHint = '';
+    if (!config.verifyWorkerChecks && parsed?.ok && parsed.value.checks.length > 0 && finalVerdict === 'accept') {
+      finalVerdict = 'incomplete';
+      reason = 'worker_checks_unverified';
+    }
     if (config.verifyWorkerChecks && parsed !== null && parsed.ok) {
       const agentId = isRecord(input.tool_response) ? str(input.tool_response['agentId']) : null;
       const path = agentId !== null && input.transcript_path && input.session_id ? subagentTranscriptPath(input.transcript_path, input.session_id, agentId) : null;
@@ -1289,7 +1301,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // may have nothing to run.
       const changed = parsed.value.changed_files.length > 0 || (observation?.lastWrite ?? null) !== null;
       const refused =
-        refusalReason(verification) ?? (claims.length === 0 && changed ? 'the worker changed files but reported no passing check it ran' : null);
+        refusalReason(verification) ?? (claims.length === 0 && changed ? 'worker_checks_missing' : null);
       if (finalVerdict === 'accept' && refused !== null) {
         finalVerdict = 'incomplete';
         reason = refused;
@@ -1465,7 +1477,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
           provenance: 'worker_reported',
           reply: null,
           verdict: 'unknown',
-          verdict_reason: 'the call failed before a reply was returned',
+          verdict_reason: input.is_interrupt ? 'worker_cancelled' : 'worker_failed',
           requested_model: reservation.allocation_pair?.model ?? requestedModel,
           observed_model: null,
           root_effort: input.effort ?? null,
@@ -1485,6 +1497,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       resolved_model: observedModel(input.tool_response),
       error_first_line: error.split('\n')[0]?.slice(0, 200) ?? null,
       error_len: error.length,
+      verdict_reason: input.is_interrupt ? 'worker_cancelled' : 'worker_failed',
       is_interrupt: input.is_interrupt ?? null,
       duration_ms: input.duration_ms ?? null,
       ...(input.codex_failure ? { failure_category: input.codex_failure.category, failure_stage: input.codex_failure.stage, not_executed: input.codex_failure.not_executed } : {}),

@@ -159,6 +159,22 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     return { status: r.status, stdout: r.stdout };
   };
 
+  it('prints every Gate cleanup reason from activity fixtures', () => {
+    const pluginRoot = preparePluginRoot(), trace = join(tmp, 'cleanup-reasons'); mkdirSync(trace);
+    const gateA = ['admission_needs_context', 'admission_context_unclear', 'admission_context_low_confidence'];
+    const worker = ['worker_check_failed', 'worker_check_not_run', 'worker_check_duplicate', 'worker_checks_missing', 'worker_checks_unverified', 'worker_no_result', 'worker_failed', 'worker_cancelled'];
+    const records = [
+      ...gateA.map(reason => ({ phase: 'admission_result', decision: { shape: 'direct', reason } })),
+      { phase: 'pre_result', role: 'worker', decision: { tier: 'standard', reason: 'route_not_fast' } },
+      ...worker.map(verdict_reason => ({ phase: 'post', subagent_type: 'jev-gate:worker', verdict: 'incomplete', verdict_reason })),
+      { phase: 'background_terminal', status: 'cancelled', verdict_reason: 'worker_cancelled' },
+    ];
+    records.forEach((r, i) => writeFileSync(join(trace, `reason-${i}.json`), JSON.stringify({ session_id: 's', written_at: new Date().toISOString(), ...r })));
+    const { stdout } = runDoctor(pluginRoot, { JEV_GATE_TRACE_DIR: trace });
+    for (const reason of [...gateA, 'route_not_fast', ...worker]) expect(stdout).toContain(reason);
+    expect(stdout).toContain('cancelled 1');
+  });
+
   it('OK: unmodified plugin, default config -- no model-authority disagreement for any owned agent', () => {
     const pluginRoot = preparePluginRoot();
     const { stdout } = runDoctor(pluginRoot);

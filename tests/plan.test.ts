@@ -118,13 +118,13 @@ describe('routing targets (#33/A18)', () => {
 });
 
 /**
- * A19: a dispatch has no contract, so acceptance here is the worker's own report, and the checks it names are kept
- * without being judged here; the hook compares them with the transcript (src/verify.ts).
+ * A19: a dispatch has no contract, so acceptance here is the worker's own report, with every reported check passing once;
+ * the hook compares passing claims with the transcript (src/verify.ts).
  */
 describe('reportedSingleVerdict (A19)', () => {
   const reply = (over: Partial<WorkerReply>): WorkerReply => ({ status: 'done', summary: 's', changed_files: [], interfaces: [], checks: [], blockers: [], ...over });
 
-  it('accepts a reply that reports done with no blockers, whatever checks it names', () => {
+  it('accepts a reply that reports done with no blockers, with every reported check passing', () => {
     expect(reportedSingleVerdict(reply({}))).toEqual({ verdict: 'accept', reason: null });
     const named = reply({ checks: [{ check_id: 'npm-test', result: 'pass', note: '' }] });
     expect(reportedSingleVerdict(named)).toEqual({ verdict: 'accept', reason: null });
@@ -137,6 +137,15 @@ describe('reportedSingleVerdict (A19)', () => {
     const verdict = reportedSingleVerdict(value);
     expect(verdict.verdict).toBe('incomplete');
     expect(verdict.reason).toContain(reason);
+  });
+
+  it.each([
+    ['worker_check_failed', { checks: [{ check_id: 'test', result: 'fail', note: '' }] }],
+    ['worker_check_not_run', { checks: [{ check_id: 'test', result: 'not_run', note: '' }] }],
+    ['worker_check_duplicate', { checks: [{ check_id: 'test', result: 'pass', note: '' }, { check_id: 'test', result: 'pass', note: '' }] }],
+    ['worker_checks_missing', { changed_files: ['src/a.ts'], checks: [] }],
+  ] as const)('refuses %s', (reason, over) => {
+    expect(reportedSingleVerdict(reply(JSON.parse(JSON.stringify(over))))).toEqual({ verdict: 'incomplete', reason });
   });
 
   it('files under one fixed task id, because no plan can name this work', () => {

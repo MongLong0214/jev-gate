@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { readCurrentTaskPrompts, readRecentPrompts, RECENT_PROMPT_MAX_CHARS, withRecentPrompts } from '../src/recent-prompts.js';
+import { readCurrentTaskPrompts, readRecentPrompts, RECENT_PROMPT_MAX_CHARS } from '../src/recent-prompts.js';
 
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>();
@@ -19,7 +19,7 @@ const write = (lines: unknown[]): string => {
 };
 const user = (content: unknown, extra: Record<string, unknown> = {}): unknown => ({ type: 'user', message: { role: 'user', content }, ...extra });
 
-describe('readRecentPrompts (#115)', () => {
+describe('readRecentPrompts', () => {
   it('returns the last three typed prompts, oldest first, without the current one', () => {
     const p = write([user('one'), user('two'), { type: 'assistant', message: { usage: { input_tokens: 1 } } }, user('three'), user('four'), user('e2e 해봐')]);
     expect(readRecentPrompts(p, 'e2e 해봐')).toEqual(['two', 'three', 'four']);
@@ -80,10 +80,6 @@ describe('readRecentPrompts (#115)', () => {
     expect(readRecentPrompts(write([{ type: 'assistant', message: {} }]), 'x')).toEqual([]);
   });
 
-  it('renders earlier turns as numbered context with the current request last', () => {
-    const text = withRecentPrompts('e2e 해봐', ['a', 'b']);
-    expect(text).toMatch(/1\. a\n2\. b\n\nCurrent request:\ne2e 해봐$/);
-  });
 });
 
 describe('readCurrentTaskPrompts (classic Compact)', () => {

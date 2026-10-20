@@ -130,7 +130,7 @@ const run = (env: Env, event: unknown, fetchImpl?: unknown, extra: Partial<HookD
   runHook({ env, stdin: stdinOf(event), ...(fetchImpl ? { fetchImpl: fetchImpl as typeof fetch } : {}), ...extra });
 
 const parse = (s: string): Record<string, unknown> => JSON.parse(s) as Record<string, unknown>;
-const hookOutput = (r: HookResult): Record<string, unknown> => (parse(r.stdout as string)['hookSpecificOutput'] ?? {}) as Record<string, unknown>;
+const hookOutput = (r: HookResult): Record<string, unknown> => (r.stdout === null ? {} : parse(r.stdout)['hookSpecificOutput'] ?? {}) as Record<string, unknown>;
 const context = (r: HookResult): string => String(hookOutput(r)['additionalContext'] ?? '');
 const updatedInput = (r: HookResult): Record<string, unknown> => hookOutput(r)['updatedInput'] as Record<string, unknown>;
 const fence = (value: unknown): string => 'summary prose\n```json\n' + JSON.stringify(value) + '\n```';
@@ -324,60 +324,34 @@ describe('Gate A admission', () => {
     const env = compositeGateAEnv();
     const r = await run(env, promptEvent(), fakeJev({ execution: answer }));
     expect(r.code).toBe(code);
-    expect(context(r)).toContain('Execution shape: direct');
+    expect(context(r)).toBe('');
+    expect(hookOutput(r)['additionalContext']).toBeUndefined();
     expect(state(env).current.shape).toBe(shape);
   });
 
-  it('re-asks Gate A once with the earlier user turns when a follow-up reads as needs_context (#115)', async () => {
-    const env = makeEnv();
-    const transcript = join(tmp, `transcript-followup-${(transcriptSeq += 1)}.jsonl`);
-    writeFileSync(
-      transcript,
-      [
-        JSON.stringify({ type: 'user', message: { role: 'user', content: 'Run the download e2e in the local browser, auto ON and OFF, wait for SUCCESS and check the zip.' } }),
-        JSON.stringify({ type: 'assistant', message: { usage: { cache_read_input_tokens: 405_000, cache_creation_input_tokens: 600, input_tokens: 400 } } }),
-        '',
-      ].join('\n'),
-    );
-    const inner = fakeJev({ execution: 'orchestrated' });
-    const seen: string[] = [];
-    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
-      const body = JSON.parse(String(init.body)) as { state: { request: string } };
-      seen.push(body.state.request);
-      const res = await (inner as unknown as typeof fetch)(url, init);
-      if (seen.length > 1) return res;
-      // The bare follow-up reads as needs_context; only the re-ask with the earlier turn attached reads self_contained.
-      const json = (await res.json()) as { answers: Record<string, unknown> };
-      json.answers['task_context'] = { type: 'choice', choice: 'needs_context', probabilities: { self_contained: 0.05, needs_context: 0.9, unclear: 0.05 }, confidence: 0.9 };
-      return new Response(JSON.stringify(json), { status: 200 });
+  it('keeps needs_context direct after exactly one call, without reading or sending earlier prompts', async () => {
+    const dir = join(tmp, `trace-needs-context-${++transcriptSeq}`);
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const transcript = join(tmp, `followup-${++transcriptSeq}.jsonl`);
+    writeFileSync(transcript, [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'private earlier constraint' } }),
+      JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 500000 } } }),
+    ].join('\n'));
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(JSON.parse(String(init.body)).state.request).toBe('continue');
+      const response = await (fakeJev() as unknown as typeof fetch)(_url, init);
+      const json = await response.json() as { answers: Record<string, unknown> };
+      json.answers.task_context = { type: 'choice', choice: 'needs_context', confidence: 0.9,
+        probabilities: { self_contained: 0.05, needs_context: 0.9, unclear: 0.05 } };
+      return new Response(JSON.stringify(json));
     });
-    const r = await run(env, promptEvent({ transcript_path: transcript, prompt: 'e2e 해봐' }), fetchImpl);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(seen[0]).toBe('e2e 해봐');
-    expect(seen[1]).toContain('Earlier requests from this session');
-    expect(seen[1]).toContain('Run the download e2e');
-    expect(seen[1]).toMatch(/Current request:\ne2e 해봐$/);
-    expect(state(env).current.shape).toBe('orchestrated');
-    expect(state(env).current.request).toContain('Run the download e2e');
-    expect(state(env).current.request).toContain('Current request:\ne2e 해봐');
-    const dispatched = await run(env, preEvent('Agent', agentInput()), fakeJev());
-    expect(dispatched.kind).toBe('patch');
-    if (dispatched.kind === 'patch') expect(JSON.parse(dispatched.stdout).hookSpecificOutput.updatedInput.prompt).toContain('Run the download e2e');
-  });
-
-  it('stays direct as admission_needs_context when the re-ask with earlier turns still says so', async () => {
-    const env = makeEnv();
-    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
-      const res = await (fakeJev({ execution: 'orchestrated' }) as unknown as typeof fetch)(url, init);
-      const json = (await res.json()) as { answers: Record<string, unknown> };
-      json.answers['task_context'] = { type: 'choice', choice: 'needs_context', probabilities: { self_contained: 0.05, needs_context: 0.9, unclear: 0.05 }, confidence: 0.9 };
-      return new Response(JSON.stringify(json), { status: 200 });
-    });
-    // DEEP_TRANSCRIPT holds one earlier user turn, so the re-ask happens exactly once; a second needs_context is final.
-    const r = await run(env, promptEvent({ prompt: 'e2e 해봐' }), fetchImpl);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(r.code).toBe('admission_needs_context');
-    expect(state(env).current.shape).toBe('direct');
+    const r = await run(env, promptEvent({ transcript_path: transcript, prompt: 'continue' }), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ code: 'admission_needs_context', stdout: null });
+    expect(state(env).current).toMatchObject({ shape: 'direct', request: null });
+    const results = readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).filter(row => row['phase'] === 'admission_result');
+    expect(results).toHaveLength(1);
+    expect(results[0]).not.toHaveProperty('context_turns');
   });
 
   it('sends no request at all when the session is not yet deep enough to be worth delegating', async () => {
@@ -388,7 +362,8 @@ describe('Gate A admission', () => {
     // Below the cost model's floor no answer could pay, so the cheapest gate is no gate.
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(r.code).toBe('depth_below_floor');
-    expect(context(r)).toContain('Execution shape: direct');
+    expect(context(r)).toBe('');
+    expect(hookOutput(r)['additionalContext']).toBeUndefined();
     expect(state(env).current.shape).toBe('direct');
     const record = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).find((x) => x['phase'] === 'admission_result');
     expect(record).toMatchObject({ attempted: false, context_tokens: 40_000, depth_floor: COST_FLOOR, depth_floor_source: 'cost_model', decision: { reason: 'depth_below_floor', changed_default: false } });
@@ -465,7 +440,7 @@ describe('Gate A admission', () => {
     // #114: the reason reaches the user as a systemMessage, and only the user -- the model context is unchanged.
     const body = JSON.parse(r.stdout as string) as Record<string, unknown>;
     expect(String(body['systemMessage'])).toContain('depth_unknown');
-    expect(JSON.stringify(body['hookSpecificOutput'])).not.toContain('depth_unknown');
+    expect(body['hookSpecificOutput']).toBeUndefined();
   });
 
   it('carries the depth into the record of an admitted job, so a bench case can prove it primed the session', async () => {
@@ -500,7 +475,8 @@ describe('Gate A admission', () => {
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     const r = await run(env, { ...promptEvent(), transcript_path: undefined }, fetchImpl);
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(context(r)).toContain('Execution shape: direct');
+    expect(context(r)).toBe('');
+    expect(hookOutput(r)['additionalContext']).toBeUndefined();
     expect(state(env).current.shape).toBe('direct');
   });
 
@@ -529,7 +505,8 @@ describe('Gate A admission', () => {
   it.each(['forbids_delegation', 'tool_calls'])('keeps invalid required %s direct', async (key) => {
     const env = makeEnv();
     const r = await run(env, promptEvent(), fakeJev({ mistype: key }));
-    expect(context(r)).toContain('Execution shape: direct');
+    expect(context(r)).toBe('');
+    expect(hookOutput(r)['additionalContext']).toBeUndefined();
     expect(state(env).current.shape).toBe('direct');
   });
 
@@ -537,8 +514,8 @@ describe('Gate A admission', () => {
     const env = makeEnv();
     const fetchImpl = fakeJev();
     const r = await run(env, promptEvent({ prompt_id: undefined }), fetchImpl);
-    expect(r).toMatchObject({ kind: 'guidance', code: 'prompt_id_absent' });
-    expect(context(r)).toContain('Execution shape');
+    expect(r).toMatchObject({ kind: 'skip', code: 'prompt_id_absent', stdout: null });
+    expect(context(r)).toBe('');
     expect(context(r)).not.toContain('you coordinate');
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(existsSync(jobPath(env, 's1'))).toBe(false);
@@ -559,25 +536,26 @@ describe('Gate A admission', () => {
 
   it('falls back to direct without a key and skips blank, slash and child prompts', async () => {
     const env = makeEnv({ TYPESAFE_API_KEY: undefined });
-    expect(await run(env, promptEvent())).toMatchObject({ kind: 'guidance', code: 'key_missing' });
+    expect(await run(env, promptEvent())).toMatchObject({ kind: 'skip', code: 'key_missing', stdout: null });
     for (const over of [{ prompt: '   ' }, { prompt: '/model opus' }, { agent_id: 'child' }, { agent_type: 'custom' }]) {
       expect(await run(makeEnv(), promptEvent(over))).toMatchObject({ kind: 'skip', code: null });
     }
   });
 
-  it('supersedes an unfinished generation and tells the coordinator', async () => {
+  it('releases an unreturned reservation before superseding the generation', async () => {
     const env = makeEnv();
     const fetchImpl = fakeJev();
     await seedDispatched(env, fetchImpl);
     expect(Object.keys(state(env).current.active)).toEqual(['toolu_1']);
     const r = await run(env, promptEvent({ prompt_id: 'p2' }), fetchImpl);
-    expect(context(r)).toContain('superseded by this request');
+    expect(context(r)).not.toContain('superseded by this request');
     const after = state(env);
     expect(after.current).toMatchObject({ prompt_id: 'p2', active: {} });
-    expect(after.history[0]?.active['toolu_1']).toMatchObject({ orphaned: true });
-    // A late result from the superseded generation is recorded, never applied to the new one.
+    expect(after.history[0]?.active).toEqual({});
+    expect(after.history[0]?.receipts[0]).toMatchObject({ verdict: 'unknown', verdict_reason: 'worker_no_result' });
+    // A late result cannot recreate the released reservation or accept the new job.
     const late = await run(env, workerPost('toolu_1', workerReply()), fetchImpl);
-    expect(late).toMatchObject({ kind: 'skip', code: 'generation_changed' });
+    expect(late).toMatchObject({ kind: 'skip', code: null });
     expect(state(env).current.receipts).toEqual([]);
   });
 
@@ -900,7 +878,7 @@ describe('single executor (A19)', () => {
 
   it('does not accept a worker that changed files on its word alone: no passing check, or one that names no command', async () => {
     for (const [reply, reason] of [
-      [workerReply({ checks: [] }), 'changed files but reported no passing check'],
+      [workerReply({ checks: [] }), 'worker_checks_missing'],
       [workerReply({ checks: [{ check_id: 'unit tests', result: 'pass', note: '' }] }), 'shows no passing run'],
     ] as const) {
       const env = singleEnv();
@@ -1194,7 +1172,7 @@ describe('worker check verification (0.4.0)', () => {
     await dispatched(env);
     await run(env, postWith(workerReply(), workerTranscript([{ command: 'npm test', failed: true }])));
     const receipt = state(env).current.receipts[0];
-    expect(receipt?.verdict).toBe('accept');
+    expect(receipt?.verdict).toBe('incomplete');
     expect(receipt).not.toHaveProperty('verification');
   });
 
@@ -1337,6 +1315,40 @@ describe('worker check verification (0.4.0)', () => {
 
 describe('receipts', () => {
 
+  it.each(['Stop', 'UserPromptSubmit'])('releases an unreturned reservation at %s exactly once', async event => {
+    const dir = join(tmp, `trace-stale-${++transcriptSeq}`), env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await seedDispatched(env);
+    const boundary = event === 'Stop' ? { hook_event_name: event, session_id: 's1' } : promptEvent({ prompt_id: 'p2' });
+    await run(env, boundary, fakeJev()); await run(env, boundary, fakeJev());
+    const generations = [state(env).current, ...state(env).history];
+    expect(generations.every(g => Object.keys(g.active).length === 0)).toBe(true);
+    const receipts = generations.flatMap(g => g.receipts).filter(r => r.tool_use_id === 'toolu_1');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ verdict: 'unknown', verdict_reason: 'worker_no_result' });
+    const rows = readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')));
+    expect(rows.filter(r => r.phase === 'post' && r.verdict_reason === 'worker_no_result')).toHaveLength(1);
+  });
+
+  it.each([
+    ['worker_check_failed', [{ check_id: 'npm test', result: 'pass', note: '' }, { check_id: 'npm run build', result: 'fail', note: '' }]],
+    ['worker_check_not_run', [{ check_id: 'npm test', result: 'pass', note: '' }, { check_id: 'npm run build', result: 'not_run', note: '' }]],
+    ['worker_check_duplicate', [{ check_id: 'npm test', result: 'pass', note: '' }, { check_id: 'npm test', result: 'pass', note: '' }]],
+  ] as const)('never accepts %s despite an observed passing check', async (reason, checks) => {
+    const env = makeEnv(); await seedDispatched(env);
+    await run(env, workerPost('toolu_1', workerReply({ checks: JSON.parse(JSON.stringify(checks)) })));
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'incomplete', verdict_reason: reason });
+  });
+
+  it.each(['failed', 'cancelled'])('records a safe reason for native status %s', async status => {
+    const dir = join(tmp, `trace-worker-status-${++transcriptSeq}`), env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    await seedDispatched(env);
+    await run(env, workerPost('toolu_1', workerReply(), { tool_response: { status } }));
+    expect(state(env).current.active).toEqual({});
+    expect(state(env).current.receipts[0]).toMatchObject({ verdict: 'unknown', verdict_reason: status === 'cancelled' ? 'worker_cancelled' : 'worker_failed' });
+    const rows = readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')));
+    expect(rows.find(r => r.phase === 'post').verdict_reason).toBe(status === 'cancelled' ? 'worker_cancelled' : 'worker_failed');
+  });
+
   it('releases the reservation and records an unknown receipt when the call fails', async () => {
     const env = makeEnv();
     const fetchImpl = fakeJev();
@@ -1344,7 +1356,7 @@ describe('receipts', () => {
     const r = await run(env, { ...workerPost('toolu_1', workerReply()), hook_event_name: 'PostToolUseFailure', error: 'Agent terminated early\nsecond line' });
     expect(r).toMatchObject({ kind: 'skip' });
     expect(state(env).current.active).toEqual({});
-    expect(state(env).current.receipts[0]).toMatchObject({ task_id: 'single', contract_hash: '', verdict: 'unknown' });
+    expect(state(env).current.receipts[0]).toMatchObject({ task_id: 'single', contract_hash: '', verdict: 'unknown', verdict_reason: 'worker_failed' });
   });
 });
 
@@ -1406,7 +1418,7 @@ describe('traces', () => {
     expect(attempted('admission_result')).toMatchObject({ forced: false, decision: { shape: 'orchestrated', decided: true, reason: null, changed_default: true } });
     // Atomic Gate B (the default since 0.4.0) composes to the tier the coordinator called here, so it keeps it.
     expect(attempted('pre_result', 'worker')).toMatchObject({
-      decision: { action: 'preserve', tier: 'standard', reason: 'route_low_confidence' },
+      decision: { action: 'preserve', tier: 'standard', reason: 'route_not_fast' },
     });
     // A17 item 7: every gate records whether it changed what would have happened without it.
     expect(attempted('pre_result', 'worker')).toMatchObject({ decision: { changed_default: false } });
@@ -1980,7 +1992,7 @@ it.each(['Do not delegate or use a subagent.', "Don't use workers.", 'No delegat
     const env = makeEnv(forced ? { JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' } : {});
     const fetchImpl = fakeJev({ boundedToolWork: .99, forbidsDelegation: .48 });
     const result = await run(env, promptEvent({ prompt: `Find parseRecord in src/lookup.ts. ${veto}` }), fetchImpl);
-    expect(result.code).toBe('admission_forbids_delegation'); expect(result.stdout).toContain('without a worker'); expect(result.stdout).not.toContain('jev-gate:worker-fast');
+    expect(result.code).toBe('admission_forbids_delegation'); expect(result.stdout).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled(); expect(state(env).current.shape).toBe('direct');
   }
 });

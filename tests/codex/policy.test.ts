@@ -257,7 +257,7 @@ describe('native transport authority', () => {
     const job = readJob({ JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') }, 'cancelled');
     expect(job.ok && job.value?.current.shape).toBe('direct'); rpc.close();
   });
-  it('reclassifies a native follow-up with only observed earlier human requests and carries them into dispatch', async () => {
+  it('keeps a native needs_context follow-up direct after one call without carrying earlier requests', async () => {
     const rpc = new CodexRpc(new PassThrough(), new PassThrough()); const seen: string[] = [];
     const env = { JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_TRACE_DIR: join(tmp, 'followup'), JEV_GATE_STATE_DIR: join(tmp, 'followup-state'), TYPESAFE_API_KEY: 'fixture-key' };
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
@@ -276,10 +276,11 @@ describe('native transport authority', () => {
     session.prompt='first';
     await policy.nativeHook({hook_event_name:'UserPromptSubmit',session_id:'followup',prompt:'Implement the download validation and run its full checks.'});
     session.prompt='second';
-    await policy.nativeHook({hook_event_name:'UserPromptSubmit',session_id:'followup',prompt:'Run it now.'});
-    expect(seen.at(-1)).toContain('Implement the download validation');
+    expect(await policy.nativeHook({hook_event_name:'UserPromptSubmit',session_id:'followup',prompt:'Run it now.'})).toEqual({});
+    expect(seen).toEqual(['Implement the download validation and run its full checks.', 'Run it now.']);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
     const job = readJob({JEV_GATE_STATE_DIR:join(env.JEV_GATE_STATE_DIR,'codex')},'followup');
-    expect(job.ok && job.value?.current.request).toContain('Current request:\nRun it now.');
+    expect(job.ok && job.value?.current).toMatchObject({ shape: 'direct', request: null });
     rpc.close();
   });
   it('separates colliding client, internal and approval ids, preserving approval payload exactly', async () => {

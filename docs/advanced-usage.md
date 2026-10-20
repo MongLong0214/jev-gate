@@ -20,7 +20,7 @@ An admitted turn dispatches the request once to a worker; Gate A calls it orches
 
 The planner, the root tool guard and worker isolation were removed in #289. A config file that still names `plannerDefaultTier`, `maxParallelWorkers`, `guardAllowTools`, `guardAllowMcp`, `maxTasksPerPlan`, `admittedShape`, `planInterpretation` or `workerIsolation` loads; those keys are ignored and doctor lists them. Worker profiles inherit the connected tools the host provides.
 
-Acceptance is not a Jev call. A worker accept is an observed passing run of each declared check after the last observed Edit, Write, MultiEdit, or NotebookEdit in that worker's transcript. It does not certify an edit made inside Bash, by another editor, or by another process, and it does not certify that the check was the right one or that the current files are fully certified. The comparison is on by default (`verifyWorkerChecks`).
+Acceptance is not a Jev call. A worker accept is an observed passing run of each declared check after the last observed Edit, Write, MultiEdit, or NotebookEdit in that worker's transcript. It does not certify an edit made inside Bash, by another editor, or by another process, and it does not certify that the check was the right one or that the current files are fully certified. The comparison is on by default (`verifyWorkerChecks`). Disabling observation does not accept unverified passing claims. Every reported check must appear exactly once and pass; `fail`, `not_run`, duplicate check IDs, and changed files with no reported checks refuse acceptance. A read-only result with no declared checks may still be accepted; there is no planner checklist to establish requirement coverage.
 
 Uncertainty keeps the call that was already going to happen: a tie, low confidence, abstain, a missing key, a timeout, or an invalid response. A tier above standard needs a concrete upgrade basis on the task. Model names in config are aliases or exact IDs the patch proposes for a worker. They do not change the root session's model, and they do not grant account access. `routeMainModel` is a Router option and defaults to true. The fast tier asks for low effort; haiku was observed, on 2026-09-18, not to apply a requested effort. That is a host fact about that model, not a new measurement.
 
@@ -110,7 +110,7 @@ Optional traces (`JEV_GATE_TRACE_DIR`) are local per-phase JSON: lengths, hashes
 
 `node dist/cli.js explain <trace-dir>` reads those records. A missing record means nothing was recorded, not that nothing happened. A worker verdict is what the worker reported. A model after `ran` is what the host reported, not a check that a patch took effect.
 
-When Gate A answers `needs_context` for the prompt alone, it is asked once more with the last three turns the user typed in this session attached as context (#115). Tool results, host and hook messages, `/commands`, subagent turns and any turn that looks like a credential are never included. The second `admission_result` record carries `context_turns`. A second `needs_context` is final and the turn stays direct.
+Gate A classifies only the current request, with no `needs_context` re-judgment or earlier-turn attachment. `needs_context`, unclear context, and insufficient self-contained support keep the turn direct with separate reasons. A direct admission adds no model context; admitted jobs receive the orchestration guidance. Compact and Router still use bounded, secret-filtered recent human requests where needed.
 
 ## Doctor and explain
 

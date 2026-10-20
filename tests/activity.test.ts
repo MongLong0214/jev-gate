@@ -437,3 +437,12 @@ it('updates all viewers from shared directory notifications and reattaches after
     await server.close();
   }
 }, 10000);
+
+it.each([['worker_check_duplicate', '검사 중복 보고'], ['worker_check_failed', '보고된 검사 실패'], ['worker_check_not_run', '필수 검사 미실행'], ['worker_checks_missing', '변경 후 검사 보고 없음'], ['worker_checks_unverified', '검사 실행 확인 불가'], ['worker_no_result', '워커 결과 미반환 · 예약 해제'], ['worker_failed', '워커 실행 실패'], ['worker_cancelled', '사용자가 워커 취소'], ['admission_needs_context', '요청만으로 범위를 정할 수 없어 직접 처리합니다'], ['admission_context_unclear', '요청 문맥 불명확'], ['admission_context_low_confidence', '독립 요청 근거 부족'], ['route_not_fast', '빠른 등급 요건 불충족']])('shows Gate cleanup reason %s', (reason, _label) => {
+  const trace = make();
+  const phase = reason.startsWith('worker_') ? 'post' : reason === 'route_not_fast' ? 'pre_result' : 'admission_result';
+  write(trace, 'reason.json', { phase, written_at: '2026-09-29T06:00:00.000Z', session_id: 's1', verdict: 'incomplete', verdict_reason: reason,
+    role: 'worker', decision: { shape: 'direct', action: 'preserve', reason } });
+  const snap = loadActivity({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() }, now: new Date('2026-09-29T06:00:00.000Z') });
+  expect(snap.events[0]?.used).toContain(_label);
+});

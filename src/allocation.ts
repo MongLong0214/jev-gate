@@ -212,9 +212,11 @@ export const decideWorkerRouteAtomic = (answers: Record<string, unknown>, called
   }
   if (f['prior_reasoning_failure'] === null || f['unresolved_interaction'] === null) return preserve('route_invalid');
   if (!no(f['prior_reasoning_failure']) || !no(f['unresolved_interaction'])) return preserve('route_low_confidence');
+  if (['interfaces_fixed', 'checks_stated'].some((k) => no(f[k]))) return preserve('route_not_fast');
   // A valid non-yes conjunct already excludes fast; unused errors cannot override it.
   if (['interfaces_fixed', 'checks_stated'].some((k) => f[k] !== null && !yes(f[k]))) return preserve('route_low_confidence');
   const cheap = yes(f['fully_specified']) || yes(f['repetitive']);
+  if (no(f['fully_specified']) && no(f['repetitive'])) return preserve('route_not_fast');
   if (!cheap && f['fully_specified'] !== null && f['repetitive'] !== null) return preserve('route_low_confidence');
   if (!cheap || f['interfaces_fixed'] === null || f['checks_stated'] === null) return preserve('route_invalid');
   return patch('fast');

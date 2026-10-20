@@ -425,7 +425,6 @@ export class CodexPolicy {
       id: 'codex', config: session.policy.gate, compactWindow: session.window,
       depth: () => session.tokens === null ? { ok: false, reason: 'depth_unknown', bytesRead: 0, durationMs: 0 }
         : { ok: true, tokens: session.tokens, model: session.requestModel ?? String(session.settings['model'] ?? session.baseline.model), modelSwitched: false, bytesRead: 0, durationMs: 0 },
-      recentRequests: () => session.recentRequests ?? [],
       terminal: id => !!this.sessions.get(id)?.dispatch?.ended,
       observation: id => { const worker = id ? this.sessions.get(id) : undefined; return worker ? codexObservation(worker.items, worker.complete, worker.commands) : null; },
     };

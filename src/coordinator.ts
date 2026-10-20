@@ -3,20 +3,6 @@ import type { DenyReason, RoutingMode, Tier } from './types.js';
 /** All coordinator text is fixed (D10): it never contains the user's prompt, repository content or a Jev answer's text. */
 export const GUIDANCE_HEADER = '[Jev Gate coordinator guidance for this session]';
 
-export const DIRECT_GUIDANCE = [
-  'Keep the current request and relevant prior user constraints authoritative.',
-  'Keep the main conversation for coordination and result integration. For a complete bounded repository lookup, file or symbol search, listing, or mechanical edit with focused checks, dispatch the whole outcome once to jev-gate:worker-fast without a model argument.',
-  'Do not spawn a worker for each file read or tool step of a larger unresolved task. Give one worker the complete bounded outcome, then integrate its result. Conversational answers stay in the main session.',
-  'Include the outcome, original restrictions, established interfaces, file locations and requested checks.',
-  "Integrate returned results and check the complete user's outcome before claiming success.",
-  'Respect explicit models, no-delegation requests, plan mode, permissions and cancellation.',
-];
-
-export const DIRECT_MODE_SENTENCE: Record<RoutingMode, string> = {
-  native: 'Execution shape: you decide whether this request needs delegation. Jev is not involved.',
-  auto: 'Execution shape: direct. This request was admitted as one native conversation; no orchestration state is active.',
-};
-
 /**
  * Every root turn re-reads the whole session, so the saving of a delegated turn is the root turns it removes. The
  * jev_single bench took 11-17 root turns; reading the repository before dispatch is what the worker is there to do.
@@ -63,10 +49,6 @@ export const NATIVE_ORCHESTRATION_SENTENCE = 'You decide whether to dispatch; no
 
 export const renderAdmissionLine = (confidence: number | null): string =>
   `Execution shape: orchestrated${confidence === null ? '' : ` (admission confidence ${confidence.toFixed(2)})`}.`;
-
-export const renderDirectGuidance = (mode: RoutingMode, delegationForbidden = false): string => [GUIDANCE_HEADER, ...(delegationForbidden ? [
-  'The user explicitly prohibited delegation. Complete this request in the main conversation without a worker. Keep the original restrictions and native permissions authoritative.',
-] : DIRECT_GUIDANCE), DIRECT_MODE_SENTENCE[mode]].join('\n');
 
 /** A12/A19: the precedence a worker must apply when the sources disagree. The single shape carries the request block. */
 export const renderSingleRouteNote = (tier: Tier): string =>

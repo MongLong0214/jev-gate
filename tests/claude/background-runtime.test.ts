@@ -92,7 +92,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
       const state = readJob(env, session); expect(state.ok && state.value).toBeTruthy(); if (!state.ok || !state.value) throw new Error('state absent');
       expect(state.value.current.prompt_id).toBe(originalPrompt); expect(state.value.current.receipts, JSON.stringify({ state: state.value.current, output: output.slice(-18000) })).toHaveLength(1);
       if (scenario === 'cancel') {
-        expect(state.value.current.receipts[0]?.verdict).not.toBe('accept'); expect(state.value.current.active).toEqual({}); expect(state.value.current.outcome).toBe('incomplete'); return;
+        expect(state.value.current.receipts[0]).toMatchObject({ verdict: 'unknown', verdict_reason: 'worker_cancelled' }); expect(state.value.current.active).toEqual({}); expect(state.value.current.outcome).toBe('incomplete'); return;
       }
       expect(state.value.current.receipts[0], JSON.stringify({ receipt: state.value.current.receipts[0], output: output.slice(-18000) })).toMatchObject({ verdict: 'accept', verification: { transcript: 'read', contradicted: [], unobserved: [], stale: [] } });
       expect(state.value.current.active).toEqual({}); expect(state.value.current.outcome).toBe('completed');

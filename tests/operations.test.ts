@@ -846,3 +846,15 @@ describe('worker contract outcomes (#232)', () => {
     expect(run.steps.filter(s => s.feature === 'workers' && !s.lifecycle).map(s => s.outcome)).toEqual(['rejected', 'host_ended', 'accepted', 'accepted']);
   });
 });
+
+describe('Gate cleanup reason fixtures', () => {
+  it.each([['admission_needs_context', '앞선 대화 문맥 필요'], ['admission_context_unclear', '요청 문맥 불명확'], ['admission_context_low_confidence', '독립 요청 근거 부족'], ['route_not_fast', '빠른 등급 요건 불충족']])('renders Gate reason %s', (reason, label) => {
+    const phase = reason === 'route_not_fast' ? 'pre_result' : 'admission_result';
+    const view = buildOperations([{ ...base, phase, role: 'worker', decision: { shape: 'direct', action: 'preserve', tier: 'standard', reason } }], [], new Date(later), { trace: true });
+    expect(view.feed[0]?.summary).toContain(label);
+  });
+  it.each([['worker_check_duplicate', '검사 중복 보고'], ['worker_check_failed', '보고된 검사 실패'], ['worker_check_not_run', '필수 검사 미실행'], ['worker_checks_missing', '변경 후 검사 보고 없음'], ['worker_checks_unverified', '검사 실행 확인 불가'], ['worker_no_result', '워커 결과 미반환 · 예약 해제'], ['worker_failed', '워커 실행 실패'], ['worker_cancelled', '사용자가 워커 취소']])('renders worker reason %s', (reason, label) => {
+    const view = buildOperations([{ ...base, phase: 'post', subagent_type: 'jev-gate:worker', verdict: reason === 'worker_failed' || reason === 'worker_cancelled' || reason === 'worker_no_result' ? 'unknown' : 'incomplete', verdict_reason: reason }], [], new Date(later), { trace: true });
+    expect(view.feed[0]?.summary).toContain(label);
+  });
+});
