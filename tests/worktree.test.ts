@@ -6,6 +6,11 @@ import { describe, expect, it } from 'vitest';
 import { createWorkerWorktree } from '../src/worktree.js';
 
 describe('working snapshot isolation', () => {
+  it.each(['worker-fast', 'worker', 'worker-deep', 'worker-frontier'])('C2: generated %s instructions require the isolation commit and feed the Codex build', name => {
+    expect(readFileSync(join(process.cwd(), 'agents', `${name}.md`), 'utf8')).toContain('is that request for one commit');
+    expect(readFileSync(join(process.cwd(), 'scripts/build-codex.mjs'), 'utf8')).toContain("readFileSync(join(root, 'agents'");
+  });
+
   it('copies staged, unstaged, deleted and untracked inputs, preserves the root index and applies only worker changes', () => {
     const repo = mkdtempSync(join(tmpdir(), 'jev-snapshot-'));
     const git = (args: string[], cwd = repo, input?: string): string => {

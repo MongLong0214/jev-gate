@@ -27,6 +27,21 @@ const tmp = mkdtempSync(join(tmpdir(), 'jev-trace-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 describe('openTraceDir', () => {
+  it('C4: stores only worker metadata and closed reasons, preserving numeric accounting without tool or failure prose', () => {
+    const dir = join(tmp, 'worker-projection'), canary = 'sessionid=canary123';
+    const opened = openTraceDir(dir, { HOME: tmp });
+    if (!opened.ok) throw new Error(opened.error);
+    opened.writer.write('post', { host: 'claude', session_id: 's', verdict: 'invalid', verdict_reason: `check curl --cookie ${canary}: bad result`,
+      checks: [{ check_id: canary, note: canary }], failure_description: canary,
+      tool_response: { status: 'completed', content: canary, resolvedModel: canary, accounting: { input: 2, output: 3, coverage: 'partial' } },
+      verification: { transcript: 'read', contradicted: [canary], unobserved: [], stale: [] } });
+    opened.writer.write('failure', { error_first_line: canary, failure_category: canary, message: canary });
+    const records = readdirSync(dir).map(name => JSON.parse(readFileSync(join(dir, name), 'utf8')));
+    expect(JSON.stringify(records)).not.toContain(canary);
+    expect(records.find(row => row.phase === 'post')).toMatchObject({ verdict_reason: 'invalid_reply', tool_response: { accounting: { input: 2, output: 3, coverage: 'partial' } } });
+    expect(records.find(row => row.phase === 'failure')).toMatchObject({ error_first_line: 'worker_failed', failure_category: 'worker_failed' });
+  });
+
   it('creates a private directory and writes private, atomic, randomly named phase files with join keys inside', () => {
     const dir = join(tmp, 'a', 'b');
     const opened = openTraceDir(dir, { HOME: tmp });

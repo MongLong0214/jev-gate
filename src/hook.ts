@@ -1,6 +1,6 @@
 import { claudeAllocation } from './claude-allocation.js';
 import { prepareDispatchAllocation, selectedDispatchPair, type DispatchAllocation } from './dispatch-allocation.js';
-import { OWNED_AGENT_PROFILES } from './agents.js';
+import { ISOLATION_NOTE, OWNED_AGENT_PROFILES } from './agents.js';
 import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
 import { claudeTerminal, dispatchMarker, isStopNotice, noticeClaim, taskNoticeVerdict, type NoticeBasis } from './claude-background.js';
@@ -46,9 +46,7 @@ import { looksSecret } from './outbound-text.js';
 import {
   renderDispatchDeny,
   renderSingleGuidance,
-  renderSingleResult,
-  renderAdhocResult,
-  WORKTREE_REMINDER,
+  renderWorkerDelivery,
   renderSingleRouteNote,
   renderRouteNote,
 } from './coordinator.js';
@@ -72,7 +70,7 @@ import {
 import { composeSingleWorkerPrompt, MAX_COMPOSED_BYTES, parseWorkerReply, reportedSingleVerdict, workerReceiptReply, SINGLE_TASK_ID } from './plan.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
-import { evidenceFormatOnly, nearestFormatCommands, readWorkerObservation, refusalReason, subagentTranscriptPath, verifyChecks } from './verify.js';
+import { evidenceFormatOnly, readWorkerObservation, refusalReason, subagentTranscriptPath, verifyChecks } from './verify.js';
 import type { CheckVerification, CodexFailure, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, CODEX_FAILURE_CATEGORIES, CODEX_FAILURE_STAGES, OWNED_AGENTS, TIERS } from './types.js';
 import { MAX_PROMPT_BYTES } from './brief.js';
@@ -1023,7 +1021,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const fits =
         typeof single?.gen.request === 'string' &&
         TIERS.every((tier) => {
-          const prompt = composed + renderSingleRouteNote(tier);
+          const prompt = composed + renderSingleRouteNote(tier) + (config.workerIsolation === 'worktree' ? `\n\n${ISOLATION_NOTE}` : '');
           return (
             Buffer.byteLength(prompt, 'utf8') <= MAX_COMPOSED_BYTES &&
             renderPreToolUseOutput({ kind: 'update', updatedInput: patchAgentInput(eligibility.input, { prompt }) }) !== null &&
@@ -1065,7 +1063,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     }
     if (
       !requiredRequest &&
-      Buffer.byteLength(composed, 'utf8') + ROUTE_NOTE_MAX_BYTES > MAX_COMPOSED_BYTES &&
+      Buffer.byteLength(composed, 'utf8') + ROUTE_NOTE_MAX_BYTES + (config.workerIsolation === 'worktree' ? Buffer.byteLength(`\n\n${ISOLATION_NOTE}`, 'utf8') : 0) > MAX_COMPOSED_BYTES &&
       carried !== null &&
       carried !== 'omitted'
     ) {
@@ -1076,7 +1074,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // Only the single shape carries a request block for the note to rank.
     const note = (tier: Tier): string => (carriedRequest === null ? renderRouteNote(tier) : renderSingleRouteNote(tier));
     const emitWorkerPatch = (patch: Parameters<typeof patchAgentInput>[1], code: ErrorCode | null): HookResult =>
-      emitPatch(eligibility.input, { ...patch, ...(config.workerIsolation === 'worktree' ? { isolation: 'worktree' as const } : {}) }, code);
+      emitPatch(eligibility.input, { ...patch, ...(config.workerIsolation === 'worktree' ? { isolation: 'worktree' as const, prompt: `${patch.prompt ?? eligibility.prompt}\n\n${ISOLATION_NOTE}` } : {}) }, code);
     /** A preserve leaves the model exactly as the coordinator called it. That is all it leaves alone. */
     const preserveAdhoc = (code: ErrorCode | null, tier: Tier = eligibility.tier): HookResult =>
       carriedRequest === null
@@ -1278,9 +1276,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     // observed failure, a pass that cannot be seen, or a pass that is not after the last observed edit turns an
     // accept into incomplete. Run the declared exact check in the foreground and report its actual result.
     let verification: CheckVerification | undefined;
-    let observedClaimCount = 0;
     let formatOnly = false;
-    let formatHint = '';
     if (!config.verifyWorkerChecks && parsed?.ok && parsed.value.checks.length > 0 && finalVerdict === 'accept') {
       finalVerdict = 'incomplete';
       reason = 'worker_checks_unverified';
@@ -1292,14 +1288,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       // The check_id is the command itself, which can carry anything a shell line can: it is matched but never
       // stored, and the trace and the reason name the check by its position in the reply instead.
       const claims = passed.map((c) => ({ id: `#${parsed.value.checks.indexOf(c) + 1}`, command: c.check_id }));
-      observedClaimCount = claims.length;
       const observation = deps.host ? deps.host.observation(agentId) : path === null ? null : readWorkerObservation(path);
       verification = verifyChecks(observation, claims);
       if (isSingle && finalVerdict === 'accept' && evidenceFormatOnly(observation, claims, verification)) {
         formatOnly = true;
-        formatHint = nearestFormatCommands(observation, claims, verification)
-          .map((item) => `${item.id}: ${looksSecret(item.command) ? '[redacted]' : JSON.stringify(item.command.slice(0, 200))}`)
-          .join('; ');
       }
       // A single worker that changed files and reports no passing check has shown nothing but its word: the request
       // it carries asks it to run the checks the change implies. One that changed nothing (an answer, an analysis)
@@ -1343,17 +1335,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       const rootFallback = acceptedHandoff || (isSingle && finalVerdict !== 'accept' && boundExhausted(next, SINGLE_TASK_ID));
       const rootFallbackReason = acceptedHandoff ? ('accepted' as const) : ('attempt_cap' as const);
       if (rootFallback) next = { ...next, root_fallback: true, root_fallback_reason: rootFallbackReason };
-      const passedCount = parsed?.ok ? parsed.value.checks.filter((c) => c.result === 'pass').length : 0;
-      const confirmedCount = verification
-        ? Math.max(0, observedClaimCount - new Set([...verification.contradicted, ...verification.stale, ...verification.unobserved]).size)
-        : 0;
-      const checks = verification
-        ? `Check evidence: reported pass ${passedCount}; confirmed command pass ${confirmedCount}; transcript ${verification.transcript}; contradicted ${verification.contradicted.length}; stale ${verification.stale.length}; unobserved ${verification.unobserved.length}. Confirmation covers matched command runs and observed edit timing only; this does not establish requirement coverage.`
-        : `Check evidence: reported pass ${passedCount}; observation disabled or unavailable. No verified pass is claimed.`;
-      context = isSingle
-        ? renderSingleResult(finalVerdict, reason ?? '', { formatHint, rootFallback, rootFallbackReason, checks })
-        : renderAdhocResult(finalVerdict, reason ?? '', checks);
-      if (config.workerIsolation === 'worktree') context += `\n${WORKTREE_REMINDER}`;
+      context = renderWorkerDelivery(receipt, { single: isSingle, rootFallback, rootFallbackReason });
       trace?.write('post', {
         ...base,
         task_id: taskId,

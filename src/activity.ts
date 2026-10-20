@@ -1,4 +1,5 @@
 import { lstatSync, opendirSync, statSync } from 'node:fs';
+import { codexFailureReason, verdictReason } from './worker-record.js';
 
 import type { Env } from './config.js';
 import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './explain.js';
@@ -21,14 +22,6 @@ const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 const REASON: Record<string, string> = {
-  worker_check_duplicate: '검사 중복 보고',
-  worker_check_failed: '보고된 검사 실패',
-  worker_check_not_run: '필수 검사 미실행',
-  worker_checks_missing: '변경 후 검사 보고 없음',
-  worker_checks_unverified: '검사 실행 확인 불가',
-  worker_no_result: '워커 결과 미반환 · 예약 해제',
-  worker_failed: '워커 실행 실패',
-  worker_cancelled: '사용자가 워커 취소',
   admission_context_unclear: '요청 문맥 불명확',
   admission_context_low_confidence: '독립 요청 근거 부족',
   route_not_fast: '빠른 등급 요건 불충족',
@@ -228,7 +221,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
   }
   if (phase === 'post') {
     const verdict = token(r['verdict']) ?? '판정 없음';
-    const why = reasonText(r['verdict_reason']);
+    const why = verdictReason(verdict, r['verdict_reason'])?.[1];
     const resolved = token(r['resolved_model']);
     const v = sub(r, 'verification');
     const transcript = v ? token(v['transcript']) : null;
@@ -248,7 +241,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     return { at, kind: 'follow', title: '턴 종료', call: 'Jev 호출이 아닙니다', used: `게이트가 이 턴을 끝내지 못했습니다 (${outcome})` };
   }
   if (phase === 'failure') {
-    const line = reasonText(r['verdict_reason']) ?? token(r['error_first_line']);
+    const line = codexFailureReason(r) ?? verdictReason('', r['verdict_reason'])?.[1];
     return { at, kind: 'follow', title: '실패', call: 'Jev 호출이 아닙니다', used: line ? `호스트가 실패를 보고했습니다 (${line})` : '호스트가 실패를 보고했습니다' };
   }
   return null;

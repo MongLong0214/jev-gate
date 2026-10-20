@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexRpc, RpcRequestError } from '../../src/codex/rpc.js';
+import { looksSecret } from '../../src/outbound-text.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import { AGENT_TOOL } from '../../src/codex/profiles.js';
 import { readOnlyCommand, writeTargets } from '../../src/codex/write-scope.js';
@@ -63,7 +64,7 @@ const setup = async (scenario = 'uncertain', started = true, workerIsolation?: '
   await policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Investigate and return a result' });
   cleanups.push(() => { rpc.close(); input.destroy(); output.destroy(); rmSync(root, { recursive: true, force: true }); });
   const launch = (background = false, nativeMeta?: Obj) => rpc.onRequest({ id: 'call', method: 'item/tool/call', params: { threadId: 'parent', callId: 'dispatch', tool: 'jev_agent', ...(nativeMeta ? { nativeMeta } : {}), arguments: { run_in_background: background, subagent_type: 'jev-gate:worker', prompt: 'Investigate and return a result' } } });
-  const terminal = (status = 'completed', text = 'worker observation kept') => {
+  const terminal = (status = 'completed', text = JSON.stringify({ status: 'blocked', summary: 'worker observation kept', checks: [] })) => {
     notify('item/completed', { threadId: 'worker', item: { id: 'final', type: 'agentMessage', phase: 'final_answer', text } });
     notify('turn/completed', { threadId: 'worker', turn: { id: 'turn-w', status } });
   };
@@ -74,6 +75,58 @@ const setup = async (scenario = 'uncertain', started = true, workerIsolation?: '
   return { policy, rpc, parent, sent, launch, terminal, job, stateEnv, root, returned, traces, status, collect: (turn: Obj) => { collectedTurn = turn; }, unlock: () => unlock?.(), started: () => start !== undefined, lateResponse: () => { if (start) reply(start['id'], { turn: { id: 'turn-w' } }); } };
 };
 describe('Codex status collection and deny tracing (#293)', () => {
+  it('C1: delivers one functional projection for foreground, status and background replay without check text', async () => {
+    const command = 'printf sessionid=canary123', note = 'sessionid=canary123_note';
+    expect(looksSecret(command)).toBe(false); expect(looksSecret(note)).toBe(false);
+    const secret = 'Bearer synthetic-functional-123456789';
+    // First prove the whole report misses the screen; a separate variant checks per-field redaction.
+    for (const secretMembers of [[], [secret]]) {
+      const report = JSON.stringify({ status: 'blocked', summary: 'Agent result ready for integration', changed_files: ['src/result.ts', ...secretMembers],
+        interfaces: ['result(): void', ...secretMembers], blockers: ['Integration remains', ...secretMembers],
+        checks: [{ check_id: command, result: 'pass', note, observed_output: note, error: note }] });
+      if (!secretMembers.length) expect(looksSecret(report)).toBe(false);
+      const deliveries: string[] = [];
+      for (const background of [false, true]) {
+        const f = await setup('normal'); const launch = f.launch(background);
+        await vi.waitFor(() => expect(f.started()).toBe(true)); if (background) await launch;
+        f.rpc.onNotification({ method: 'item/completed', params: { threadId: 'worker', item: { id: 'check', type: 'commandExecution', command, status: 'completed', exitCode: 0, aggregatedOutput: note } } });
+        f.terminal('completed', report); await launch;
+        await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
+        await f.status('projection-status');
+        const resultText = (id: string) => String((((f.sent.find(m => m['id'] === id)?.['result'] as Obj)['contentItems'] as Obj[])[0])!['text']);
+        const delivery = resultText(background ? 'projection-status' : 'call'); deliveries.push(delivery);
+        expect(resultText('projection-status')).toBe(delivery);
+        if (background) expect(f.job().current.background_context).toBe(delivery);
+        f.parent.prompt = 'next';
+        const replay = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
+        const disk = readFileSync(jobPath(f.stateEnv, 'parent'), 'utf8') + readdirSync(join(f.root, 'trace')).filter(name => name.endsWith('.json')).map(name => readFileSync(join(f.root, 'trace', name), 'utf8')).join('\n');
+        for (const value of [delivery, disk, ...(background ? [JSON.stringify(replay)] : [])]) {
+          expect(value).not.toContain('sessionid=canary123'); expect(value).not.toContain(secret);
+        }
+        for (const value of [delivery, ...(background ? [f.job().current.background_context!, JSON.stringify(replay)] : [])]) {
+          for (const functional of ['Agent result ready for integration', 'src/result.ts', 'result(): void', 'Integration remains']) expect(value).toContain(functional);
+        }
+      }
+      expect(deliveries[0]).toBe(deliveries[1]);
+    }
+  });
+
+  it('C2: delivers the isolation commit request and blocks uncommitted worktree edits instead of an empty diff', async () => {
+    const f = await setup('normal', true, 'worktree'); await f.launch(true);
+    const child = f.sent.find(m => m['method'] === 'thread/start')!['params'] as Obj;
+    const turn = f.sent.find(m => m['method'] === 'turn/start')!['params'] as Obj;
+    expect.soft(String((turn['input'] as Obj[])[0]!['text'])).toMatch(/\[Jev Gate isolation\].*Commit your changes once/);
+    writeFileSync(join(String(child['cwd']), 'worker-edit.txt'), 'uncommitted worker result');
+    f.terminal('completed', JSON.stringify({ status: 'done', summary: 'Edit ready', changed_files: ['worker-edit.txt'], checks: [] }));
+    await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
+    expect(f.job().current.receipts[0]).toMatchObject({ verdict: 'incomplete', reply: { status: 'blocked', blockers: [expect.stringContaining('uncommitted')] } });
+    expect(await f.status('uncommitted-result')).toContain('uncommitted');
+    for (const name of ['worker-fast', 'worker', 'worker-deep', 'worker-frontier']) {
+      expect(readFileSync(join(process.cwd(), 'agents', `${name}.md`), 'utf8')).toContain('is that request for one commit');
+    }
+    expect(readFileSync(join(process.cwd(), 'scripts/build-codex.mjs'), 'utf8')).toContain("readFileSync(join(root, 'agents'");
+  });
+
   it('B2: drops native Codex failure prose from diagnostics and replay', async () => {
     const f = await setup('normal'); await f.launch(true);
     const sentinel = 'B2_SYNTHETIC_CODEX_FAILURE_SENTINEL';
@@ -131,7 +184,7 @@ describe('Codex status collection and deny tracing (#293)', () => {
     f.terminal('completed', JSON.stringify({ status: 'done', summary: text, changed_files: [text], interfaces: [text], blockers: [text],
       checks: [{ check_id: 'npm test', result: 'pass', note: text, observed_output: text, output: text, error: text }] }));
     await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
-    expect.soft(f.job().current.receipts[0]?.reply).toEqual({ status: 'done', checks: [{ check_id: '#1', result: 'pass' }] });
+    expect.soft(f.job().current.receipts[0]?.reply).toEqual({ status: 'done', changed_files: [], interfaces: [], blockers: [], checks: [{ check_id: '#1', result: 'pass' }] });
     f.parent.prompt = 'next';
     const next = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
     for (const output of [JSON.stringify(f.job()), readFileSync(jobPath(f.stateEnv, 'parent'), 'utf8'), f.job().current.background_context, JSON.stringify(next), await f.status('private-result'), JSON.stringify(f.traces('post'))]) expect.soft(output).not.toContain(sentinel);
@@ -149,10 +202,10 @@ describe('Codex status collection and deny tracing (#293)', () => {
     await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
     const receipt = f.job().current.receipts[0]!;
     expect(receipt).toMatchObject({ verdict: 'invalid', reply: null });
-    expect.soft(receipt.verdict_reason).toContain('check #2:');
+    expect.soft(receipt.verdict_reason).toBe('invalid_reply');
     const output = await f.status('invalid-result');
     const guidance = output.slice(output.lastIndexOf('[Jev Gate result]'));
-    expect.soft(guidance).toContain('check #2:');
+    expect.soft(guidance).toContain('invalid_reply');
     f.parent.prompt = 'next';
     const next = await f.policy.nativeHook({ hook_event_name: 'UserPromptSubmit', session_id: 'parent', prompt: 'Continue reviewing.' });
     for (const value of [JSON.stringify(receipt), guidance, f.job().current.background_context, JSON.stringify(next), JSON.stringify(f.traces('post'))]) expect.soft(value).not.toContain(sentinel);
@@ -166,7 +219,7 @@ describe('Codex status collection and deny tracing (#293)', () => {
     const receipt = f.job().current.receipts[0]!;
     expect(receipt).toMatchObject({ reply: { checks: [{ check_id: '#1', result: 'pass' }] }, verification: { transcript: 'read', contradicted: [], unobserved: [], stale: [] } });
     expect(f.job().current.background_context).toContain('"check_id":"#1"');
-    expect(f.job().current.background_context).not.toContain('verified result');
+    expect(f.job().current.background_context).toContain('verified result');
     for (const value of [JSON.stringify(receipt), f.job().current.background_context]) expect(value).not.toContain('REVIEW_RECEIPT_SENTINEL');
   });
   it.each(['done', 'blocked', 'failed'])('collects terminal %s after a missed notification, releases the scope and returns the same result twice', async status => {
@@ -211,7 +264,7 @@ describe('Codex status collection and deny tracing (#293)', () => {
   it.each(['completed', 'failed'])('names a %s settlement commit failure and retries it without re-execution', async status => {
     const f = await setup('normal'); await f.launch(true);
     const path = jobPath(f.stateEnv, 'parent'); mkdirSync(`${path}.lock`); writeFileSync(join(`${path}.lock`, 'owner'), String(process.pid));
-    f.collect({ id: 'turn-w', status, items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text: 'terminal result kept' }] });
+    f.collect({ id: 'turn-w', status, items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text: JSON.stringify({ status: 'done', summary: 'terminal result kept', checks: [] }) }] });
     const pending = await f.status('pending');
     expect(pending).toContain('Reservation worker: state_locked'); expect(pending).not.toContain('terminal result kept');
     expect(JSON.stringify(await write(f))).toContain('Reservation worker: state_locked');
@@ -274,7 +327,7 @@ describe('Codex genuine terminal settlement (#139)', () => {
     f.terminal('completed', JSON.stringify({ status: 'done', summary: 'original result', changed_files: [], interfaces: [], checks: [], blockers: [] }));
     await vi.waitFor(() => expect(f.job().current.receipts[0]?.verdict).toBe('accept'));
     expect(f.job().current.active).toEqual({}); expect(f.job().current.background_context).toContain('"status":"done"');
-    expect(f.job().current.background_context).not.toContain('original result');
+    expect(f.job().current.background_context).toContain('original result');
     await f.rpc.onRequest({ id: 'status', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'status', agent_id: 'worker' } } });
     expect(JSON.stringify(f.sent.find(m => m['id'] === 'status'))).toContain('original result');
     f.terminal(); expect(f.job().current.receipts).toHaveLength(1);

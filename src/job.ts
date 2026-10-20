@@ -5,6 +5,34 @@ import { basename, join } from 'node:path';
 
 import type { Env } from './config.js';
 import type { ExecutionShape, JobGeneration, JobState, OwnedRole, Reservation, StateCode, Tier } from './types.js';
+import { workerReceipt } from './plan.js';
+import { renderWorkerDelivery } from './coordinator.js';
+import { workerTraceData } from './worker-record.js';
+
+// Retired state layouts can carry whole reports outside receipts. Keep only the supported generation/reservation fields.
+const GENERATION_FIELDS = new Set(['prompt_id', 'generation_id', 'request', 'created_at', 'shape', 'attempts', 'outcome', 'forced',
+  'execution', 'root_fallback', 'root_fallback_reason', 'admission_revision', 'background_job', 'interactive_prompt_id',
+  'background_idle_since', 'background_delivery', 'background_stopped', 'notices_taken']);
+const RESERVATION_FIELDS = new Set(['role', 'task_id', 'contract_hash', 'rev', 'tier', 'attempt', 'deliverables', 'started_at',
+  'orphaned', 'codex_execution', 'allocation_pair', 'background_execution']);
+
+/** Stored free-form context from older versions is never trusted as coordinator input. Rebuild from receipts. */
+const projectGeneration = (gen: JobGeneration): JobGeneration => {
+  const { background_context: _legacy } = gen;
+  const rest = Object.fromEntries(Object.entries(gen).filter(([key]) => GENERATION_FIELDS.has(key))) as unknown as JobGeneration;
+  const receipts = (gen.receipts ?? []).map(workerReceipt), receipt = receipts.at(-1);
+  const background_context = receipt ? renderWorkerDelivery(receipt, { single: gen.execution === 'single', rootFallback: !!gen.root_fallback,
+    ...(gen.root_fallback_reason === 'accepted' || gen.root_fallback_reason === 'attempt_cap' ? { rootFallbackReason: gen.root_fallback_reason } : {}) })
+    : gen.root_fallback_reason === 'delivery_failed' ? 'No eligible automatic child model. Continue in the main session; no child started.' : '';
+  const active = Object.fromEntries(Object.entries(gen.active).map(([id, raw]) => {
+    const reservation = Object.fromEntries(Object.entries(raw).filter(([key]) => RESERVATION_FIELDS.has(key))) as unknown as Reservation;
+    return [id, reservation.background_execution ? { ...reservation,
+      background_execution: workerTraceData('background_launch', reservation.background_execution) as unknown as NonNullable<typeof reservation.background_execution>,
+    } : reservation];
+  }));
+  return { ...rest, active, receipts, ...(_legacy !== undefined || gen.background_job && receipt ? { background_context } : {}) };
+};
+const projectState = (state: JobState): JobState => ({ ...state, current: projectGeneration(state.current), history: state.history.map(projectGeneration) });
 
 /** D7/A7: one private JSON file per session, never a database; bounds are enforced, never truncated. */
 export const STATE_MAX_BYTES = 1024 * 1024;
@@ -123,8 +151,8 @@ const parseState = (text: string, sessionId: string): JobState | null => {
     version: 5,
     session_id: sessionId,
     updated_at: typeof parsed['updated_at'] === 'string' ? parsed['updated_at'] : '',
-    current,
-    history,
+    current: projectGeneration(current),
+    history: history.map(projectGeneration),
   };
 };
 
@@ -145,7 +173,7 @@ const readRaw = (file: string, sessionId: string): JobResult<JobState | null> =>
 };
 
 const writeAtomic = (file: string, state: JobState): JobResult<JobState> => {
-  const body = JSON.stringify({ ...state, updated_at: new Date().toISOString() });
+  const body = JSON.stringify({ ...projectState(state), updated_at: new Date().toISOString() });
   if (Buffer.byteLength(body, 'utf8') > STATE_MAX_BYTES) return { ok: false, code: 'state_too_large' };
   if (isSymlink(file)) return { ok: false, code: 'state_symlink' };
   const tmp = `${file}.${process.pid}.tmp`;

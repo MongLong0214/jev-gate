@@ -232,6 +232,10 @@ export interface CheckVerification {
 
 export interface WorkerReceiptReply {
   status: WorkerReply['status'];
+  summary?: string;
+  changed_files?: string[];
+  interfaces?: string[];
+  blockers?: string[];
   checks: Pick<WorkerCheckResult, 'check_id' | 'result'>[];
 }
 
@@ -254,6 +258,7 @@ export interface Receipt {
   evidence_format_only?: true;
   requested_tier?: Tier | null;
   requested_model?: string | null;
+  worker_worktree?: { path: string; branch: string; baseline: string };
 }
 
 export interface JobAttempts {
