@@ -135,6 +135,79 @@ describe('classic path: which path runs', () => {
 });
 
 describe('classic path: restore', () => {
+  it.each([false, true])('finds the last human request before a tool-filled 2 MiB tail (one oversized row: %s)', async oversized => {
+    const task = '현재 작업: repair the parser and keep the existing API.';
+    const output = oversized ? call(1, 'x'.repeat(5 * 1024 * 1024)) : Array.from({ length: 6 }, (_, i) => call(i, 'x'.repeat(512 * 1024))).flat();
+    write([user('An older request.'), user(task), ...output,
+      { ...user('Background job completed.'), promptSource: 'system', origin: { kind: 'task-notification' } },
+      { ...user('Previous compaction summary.'), isCompactSummary: true }]);
+    const out = await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    expect(out).toContain(`The current task: "${task}"`);
+    const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), env);
+    expect(restored).toContain(task);
+    expect(restored).not.toContain('Background job completed.');
+    expect(restored).not.toContain('Previous compaction summary.');
+  });
+
+  it.each([false, true])('records no_current_task for only notices and summaries, without restoring either (Jev enabled: %s)', async enabled => {
+    write([{ ...user('Background job completed.'), promptSource: 'system', origin: { kind: 'task-notification' } },
+      { ...user('Previous compaction summary.'), isCompactSummary: true }]);
+    const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: String(enabled) };
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev)).toBeNull();
+    expect(traces()).toMatchObject([{ deferred: 'nothing_to_restore', selection: 'no_current_task' }]);
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), jev)).toBeNull();
+    expect(files('state/jev-gate/compact')).toEqual([]);
+  });
+
+  it('still restores the human task when a single tool result fills even the 16 MiB message tail', async () => {
+    write([user('Keep this human task.'), ...call(1, 'x'.repeat(17 * 1024 * 1024))]);
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env)).toContain('The current task: "Keep this human task."');
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toContain('Keep this human task.');
+  });
+
+  it('a new root compaction with no human task cannot restore a previous pending task', async () => {
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    write([{ ...user('Background job completed.'), promptSource: 'system', origin: { kind: 'task-notification' } }]);
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env)).toBeNull();
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toBeNull();
+    expect(files('state/jev-gate/compact')).toEqual([]);
+    expect(traces().at(-1)).toMatchObject({ deferred: 'nothing_to_restore', selection: 'no_current_task' });
+  });
+
+  it.each(['SessionStart', 'PostCompact'])('a sidechain %s cannot consume or clear the parent restore', async event => {
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    const file = join(dir, 'state/jev-gate/compact', files('state/jev-gate/compact')[0]!);
+    const saved = readFileSync(file, 'utf8');
+    expect(await runClassicCompact(input(event, { source: 'compact', agent_id: 'child', compact_summary: 'child summary' }), env)).toBeNull();
+    expect(readFileSync(file, 'utf8')).toBe(saved);
+    expect(traces().some(t => t['stage'] === 'restore' || t['stage'] === 'post')).toBe(false);
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toContain('Rename parseRow');
+  });
+
+  it.each(['SessionStart', 'PostCompact'])('%s for another transcript cannot consume the saved restore', async event => {
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    expect(await runClassicCompact(input(event, { source: 'compact', transcript_path: join(dir, 'child.jsonl') }), env)).toBeNull();
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toContain('Rename parseRow');
+  });
+
+  it.each([
+    ['disabled', false, 'session'],
+    ['no_current_task', true, 'tools'],
+    ['no_prior_assistant', true, 'user'],
+    ['no_key', true, 'session'],
+    ['no_candidates', true, 'assistant'],
+  ] as const)('records the actual Jev selection reason: %s', async (reason, enabled, content) => {
+    if (content === 'tools') write(session().slice(1));
+    if (content === 'user') write([user('Only a human request.')]);
+    if (content === 'assistant') write([user('A human request.'), { type: 'assistant', message: { content: 'No tool results.' } }]);
+    const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: String(enabled) };
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev, { key: reason === 'no_key' ? undefined : 'k'.repeat(16) });
+    expect(traces().find(t => t['guided'] === true)).toMatchObject({ selection: reason });
+    await runClassicCompact(input('SessionStart', { source: 'compact' }), jev);
+    await runClassicCompact(input('PostCompact', { compact_summary: 'summary' }), jev);
+    expect(traces().find(t => t['stage'] === 'post')).toMatchObject({ selection: reason });
+  });
+
   it('SessionStart(compact) hands the restore up once, as additional context', async () => {
     await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
     const out = JSON.parse((await runClassicCompact(input('SessionStart', { source: 'compact' }), env))!) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };

@@ -11,7 +11,7 @@ import { claudeTraceDir } from './claude-setup.js';
 import type { Env } from './config.js';
 import { readPrivateJson, resolveApiKey, writePrivateJson } from './credentials.js';
 import { stateRoot } from './job.js';
-import { readRecentPrompts, readTail } from './recent-prompts.js';
+import { readCurrentTaskPrompts, readTail } from './recent-prompts.js';
 import { openTraceDir, type TraceWriter } from './trace.js';
 
 /**
@@ -189,7 +189,7 @@ const stateDir = (env: Env): string => join(stateRoot(env), 'jev-gate', 'compact
 const statePath = (env: Env, session: string): string => join(stateDir(env), `${createHash('sha256').update(session, 'utf8').digest('hex').slice(0, 32)}.json`);
 export const askedPath = (env: Env, session: string): string => join(claudeTraceDir(env), `compact_asked-${session}.asked`);
 
-interface State { version: 1; at: number; session: string; budget: number; summary_chars: number; restore: string | null; restored_chars: number | null; shadow: boolean; steering_chars: number; jev: string }
+interface State { version: 1; at: number; session: string; transcript: string; budget: number; summary_chars: number; restore: string | null; restored_chars: number | null; shadow: boolean; steering_chars: number; jev: string }
 const readState = (env: Env, session: string): State | null => {
   const v = readPrivateJson(statePath(env, session), 64 * 1024);
   return v && v['version'] === 1 && v['session'] === session && typeof v['at'] === 'number' ? (v as unknown as State) : null;
@@ -227,19 +227,23 @@ const preCompact = async (input: HookInput, env: Env, config: CompactConfig, dep
   const now = deps.now ?? Date.now;
   const runId = randomUUID();
   const log = (fields: Rec): void => record(writer, input.session, { run_id: runId, stage: 'pre', trigger: input.trigger, mode: config.mode, ...fields });
+  // A new root compaction replaces a pending restore even when it defers; a child must leave its parent's alone.
+  if (!input.agent && readState(env, input.session)) {
+    try { rmSync(statePath(env, input.session), { force: true }); } catch { log({ deferred: 'state' }); return null; }
+  }
   const deferred = input.agent ? 'subagent' : input.trigger === 'manual' && !config.manual ? 'trigger' : input.trigger === 'manual' && input.instructions?.trim() ? 'instructions' : functionPathAsked(env, input.session, now()) ? 'function_path' : null;
   if (deferred) { log({ deferred }); return null; }
   const started = now();
   const tail = input.transcript ? readTail(input.transcript, TRANSCRIPT_BYTES) : null;
-  if (!tail) { log({ deferred: 'no_transcript' }); return null; }
-  const requests = readRecentPrompts(input.transcript, '', 3);
+  if (tail === null) { log({ deferred: 'no_transcript' }); return null; }
+  const requests = readCurrentTaskPrompts(input.transcript);
   const task = requests.at(-1) ?? '';
   const messages = transcriptMessages(heldRecords(parseRecords(tail)), task);
   const { summary, restore: room } = shares(config.budgetChars);
   const lastAssistant = messages.findLastIndex((m) => m.role === 'assistant');
   let priorities: Array<{ message: number; tool: number }> = [];
-  let jev = 'disabled';
-  if (config.jevEnabled !== false && task && lastAssistant > 0) {
+  let jev = !task ? 'no_current_task' : config.jevEnabled === false ? 'disabled' : lastAssistant <= 0 ? 'no_prior_assistant' : null;
+  if (jev === null) {
     log({ stage: 'started' });
     try {
       const key = 'key' in deps ? deps.key : resolveApiKey(env);
@@ -250,10 +254,10 @@ const preCompact = async (input: HookInput, env: Env, config: CompactConfig, dep
     } catch { jev = 'error'; log({ stage: 'jev', jev_sent: null, selection: 'error' }); }
   }
   const restore = buildRestore(messages, requests, priorities, room);
-  if (restore === null) { log({ deferred: 'nothing_to_restore' }); return null; }
+  if (restore === null) { log({ deferred: 'nothing_to_restore', selection: jev }); return null; }
   const steering = buildSteering(task, summary);
   try {
-    writePrivateJson(statePath(env, input.session), { version: 1, at: now(), session: input.session, budget: config.budgetChars, summary_chars: summary, restore, restored_chars: null, shadow: config.mode === 'shadow', steering_chars: steering.length, jev });
+    writePrivateJson(statePath(env, input.session), { version: 1, at: now(), session: input.session, transcript: input.transcript, budget: config.budgetChars, summary_chars: summary, restore, restored_chars: null, shadow: config.mode === 'shadow', steering_chars: steering.length, jev });
     sweepState(env, now());
   } catch { log({ deferred: 'state' }); return null; }
   log({ guided: config.mode === 'active', messages: messages.length, restore_chars: restore.length, steering_chars: steering.length, summary_target: summary, dependencies: priorities.length, selection: jev, build_ms: now() - started });
@@ -262,9 +266,10 @@ const preCompact = async (input: HookInput, env: Env, config: CompactConfig, dep
 
 /** SessionStart(compact): the restore, as additional context, when the PreCompact that saved it is this compaction's. */
 const restoreContext = (input: HookInput, env: Env, config: CompactConfig, deps: ClassicDeps, writer: TraceWriter | null): string | null => {
+  if (input.agent) return null;
   const now = (deps.now ?? Date.now)();
   const state = readState(env, input.session);
-  if (!state?.restore || state.shadow || state.restored_chars !== null || now - state.at > STATE_MAX_AGE_MS) return null;
+  if (!state?.restore || state.transcript !== input.transcript || state.shadow || state.restored_chars !== null || now - state.at > STATE_MAX_AGE_MS) return null;
   // A compaction the Mod answered after this one was saved is not this one's.
   try { if (statSync(askedPath(env, input.session)).mtimeMs >= state.at) return null; } catch { /* no marker */ }
   if (state.restore.length > shares(config.budgetChars).restore) return null;
@@ -275,8 +280,9 @@ const restoreContext = (input: HookInput, env: Env, config: CompactConfig, deps:
 
 /** PostCompact: what the engine's summary came to against the budget (measurement only; this output never reaches the model). */
 const postCompact = (input: HookInput, env: Env, deps: ClassicDeps, writer: TraceWriter | null): null => {
+  if (input.agent) return null;
   const state = readState(env, input.session);
-  if (!state) return null;
+  if (!state || state.transcript !== input.transcript) return null;
   const summary = input.summary?.length ?? null;
   const restored = state.restored_chars ?? 0;
   record(writer, input.session, { stage: 'post', summary_chars: summary, restored_chars: state.restored_chars, summary_target: state.summary_chars, budget: state.budget, within_budget: summary === null ? null : summary + restored <= state.budget, compact_ms: (deps.now ?? Date.now)() - state.at, selection: state.jev });

@@ -1,9 +1,14 @@
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { readRecentPrompts, RECENT_PROMPT_MAX_CHARS, withRecentPrompts } from '../src/recent-prompts.js';
+import { readCurrentTaskPrompts, readRecentPrompts, RECENT_PROMPT_MAX_CHARS, withRecentPrompts } from '../src/recent-prompts.js';
+
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>();
+  return { ...fs, readSync: vi.fn(fs.readSync) };
+});
 
 const tmp = mkdtempSync(join(tmpdir(), 'recent-'));
 let seq = 0;
@@ -78,5 +83,40 @@ describe('readRecentPrompts (#115)', () => {
   it('renders earlier turns as numbered context with the current request last', () => {
     const text = withRecentPrompts('e2e 해봐', ['a', 'b']);
     expect(text).toMatch(/1\. a\n2\. b\n\nCurrent request:\ne2e 해봐$/);
+  });
+});
+
+describe('readCurrentTaskPrompts (classic Compact)', () => {
+  it('reads back in bounded chunks, rejoins a split human row and UTF-8 character, and leaves Gate A tail-only', () => {
+    const task = '현재 작업을 보존해줘';
+    const row = JSON.stringify(user(task)) + '\n';
+    const split = Buffer.byteLength(row.slice(0, row.indexOf(task))) + 1;
+    const tool = (text: string): string => JSON.stringify(user([{ type: 'tool_result', content: text }])) + '\n';
+    const tail = tool('x'.repeat(2 * 1024 * 1024 - (Buffer.byteLength(row) - split) - Buffer.byteLength(tool(''))));
+    const p = join(tmp, 'split-task.jsonl');
+    writeFileSync(p, row + tail);
+    vi.mocked(readSync).mockClear();
+    expect(readCurrentTaskPrompts(p)).toEqual([task]);
+    expect(vi.mocked(readSync).mock.calls.map(c => Array.from(c)[3])).toEqual([2 * 1024 * 1024, split]);
+    expect(readRecentPrompts(p, '')).toEqual([]);
+  });
+
+  it('stops at the first chunk with a human task and applies shared secret filtering and clipping', () => {
+    const p = write([user('old task'), user([{ type: 'tool_result', content: 'x'.repeat(3 * 1024 * 1024) }]), user('latest task ' + 'a'.repeat(2500)), user('password = correct-horse-battery-staple-0000')]);
+    vi.mocked(readSync).mockClear();
+    expect(readCurrentTaskPrompts(p)).toEqual(['latest task ' + 'a'.repeat(RECENT_PROMPT_MAX_CHARS - 12) + ' […]']);
+    expect(vi.mocked(readSync).mock.calls).toHaveLength(1);
+  });
+
+  it('reaches the file start without treating tool output, notices, summaries, commands, meta or sidechain rows as a task', () => {
+    const p = write([user('sidechain', { isSidechain: true }), user('meta', { isMeta: true }), user('<command-name>/compact</command-name>'),
+      user('notice', { promptSource: 'system', origin: { kind: 'task-notification' } }), user('summary', { isCompactSummary: true }),
+      user([{ type: 'tool_result', content: 'x'.repeat(3 * 1024 * 1024) }])]);
+    expect(readCurrentTaskPrompts(p)).toEqual([]);
+  });
+
+  it('rejects missing paths, symlinks, directories and empty transcripts', () => {
+    const target = write([user('private')]); const link = join(tmp, 'current-task-symlink.jsonl'); symlinkSync(target, link);
+    for (const p of [null, undefined, '', join(tmp, 'missing-current.jsonl'), link, tmp, write([])]) expect(readCurrentTaskPrompts(p)).toEqual([]);
   });
 });

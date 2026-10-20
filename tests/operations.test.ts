@@ -609,6 +609,22 @@ it('has no age edge while nothing waits: a settled busy history is stable until 
   expect(operationsStableUntil()).toBe(t0 + 250_000);
 });
 
+it.each([
+  ['no_current_task', '사람이 입력한 현재 작업 없음'],
+  ['no_prior_assistant', '이전 assistant 메시지 없음'],
+  ['disabled', 'Jev 선별 꺼짐'],
+  ['no_key', 'Jev API 키 없음'],
+  ['no_candidates', '선별할 과거 결과 없음'],
+] as const)('displays classic Compact selection reason %s on its pre record', (selection, label) => {
+  const view = buildOperations([], [row('compact', { event: 'compact', path: 'classic', session_id: 's', stage: 'pre', guided: true, selection })], new Date(later), { trace: true });
+  expect(view.feed.flatMap(s => [s.summary, ...s.details]).join(' ')).toContain(label);
+});
+
+it('displays why classic Compact had no current task when nothing could be restored', () => {
+  const view = buildOperations([], [row('compact', { event: 'compact', path: 'classic', session_id: 's', stage: 'pre', deferred: 'nothing_to_restore', selection: 'no_current_task' })], new Date(later), { trace: true });
+  expect(view.feed.flatMap(s => [s.summary, ...s.details]).join(' ')).toContain('사람이 입력한 현재 작업 없음');
+});
+
 it('gives a Compact selection and its result written in the same millisecond their own step ids', () => {
   const at = '2026-09-29T06:09:59.000Z', run = { event: 'compact', session_id: 's', run_id: 'c' };
   const steps = buildOperations([], [row('compact', { ...run, stage: 'jev', jev_sent: true, jev_ms: 180 }, at), row('compact', { ...run, applied: true }, at)],
