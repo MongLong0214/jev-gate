@@ -49,6 +49,29 @@ describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('
   });
 
   it.each([
+    'PASSWORD=CorrectHorseBatteryStaple',
+    'api_key=abcdefghijklmnopqrstuvwxyz',
+    'password=abcdefghijklmnop',
+    'export API_KEY=abcdefghijklmnopqrstuv',
+    'DB_PASSWORD=Sup3rSecretValue',
+  ])('G1: detects unquoted strong credentials: %s', text => {
+    expect(looksSecret(text)).toBe(true);
+  });
+
+  it.each([
+    'password', 'passwd', 'api_key', 'apikey', 'api-key', 'apiKey', 'client_secret', 'client-secret', 'clientSecret',
+    'secret_key', 'private_key', 'access_key', 'access_token', 'refresh_token', 'id_token',
+    'aws_access_key_id', 'aws_secret_access_key', 'aws_session_token', 'PASSWORD', 'API_KEY',
+  ])('G1: applies the strong-key rule to %s without weakening reference exclusions', key => {
+    expect(looksSecret(`${key}=abcdefgh`)).toBe(true);
+    expect(looksSecret(`${key}=abcdefg`)).toBe(false);
+    for (const value of ['string', 'number', 'bigint', 'boolean', 'symbol', 'object', 'undefined', 'null', 'any', 'unknown', 'never', 'void',
+      'hash', 'process.env.X', 'Namespace1.password', 'readPassword()', 'readPassword ()', '<redacted>', '${DB_PASSWORD}', '$API_KEY']) {
+      expect(looksSecret(`${key}: ${value}`), value).toBe(false);
+    }
+  });
+
+  it.each([
     { label: 'password prose', text: 'password reset flow' },
     { label: 'token prose', text: 'the token budget' },
     { label: 'secret prose', text: 'secret sauce' },
@@ -94,6 +117,13 @@ describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('
     'pass token: tokenValue to helper',
     'id_token: decoded.sub',
     'set token: process.env.API_TOKEN',
+    'secret = getSecret()',
+    'session: ended',
+    'sid: 42',
+    'password=readPassword()',
+    'password: <redacted>',
+    'PASSWORD=${DB_PASSWORD}',
+    'api_key=$API_KEY',
   ])('F1 false-positive fix: keeps ordinary prose and references: %s', text => {
     expect(looksSecret(text)).toBe(false);
   });
@@ -108,7 +138,7 @@ describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('
     { text: "token: 'abc-defghijklmn'", secret: false },
     { text: "token: 'abc-defghijklmno'", secret: true },
     { text: "token: 'abcdefghijklmnop'", secret: false },
-    { text: 'password=abcdefghijklmnop', secret: false },
+    { text: 'password=abcdefghijklmnop', secret: true },
     { text: 'password=Namespace1.password', secret: false },
     { text: 'password=/tmp/canary123', secret: false },
     { text: 'password=~/canary123', secret: false },
