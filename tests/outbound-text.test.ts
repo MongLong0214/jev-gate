@@ -3,7 +3,80 @@ import { describe, expect, it } from 'vitest';
 import { estimateTokens, looksSecret } from '../src/outbound-text.js';
 import { looksSecret as routerLooksSecret } from '../src/router-secret.js';
 
+const CREDENTIAL_WORDS = [
+  ...['password', 'passwd', 'api_key', 'access_key', 'secret_key', 'private_key', 'client_secret',
+    'access_token', 'refresh_token', 'id_token', 'aws_access_key_id', 'aws_secret_access_key', 'aws_session_token']
+    .map(word => ({ word, strong: true })),
+  ...['token', 'auth', 'authorization', 'secret', 'credential', 'credentials', 'pwd'].map(word => ({ word, strong: false })),
+];
+const KEY_SPELLINGS = [
+  { spelling: 'bare', key: (word: string) => word },
+  { spelling: 'prefixed snake', key: (word: string) => `review_app_${word}` },
+  { spelling: 'SCREAMING', key: (word: string) => `REVIEW_APP_${word.toUpperCase()}` },
+  { spelling: 'kebab', key: (word: string) => `review-app-${word.replaceAll('_', '-')}` },
+  { spelling: 'dot', key: (word: string) => `review.app.${word.replaceAll('_', '.')}` },
+  { spelling: 'camelCase', key: (word: string) => 'reviewApp' + word.split('_').map(part => part[0]!.toUpperCase() + part.slice(1)).join('') },
+  { spelling: 'PascalCase', key: (word: string) => 'ReviewApp' + word.split('_').map(part => part[0]!.toUpperCase() + part.slice(1)).join('') },
+  { spelling: 'mixed case', key: (word: string) => 'rEvIeW_' + word.split('').map((ch, i) => i % 2 ? ch.toUpperCase() : ch).join('') },
+];
+const ASSIGNMENT_CONTEXTS = [
+  { context: 'quoted object compact', render: (key: string, value: string) => `{"${key}":${value}}` },
+  { context: 'quoted object spaced', render: (key: string, value: string) => `{ "${key}" \t : \t ${value} }` },
+  { context: 'YAML', render: (key: string, value: string) => `${key}: ${value}` },
+  { context: 'env', render: (key: string, value: string) => `${key}=${value}` },
+  { context: 'export', render: (key: string, value: string) => `export ${key}=${value}` },
+  { context: 'header', render: (key: string, value: string) => `X-${key}: ${value}` },
+  { context: 'query first', render: (key: string, value: string) => `https://example.test/?${key}=${value}&page=1` },
+  { context: 'query later', render: (key: string, value: string) => `https://example.test/?page=1&${key}=${value}` },
+  { context: 'TOML', render: (key: string, value: string) => `${key} = ${value}` },
+  { context: 'kwargs', render: (key: string, value: string) => `connect(${key}=${value})` },
+  { context: 'object literal', render: (key: string, value: string) => `{ ${key}: ${value} }` },
+  { context: 'CLI space', render: (key: string, value: string) => `client --${key} ${value}` },
+  { context: 'CLI equals', render: (key: string, value: string) => `client --${key}=${value}` },
+  { context: 'CLI at start', render: (key: string, value: string) => `--${key} ${value} --verbose` },
+  { context: 'prose start', render: (key: string, value: string) => `${key}: ${value}; then continue.` },
+  { context: 'prose middle', render: (key: string, value: string) => `Observed ${key}=${value}; continue.` },
+  { context: 'prose end', render: (key: string, value: string) => `Observed ${key}: ${value}` },
+  { context: 'inline quoted JSON', render: (key: string, value: string) => `Observed {"${key}":${value}} during review.` },
+  { context: 'quoted prose assignment', render: (key: string, value: string) => `note='Observed ${key}=${value} during review.'` },
+];
+
 describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('outbound text — %s credential screen', (_screen, looksSecret) => {
+  it.each(KEY_SPELLINGS.flatMap(spelling => ASSIGNMENT_CONTEXTS.map(context => ({ ...spelling, ...context }))))(
+    'I1 key-name matrix: $spelling / $context', ({ key, render }) => {
+      for (const { word, strong } of CREDENTIAL_WORDS) for (const quote of ['', "'", '"', '`']) {
+        for (const value of ['canary-pw-123', '<redacted>', '***', 'xxx', 'changeme', '${PASSWORD}', '$API_KEY', '{{password}}', '%PASSWORD%']) {
+          const text = render(key(word), quote + value + quote);
+          expect(looksSecret(text), text).toBe(value === 'canary-pw-123');
+        }
+        // The terminal credential word owns the threshold, including when a cookie-like prefix is present.
+        const alphabetic = render(key(word), quote + 'reviewonlypassword' + quote);
+        expect(looksSecret(alphabetic), alphabetic).toBe(strong);
+        const short = render(key(word), quote + 'p' + quote);
+        expect(looksSecret(short), short).toBe(strong && quote !== '');
+        if (!quote) for (const value of ['process.env.API_TOKEN', 'readPassword()', 'readPassword ()']) {
+          const text = render(key(word), value);
+          expect(looksSecret(text), text).toBe(false);
+        }
+      }
+    },
+  );
+
+  it.each([
+    'DB_PASSWORD', 'db_password', 'db.password', 'db-password', 'dbPassword', 'DbPassword', 'DBPassword', '9_password', '.db.password',
+    'MY_API_KEY', 'x-api-key', 'X-Api-Key', 'stripeSecretKey', 'githubAccessToken', 'confirm_password',
+    'AWS_SECRET_ACCESS_KEY', 'client.secret', 'csrf_token', 'session.token',
+  ])('I1: recognizes the complete terminal credential key %s inline', key => {
+    expect(looksSecret(`Observed {"${key}":"canary-pw-123"} during review.`)).toBe(true);
+  });
+
+  it.each(['csrf_token', 'session.token', 'my_auth', 'dbSecret', 'UserCredentials', 'APP_PWD', 'myAuthorization'])('I1: preserves generic thresholds for %s', key => {
+    for (const value of ['reviewonlypassword', 'include', 'authValue', 'abc-defg']) {
+      expect(looksSecret(`${key}='${value}'`)).toBe(false);
+    }
+    expect(looksSecret(`${key}='Bearer canary123'`)).toBe(true);
+  });
+
   it.each([
     'jv_live_' + '0123456789abcdef'.repeat(4),
     'jv_live_canary', 'JV_LIVE_canary', 'prefix_jv_live_canary',
@@ -132,9 +205,27 @@ describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('
     'password: <redacted>',
     'PASSWORD=${DB_PASSWORD}',
     'api_key=$API_KEY',
+    'input_tokens: 1234',
+    'cache_creation_input_tokens: 45000',
+    'token_count: 12',
+    'password_reset_flow: enabled',
+    '"author": "Isaac Kim 2026"',
+    'authority: central-bank-01',
+    'secretary: Jane Doe 2026',
+    '--password-file ./pw.txt',
+    '--api-key-env API_KEY',
   ])('F1 false-positive fix: keeps ordinary prose and references: %s', text => {
     expect(looksSecret(text)).toBe(false);
   });
+
+  it.each(['password_reset_flow', 'tokens', 'input_tokens', 'cache_creation_input_tokens', 'token_count', 'secretary', 'authority', 'author', 'password-file', 'api-key-env'])(
+    'I1: rejects nonterminal credential words regardless of value shape: %s', key => {
+      for (const quote of ['', "'", '"', '`']) {
+        expect(looksSecret(`${key}: ${quote}canary-pw-123${quote}`)).toBe(false);
+        expect(looksSecret(`--${key}=${quote}canary-pw-123${quote}`)).toBe(false);
+      }
+    },
+  );
 
   it.each([
     { text: 'token=1234567', secret: false },

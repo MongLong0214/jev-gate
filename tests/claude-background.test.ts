@@ -75,10 +75,11 @@ describe('responsive native background contracts', () => {
   it.each([false, true].flatMap(direct => [
     { label: 'bare Jev key', text: 'jv_live_' + '0123456789abcdef'.repeat(4), canaries: ['jv_live_' + '0123456789abcdef'.repeat(4)] },
     { label: 'JSON password only', text: '{"password":"canary-pw-123"}', canaries: ['canary-pw-123'] },
+    { label: 'I1 prefixed JSON password', text: '{"DB_PASSWORD":"review-only-password"}', canaries: ['review-only-password'] },
     { label: 'JSON', text: '{"password":"canary-pw-123","api_key":"canary-key-456"}', canaries: ['canary-pw-123', 'canary-key-456'] },
     ...['PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
       'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
-  ].map(test => ({ ...test, direct }))))('H1/F1/G1: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
+  ].map(test => ({ ...test, direct }))))('H1/F1/G1/I1: removes credentials from Claude settlement and replay ($label, direct=$direct)', async ({ direct, text, canaries }) => {
     expect(text).not.toMatch(/bearer/i);
     const fields = { status: 'blocked', summary: text, changed_files: ['src/result.ts', text], blockers: [text, 'Needs integration'], interfaces: ['integrate(): void', text] };
     const f = await fixture(direct, fields); await f.launch(); f.transcript();
