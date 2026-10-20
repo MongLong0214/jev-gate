@@ -128,7 +128,7 @@ const NO_RECORDS: TraceRead = { records: [], unreadable: 0 };
 /** Watch notifications name changed files; a bounded full reconciliation recovers lost events.
  * Directory identity is checked on every read so replaced or symlinked roots cannot expose stale data. */
 /** `cache` is keyed by file name: the full paths of a long history would take more memory than its file signatures. */
-type DirectoryState = { identity: string; scanned: number; values: Map<string, Rec | null>; cache: TraceCache; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead; appended: string[]; replaced: boolean };
+type DirectoryState = { identity: string; modified: number; scanned: number; values: Map<string, Rec | null>; cache: TraceCache; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead; appended: string[]; replaced: boolean };
 export class TraceDirectoryReader {
   private dirs = new Map<string, DirectoryState>();
   constructor(private reconciliationMs = 30_000) {}
@@ -140,11 +140,12 @@ export class TraceDirectoryReader {
   }
   /** The current state of a directory, after its identity and a due reconciliation; null when it is not readable. */
   private open(key: string, now: number): DirectoryState | null {
-    let identity: string;
+    let identity: string, modified: number;
     try {
       const stat = lstatSync(key);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('not a directory');
       identity = traceDirectoryIdentity(stat);
+      modified = stat.mtimeMs;
     } catch {
       this.forget(key);
       return null;
@@ -152,12 +153,14 @@ export class TraceDirectoryReader {
     let state = this.dirs.get(key);
     if (!state || state.identity !== identity) {
       if (state) this.forget(key);
-      state = { identity, scanned: 0, values: new Map(), cache: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 }, appended: [], replaced: false };
+      state = { identity, modified, scanned: 0, values: new Map(), cache: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 }, appended: [], replaced: false };
       this.dirs.set(key, state);
     }
-    if (state.full || now - state.scanned >= this.reconciliationMs) {
+    // A named watch notification already supplies the changed path. Avoid enumerating the entire history for it;
+    // an unnotified directory change or the periodic reconciliation still discovers missed names.
+    if (state.full || state.modified !== modified && !state.dirty.size || now - state.scanned >= this.reconciliationMs) {
       let names: string[];
-      try { names = readdirSync(key).filter(traceName).sort(); }
+      try { names = readdirSync(key).filter(traceName); }
       catch { this.forget(key); return null; }
       const present = new Set(names);
       for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); state.cache.delete(name); state.stale = true; state.replaced = true; }
@@ -166,6 +169,7 @@ export class TraceDirectoryReader {
       for (const name of names) if (state.full || !state.values.get(name)) state.dirty.add(name);
       state.scanned = now; state.full = false;
     }
+    state.modified = modified;
     return state;
   }
   private forget(key: string): void { this.dirs.delete(key); }

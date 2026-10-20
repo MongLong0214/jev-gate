@@ -19,6 +19,52 @@ const check = (checks: ActivityCheck[], name: string): ActivityCheck => {
 };
 const level = (claude: Rec[], name: string, over: Partial<ActivityInput> = {}): string => check(run(claude, over), name).level;
 
+describe('dashboard activity facts from doctor', () => {
+  it('counts decisions, tier changes and owned terminal states without attributing native Agent calls', () => {
+    const rows = [rec('admission_result', { decision: { shape: 'orchestrated' } }),
+      rec('pre_result', { role: 'worker', called_tier: 'standard', decision: { tier: 'fast' } }),
+      ...['accepted', 'rejected', 'waiting', 'cancelled'].map(tool_use_id => rec('dispatch', { role: 'single_worker', tool_use_id })),
+      rec('post', { tool_use_id: 'accepted', subagent_type: 'jev-gate:worker', verdict: 'accept', reported_checks: { pass: 1 } }),
+      rec('post', { tool_use_id: 'rejected', subagent_type: 'jev-gate:worker', verdict: 'incomplete' }),
+      rec('failure', { tool_use_id: 'cancelled', failure_category: 'cancelled' }),
+      rec('post', { tool_use_id: 'native', subagent_type: 'general-purpose' }),
+      rec('failure', { tool_use_id: 'native-cancel', failure_category: 'cancelled' })];
+    const checks = run(rows);
+    expect(check(checks, 'gate_a').metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
+    expect(check(checks, 'gate_b').metrics).toMatchObject({ fired: 1, applied: 1 });
+    expect(check(checks, 'worker').metrics).toMatchObject({ fired: 4, accepted: 1, rejected: 1, pending: 1, cancelled: 1 });
+  });
+
+  it('retains unknown effect and budget when the records do not measure them', () => {
+    const checks = run([router('root', { sent: true }), rec('claude_compact', { stage: 'pre' }), rec('claude_compact', { stage: 'post', summary_chars: null, restored_chars: null, budget: 80000 })]);
+    expect(check(checks, 'router_cost').metrics).toMatchObject({ fired: 1, effect: null });
+    expect(check(checks, 'compact').metrics).toMatchObject({ fired: 1, applied: 1, budgetUsed: null, budget: 80000 });
+    expect(run([], { recording: false }).some(c => c.metrics)).toBe(false);
+  });
+
+  it('counts submitted effort switches even without usage and never prices missing usage as zero', () => {
+    const rows = [router('root', { sent: true, turn: 't1', from: { model: 'claude-opus-5-5', effort: 'high' }, patch: { effort: 'low' } }),
+      router('prepared', { turn: 't1', index: 0, scope: 'root', routed: true }),
+      router('root_result', { turn: 't1', index: 0, requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', applied: { effort: 'low' }, usage: {} })];
+    expect(check(run(rows), 'router_cost').metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
+  });
+
+  it('refreshes Router checks after a record replacement or the 24-hour boundary', () => {
+    const result = router('root_result', { requested: 'claude-sonnet-5-5', observed: 'claude-opus-5-5' }, 20);
+    const gate = rec('admission_result', {}, 1);
+    expect(check(run([result, gate]), 'router_applied').level).toBe('fail');
+    expect(check(run([{ ...result, observed: 'claude-sonnet-5-5' }, gate]), 'router_applied').level).toBe('ok');
+    expect(check(run([result, gate], { now: NOW + (24 * 60 - 10) * 60_000 }), 'router_applied')).toMatchObject({ level: 'info', message: expect.stringContaining('0 routed requests') });
+  });
+
+  it('counts Codex provider applications from their actual receipt, separately from selection', () => {
+    const rows = [rec('codex_router_result', { selected_model: 'gpt-6-sol', selected_effort: 'low', applied: false }),
+      rec('codex_route_applied', { request_id: 'sent', selected_model: 'gpt-6-sol', selected_effort: 'low', applied: true }),
+      rec('codex_route_applied', { request_id: 'mismatch', selected_model: 'gpt-6-sol', selected_effort: 'low', applied: false })];
+    expect(check(run([], { traces: { codex: { records: rows, unreadable: 0 } } }), 'router_cost').metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
+  });
+});
+
 describe('activity: untrackable (#279)', () => {
   it('warns 추적 불가 when there is no trace at all, and judges nothing else', () => {
     const checks = run([]);

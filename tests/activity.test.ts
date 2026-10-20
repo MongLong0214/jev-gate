@@ -8,6 +8,7 @@ import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { TraceDirectoryReader } from '../src/explain.js';
+import { activityChecks } from '../src/doctor-activity.js';
 import { memo } from '../src/memo.js';
 import { liveFrames } from './live-frames.js';
 
@@ -32,6 +33,32 @@ afterEach(() => {
 const write = (dir: string, name: string, body: unknown): void => {
   writeFileSync(join(dir, name), JSON.stringify(body));
 };
+
+it('omits retired feature records from the live board and operation counters', () => {
+  const trace = make();
+  for (const phase of ['interpretation_intent', 'interpretation_result', 'evidence_result', 'guard_result']) write(trace, phase + '.json', { phase, session_id: 's', request_id: 'retired', attempted: true, written_at: new Date().toISOString() });
+  const result = loadActivity({ traceDir: trace, env: { HOME: make() } });
+  expect(result.live.steps).toEqual([]);
+  expect(result.operations.feed).toEqual([]);
+  expect(result.operations.requests).toBe(0);
+});
+
+it('returns doctor facts without its free-form messages, and keeps the latest root model separate from a later child', () => {
+  const trace = make(), env = { HOME: make() }, now = new Date('2026-10-20T06:00:00Z');
+  const records = [
+    { phase: 'admission_result', session_id: 's', written_at: '2026-10-20T05:00:00Z', attempted: true, decision: { shape: 'orchestrated' }, private_text: 'private fixture prose' },
+    { phase: 'mod_router', event: 'root', session_id: 's', turn: 't', written_at: '2026-10-20T05:01:00Z', sent: true, duration_ms: 50, from: { model: 'opus', effort: 'high' }, patch: { model: 'sonnet', effort: 'low' }, reasons: { model: 'selected' } },
+    { phase: 'mod_router', event: 'child_route', session_id: 's', turn: 't', agent_id: 'child', written_at: '2026-10-20T05:02:00Z', sent: true, duration_ms: 45, from: { model: 'sonnet', effort: 'low' }, patch: { model: 'haiku', effort: 'low' } },
+  ];
+  records.forEach((r, i) => write(trace, `r${i}.json`, r));
+  const result = loadActivity({ traceDir: trace, env, now });
+  const expected = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: now.getTime(), installed: null, recording: true, keyPresent: false, liveness: null, codexOwner: null })
+    .filter(c => c.feature && c.metrics).map(({ feature, level, metrics }) => ({ feature, level, metrics }));
+  expect(result.activity24h.claude.map(({ current: _current, ...c }) => c)).toEqual(expected);
+  expect(result.activity24h.claude.find(c => c.feature === 'router')?.current).toMatchObject({ receipt: { choice: 'sonnet · low' } });
+  expect(JSON.stringify(result.activity24h)).not.toContain('private fixture prose');
+  expect(JSON.stringify(result.activity24h)).not.toContain('message');
+});
 
 describe('credit exhaustion', () => {
   const credit = (...rows: Array<[string, string, boolean]>) => {

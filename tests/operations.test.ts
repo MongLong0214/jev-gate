@@ -11,6 +11,17 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: ModRecord['component'], rec: Record<string, unknown>, time = at): ModRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it('names plain Agent results without Gate acceptance and retains exact Jev call identities', () => {
+    const view = buildOperations([
+      { ...base, phase: 'post', tool_use_id: 'native', subagent_type: 'general-purpose' },
+      { ...base, phase: 'admission_intent', request_id: 'call-1', attempted: true },
+      { ...base, phase: 'admission_result', request_id: 'call-1', attempted: true, decision: { shape: 'direct' }, http: { duration_ms: 20, status: 200 } },
+      { ...base, phase: 'codex_router_skipped', host: 'codex', reason: 'future_reason_987' },
+    ], [], new Date(later), { trace: true });
+    expect(view.feed.find(s => s.callId === 'native')).toMatchObject({ title: 'Agent 호출 결과 · 계약 판정 없음' });
+    expect(view.feed.filter(s => s.feature === 'admission').every(s => s.callId === 'call-1')).toBe(true);
+    expect(view.feed.some(s => s.summary === 'future_reason_987')).toBe(true);
+  });
   it('identifies a request effort mismatch without inventing a response model mismatch', () => {
     const rows = [
       { ...base, host: 'codex', phase: 'codex_route_applied', request_kind: 'root_response', selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', selected_effort: 'high', submitted_effort: 'xhigh', applied: false },
@@ -80,9 +91,11 @@ describe('operations display model', () => {
     expect(moved.feed[0]?.details).toContain('Jev 전송 없음 · gpt-6-sol에서 후속 모델 gpt-6.1-sol로 변경 · effort 유지');
   });
   it('does not present a direct turn ending or a legacy planner dispatch as observed worker execution', () => {
-    const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' }], [], new Date(later), { trace: true, host: 'codex' });
+    const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' },
+      { ...base, phase: 'interpretation_intent', request_id: 'legacy' }, { ...base, phase: 'interpretation_result', request_id: 'legacy', attempted: true }], [], new Date(later), { trace: true, host: 'codex' });
     expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, state: 'waiting' });
     expect(view.features.map(f => f.id)).not.toContain('planning');
+    expect(view.requests).toBe(0);
     expect(view.feed.some(s => s.title === '턴 종료' && s.lifecycle === true)).toBe(true);
   });
   it('exposes the applied admission path even when a Jev result or a local fallback owns it', () => {

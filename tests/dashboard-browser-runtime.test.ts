@@ -54,7 +54,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const local='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';browser=await chromium.launch({headless:true,...(process.env['JEV_CHROMIUM_PATH']?{executablePath:process.env['JEV_CHROMIUM_PATH']}:existsSync(local)?{executablePath:local}:{} )});});
   afterAll(async()=>{const closed=new Promise<void>(r=>server.close(()=>r()));for(const res of clients)res.end();server.closeAllConnections();try{await browser?.close();}finally{await closed;}expect(errors).toEqual([]);}, 30_000);
   const settle = (p: Page) => p.evaluate(()=>new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
-  // Every user-reported layout defect in one pass: page overflow, text wrapping about one character per line, per-minute rate text,
+  // Every user-reported layout defect in one pass: page overflow, text wrapping about one character per line,
   // accent bars on selected items, empty run items, and nodes or wires that overlap, clip or leave the viewport.
   const problems = (p: Page) => p.evaluate(() => {
     const out: string[] = [];if(document.documentElement.scrollWidth>innerWidth)out.push('document overflow');
@@ -63,7 +63,6 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     for(const e of document.querySelectorAll('body *'))for(const pseudo of [undefined,'::before','::after']){const s=style(e,pseudo);if(s.boxShadow.includes('inset'))out.push('inset shadow on '+e.className);if(parseFloat(s.borderLeftWidth)>0&&s.borderLeftColor===accent&&s.borderRightColor!==accent)out.push('accent left border on '+e.className);}
     const walk=document.createTreeWalker(document.body,4);for(let n=walk.nextNode();n;n=walk.nextNode()){const text=(n.textContent||'').replace(/\s/g,'');if(text.length<2)continue;const range=document.createRange();range.selectNodeContents(n);
       const lines=new Set([...(range as unknown as {getClientRects():Array<{top:number;width:number}>}).getClientRects()].filter(r=>r.width>0).map(r=>Math.round(r.top))).size;if(lines>1&&lines>=text.length/2)out.push('character wrap: '+text);}
-    if(/\/분|최근 1분|분당|처리량|\/min|per minute|throughput/i.test((document.body as unknown as {innerText:string}).innerText))out.push('rate text');
     for(const li of document.querySelectorAll('#runs li'))if(!li.textContent?.trim()||li.classList.contains('empty')&&li.querySelector('.sel'))out.push('empty run item');
     for(const b of document.querySelectorAll('#runs .row'))if(!b.querySelector('.nm b')?.textContent?.trim())out.push('run row without a title');
     const nodes=[...document.querySelectorAll('#pipeline .node')].map(e=>e.getBoundingClientRect());if(nodes.length!==5)out.push('node count '+nodes.length);
@@ -148,13 +147,13 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const p=await page();await settle(p);
       const card=p.locator('[data-feature="compact"]'),shown=async()=>card.evaluate(n=>getComputedStyle(n).display!=='none');
       expect(await shown()).toBe(true);
-      await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');expect(await p.locator('#pipeline svg.wires line').count()).toBe(8);
+      await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');expect(await p.locator('#pipeline svg.wires line').count()).toBe(5);
       await p.locator('[data-host="codex"]').click();await settle(p);
       expect.soft(await shown()).toBe(false);expect.soft(await p.locator('#circuit-inspector').textContent()).not.toContain('Compact');
       expect.soft(await p.locator('#runs [data-run="cx"]').count()).toBe(1);expect.soft(await p.locator('#run-count').textContent()).not.toMatch(/Compact|컴팩트/);
-      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(7);
-      await p.locator('[data-host="claude"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(8);
-      await p.locator('[data-host="all"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(8);expect.soft(await p.locator('#runs .row').count()).toBe(rows.length);
+      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(4);
+      await p.locator('[data-host="claude"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);
+      await p.locator('[data-host="all"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);expect.soft(await p.locator('#runs .row').count()).toBe(rows.length);
       await p.close();
     }
   });
@@ -386,7 +385,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     push([run('j','claude',[call('u','router',70,{},{model:null,costUsd:null})])]);const p=await page();await settle(p);expect(await p.locator('#j-cost').textContent()).toBe('–');await p.close();
   });
 
-  it('renders empty and long mixed-host data in 28 viewport/theme/language states without overflow, overlap, character wrapping, rate text or accent bars',async()=>{
+  it('renders empty and long mixed-host data in 28 viewport/theme/language states without overflow, overlap, character wrapping or accent bars',async()=>{
     const long='long '.repeat(60);
     push([run('c','claude',[call('a','admission',63,{executionPath:'direct'}),call('b','allocation',88,{},{choice:'claude-sonnet-5'}),step('w','workers',{lane:'host',summary:long,model:{selected:'claude-opus-5-5',observed:'claude-sonnet-5',status:'mismatch',selectedEffort:null,observedEffort:null}}),call('r','router',91,{},{choice:'sonnet · medium',threshold:0.6,direction:'downgrade'})],{title:'Claude '+long,state:'active'}),
       run('x','codex',[call('xr','router',140,{},{choice:'gpt-6.1-sol · minimal'}),step('g','workers',{lane:'policy',summary:'허용'}),call('e','allocation',70,{summary:'<img src=x onerror="alert(1)">'},{status:402,code:'payment_required',costUsd:null}),call('k','compact',220)],{title:'Codex '+long,state:'attention'}),
@@ -423,16 +422,16 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
   });
 
-  it('plays one round trip per recorded Jev call, staggers a frame across its interval and gives other records a flash and a tick only', async () => {
+  it('shows burst values immediately, plays concurrent round trips and flashes other records without particles', async () => {
     const steps=[call('rt0','admission',60)];push([run('rt','claude',steps,{state:'active'})]);const p=await page();await settle(p);await record(p);
     const comm=await p.locator('#comm i').count();await wait(1000);
     steps.push(call('rt1','router',90,{at:ago(600)},{choice:'haiku · low'}),step('pol','workers',{lane:'policy',at:ago(450),summary:'허용'}),call('rt2','compact',110,{at:ago(300)}),call('rt3','allocation',70));push([run('rt','claude',steps,{state:'active'})]);
     await p.waitForSelector('.trip',{state:'attached'});push([run('rt','claude',steps,{state:'active'}),run('other','codex',[step('o','admission',{lane:'host'})])]);
-    await vi.waitFor(async()=>expect(count(await motion(p),'row')).toBe(3),{timeout:8000});await settle(p);const log=await motion(p);
+    await p.waitForFunction(()=>!document.querySelector('.trip'));await settle(p);const log=await motion(p);
     expect(count(log,'trip')).toBe(6);expect(count(log,'ping')).toBe(3);expect(log.filter(([k])=>k.startsWith('lat:')).map(([k])=>k)).toEqual(['lat:90ms','lat:110ms','lat:70ms']);
-    expect(log.filter(([k])=>k.startsWith('zap:')&&k!=='zap:run').map(([k])=>k).sort()).toEqual(['zap:admission','zap:allocation','zap:compact','zap:router','zap:workers']);
-    const pings=log.filter(([k])=>k==='ping').map(([,t])=>t);expect(pings[2]!-pings[0]!).toBeGreaterThan(300);
-    for(const feature of ['router','compact','allocation']){const at=(k:string)=>log.find(([x])=>x===k)![1];expect(at('zap:'+feature)).toBeGreaterThan(pings[0]!);}
+    expect([...new Set(log.filter(([k])=>k.startsWith('zap:')&&k!=='zap:run').map(([k])=>k))].sort()).toEqual(['zap:admission','zap:allocation','zap:compact','zap:router','zap:workers']);
+    const pings=log.filter(([k])=>k==='ping').map(([,t])=>t);expect(pings[2]!-pings[0]!).toBeLessThan(150);
+    for(const feature of ['router','compact','allocation']){const at=(k:string)=>log.find(([x])=>x===k)![1];expect(at('zap:'+feature)).toBeLessThan(pings[0]!);}
     expect(log.findIndex(([k])=>k==='trip')).toBeLessThan(log.findIndex(([k])=>k==='ping'));
     expect(await p.locator('#comm i').count()).toBe(comm+3);expect(await p.locator('#pipeline .node[data-feature=workers] .strip i').count()).toBe(1);
     expect(await p.locator('#rc li:first-child .rcr > span:nth-child(2)').textContent()).toBe('Gate B');expect(await p.locator('#runs [data-run=rt] .jc .n').textContent()).toBe('4');
@@ -440,6 +439,32 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     // A returning dot keeps its response time in view for a moment after it lands, then leaves.
     await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(await p.locator('#rc li:first-child .rcr > span:nth-child(5)').textContent()).toBe('70ms');
     await p.locator('#pipeline').screenshot({path:join(output,'circuit-after-trips.png')});await p.close();
+  });
+
+  it('returns a slow response on its original wire without a second outbound trip', async () => {
+    push([run('slow','claude',[])]);const p=await page();await settle(p);await record(p);
+    const request=step('slow-request','router',{callId:'slow-call',state:'active'});
+    push([run('slow','claude',[request])]);
+    await p.waitForFunction(()=>!!document.querySelector('.trip'));
+    await wait(650);expect(await p.locator('.trip').count()).toBe(0);
+    const result=call('slow-result','router',650,{callId:'slow-call'},{choice:'sonnet · high'});
+    push([run('slow','claude',[{...request,state:'done'},result])]);
+    await p.waitForFunction(()=>document.querySelector('#pipeline [data-feature=router] .dec b')?.textContent?.includes('sonnet'));
+    await wait(250);const log=await motion(p);expect(count(log,'trip')).toBe(2);expect(count(log,'ping')).toBe(1);await p.close();
+  });
+
+  it('caps a same-node burst at 24 particles while the newest decision and counters update immediately', async () => {
+    push([run('cap','claude',[])]);const p=await page();await settle(p);await record(p);
+    const steps=Array.from({length:40},(_,i)=>call('cap-'+i,'router',100+i,{at:ago(40-i)},{choice:i===39?'opus · high':'haiku · low'}));
+    push([run('cap','claude',steps)]);
+    await p.waitForFunction(()=>document.querySelector('#pipeline [data-feature=router] .dec b')?.textContent?.includes('opus'));
+    expect(await p.locator('.trip').count()).toBeLessThanOrEqual(24);
+    expect(await p.locator('.rail .v').textContent()).toContain('40/min');
+    expect(await p.locator('#runs [data-run=cap] .jc .n').textContent()).toBe('40');
+    await p.waitForSelector('.trip',{state:'attached'});await p.waitForFunction(()=>!document.querySelector('.trip'));
+    const log=await motion(p);expect(count(log,'trip')).toBe(48);expect(count(log,'ping')).toBe(40);
+    // Saturated calls skip motion rather than waiting for a playback slot.
+    await wait(450);expect(count(await motion(p),'trip')).toBe(48);await p.close();
   });
 
   it('stops motion and freezes values on pause, disconnection and reduced motion without inventing traffic', async () => {
@@ -451,7 +476,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     steps.push(call('m1','router',95,{},{choice:'haiku · low'}));push([run('m','claude',steps,{state:'active'})]);await wait(2200);
     expect(await motion(p)).toEqual([]);expect([await ago0.textContent(),await p.locator('#k-last').textContent()]).toEqual(frozen);
     expect(await p.locator('#rc li:first-child .rcr > span:nth-child(5)').textContent()).toBe('50ms');
-    await p.locator('#pause').click();await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='95ms');await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(count(await motion(p),'ping')).toBe(1);expect(count(await motion(p),'lat:95ms')).toBe(1);
+    await p.locator('#pause').click();await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='95ms');await p.waitForSelector('.trip',{state:'attached'});await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(count(await motion(p),'ping')).toBe(1);expect(count(await motion(p),'lat:95ms')).toBe(1);
     for(const client of clients)client.end();clients.clear();
     await p.waitForFunction(()=>document.getElementById('connection')!.classList.contains('warn'));expect(await p.locator('body').getAttribute('class')).toContain('still');
     const offline=await ago0.textContent();await wait(1200);expect(await ago0.textContent()).toBe(offline);
@@ -529,7 +554,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
     push([run('c','claude',[step('m','workers',{lane:'host',state:'error',summary:'actual model mismatch',model:{selected:'opus',observed:'sonnet',status:'mismatch',selectedEffort:null,observedEffort:null}})],{state:'attention'}),run('x','codex',[step('u','router',{state:'unconfirmed'})],{state:'unconfirmed'}),run('stop','codex',[step('stop','compact',{state:'interrupted'})],{state:'interrupted'})]);const p=await page();
     expect(await p.locator('#pipeline .node[data-feature=workers]').getAttribute('class')).toContain('err');expect(await p.locator('#k-diag').textContent()).toContain('실제 응답 모델 불일치 1건');
-    await p.locator('#pipeline .node[data-feature=workers]').click();expect(await p.locator('#pipeline .node[data-feature=workers] .dec b').textContent()).toBe('오류');expect(await p.locator('#circuit-inspector .kv').textContent()).not.toContain('오류');expect(await p.locator('#runs .row').count()).toBe(1);await p.locator('#pipeline .node[data-feature=workers]').click();
+    await p.locator('#pipeline .node[data-feature=workers]').click();expect(await p.locator('#pipeline .node[data-feature=workers] .dec b').textContent()).toBe('판정 없음');expect(await p.locator('#circuit-inspector .kv').textContent()).not.toContain('오류');expect(await p.locator('#runs .row').count()).toBe(1);await p.locator('#pipeline .node[data-feature=workers]').click();
     await p.locator('[data-state=unconfirmed]').click();expect(await p.locator('#runs .row').count()).toBe(1);expect(await p.locator('#runs .row[aria-pressed=true] .c-st').textContent()).toBe('결과 미관측');
     await p.locator('[data-state=all]').click();await p.locator('#runs [data-run=stop]').click();expect(await p.locator('#runs .row[aria-pressed=true] .c-st').textContent()).toBe('사용자 중단');
     await p.locator('#recording').click();await p.waitForFunction(()=>document.getElementById('notice')!.textContent!.includes('저장하지 못했습니다'));expect(await p.locator('#recording').getAttribute('aria-checked')).toBe('true');
@@ -541,7 +566,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const steps=[call('p0','router',58,{},{choice:'sonnet · high'})];push([run('phone','codex',steps,{state:'active'})]);const p=await page(390,844);await settle(p);await record(p);
     expect(await p.locator('#pipeline svg.wires').evaluate(e=>getComputedStyle(e).display)).toBe('none');
     steps.push(call('p1','router',43,{},{choice:'haiku · low'}));push([run('phone','codex',steps,{state:'active'})]);
-    await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='43ms');await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=router] .dec b')?.textContent==='haikulow');expect(count(await motion(p),'ping')).toBe(1);
+    await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='43ms');await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=router] .dec b')?.textContent==='haikulow');await p.waitForSelector('.trip',{state:'attached'});await p.waitForFunction(()=>!document.querySelector('.trip'));expect(count(await motion(p),'ping')).toBe(1);
     await p.locator('#pipeline .node[data-feature=router]').click();expect(await p.locator('#circuit-inspector').evaluate(e=>e.getBoundingClientRect().top)).toBeLessThan(100);
     await p.screenshot({path:join(output,'mobile-stage-inspection.png')});
     await p.locator('#pipeline .node[data-feature=allocation]').focus();await p.keyboard.press('Enter');expect(await p.locator('#pipeline .node[data-feature=allocation]').getAttribute('aria-pressed')).toBe('true');

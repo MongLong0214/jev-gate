@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -209,6 +209,17 @@ describe('final host allocation diagnostics', () => {
 });
 
 describe('incremental directory reconciliation', () => {
+  it('uses named watch additions directly and reconciles an unnotified name at the fallback deadline', async () => {
+    const dir = mkdtempSync(join(tmp, 'named-')), reader = new TraceDirectoryReader(100);
+    writeFileSync(join(dir, 'a.json'), JSON.stringify(base('post', 1)));
+    reader.read(dir, 1000);
+    writeFileSync(join(dir, 'b.json'), JSON.stringify(base('post', 2))); reader.invalidate(dir, 'b.json');
+    writeFileSync(join(dir, 'missed.json'), JSON.stringify(base('failure', 3)));
+    utimesSync(dir, new Date(), new Date(Date.now() + 1000));
+    await reader.prepare(dir, 1001);
+    expect(reader.read(dir, 1001).records.map(r => r['phase'])).toEqual(['post', 'post']);
+    expect(reader.read(dir, 1100).records.map(r => r['phase'])).toEqual(['post', 'post', 'failure']);
+  });
   it('reuses idle results, reads changed names, and recovers missed additions, deletions and replacements', () => {
     const dir = mkdtempSync(join(tmp, 'incremental-')), reader = new TraceDirectoryReader(100), file = join(dir, 'event.json');
     writeFileSync(file, JSON.stringify(base('pre_result', 1)));
@@ -217,8 +228,11 @@ describe('incremental directory reconciliation', () => {
     writeFileSync(file, JSON.stringify(base('post', 2))); reader.invalidate(dir, 'event.json');
     expect(reader.read(dir, 1002).records[0]?.phase).toBe('post');
     writeFileSync(join(dir, 'missed.json'), JSON.stringify(base('failure', 3)));
-    expect(reader.read(dir, 1003).records).toHaveLength(1);
-    expect(reader.read(dir, 1100).records).toHaveLength(2);
+    utimesSync(dir, new Date(), new Date(Date.now() + 1000));
+    // A changed directory timestamp recovers an append before the periodic reconciliation, even without fs.watch.
+    const appended = reader.read(dir, 1003);
+    expect(appended.records).toHaveLength(2);
+    expect(reader.read(dir, 1100)).toBe(appended);
     rmSync(file); reader.invalidate(dir, 'event.json');
     expect(reader.read(dir, 1101).records).toHaveLength(1);
     writeFileSync(join(dir, 'missed.json'), '{'); reader.invalidate(dir, 'missed.json');
