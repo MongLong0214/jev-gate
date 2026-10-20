@@ -202,7 +202,56 @@ const CREDENTIAL_FORMAT_CASES = CREDENTIAL_FORMAT_CORPUS.flatMap(row => [
   })),
 ]);
 
+// Synthetic, approximately 100 KB cases cover overlapping keys, failed suffixes and each connection format.
+const PERFORMANCE_CASES = [
+  { label: 'assignment chain', text: 'a='.repeat(50_000), secret: false },
+  { label: 'URL userinfo', text: 'https://' + 'u:'.repeat(50_000) + '@h', secret: false },
+  { label: 'key suffixes', text: 'password_'.repeat(11_111) + '=x', secret: false },
+  { label: 'quoted assignments', text: '"password":"'.repeat(8_333), secret: false },
+  { label: 'nested shell defaults', text: '${A:-'.repeat(20_000), secret: false },
+  { label: 'balanced shell defaults', text: '${A:-'.repeat(16_666) + 'x' + '}'.repeat(16_666), secret: false },
+  { label: 'CLI key', text: '--a-'.repeat(25_000), secret: false },
+  { label: 'cookie pairs', text: 'Cookie: ' + 'a=b; '.repeat(20_000), secret: true },
+  { label: 'camel boundaries', text: 'aB'.repeat(50_000) + 'Password=x', secret: false },
+  { label: 'key whitespace', text: 'password' + ' '.repeat(100_000) + '=x', secret: false },
+  { label: 'unfinished netrc whitespace', text: 'password' + ' '.repeat(100_000), secret: false },
+  { label: 'netrc machine whitespace', text: 'machine ' + ' '.repeat(100_000), secret: false },
+  { label: 'netrc value suffix', text: 'password ' + 'a .b'.repeat(25_000) + '>', secret: false },
+  { label: 'query pairs', text: 'k=v&'.repeat(25_000), secret: false },
+  { label: 'JDBC prefixes', text: 'jdbc:'.repeat(20_000), secret: false },
+  { label: 'connection prefixes', text: 'Server='.repeat(14_286), secret: false },
+  { label: 'SAS prefixes', text: 'SharedAccessSignature='.repeat(4_762), secret: false },
+  { label: 'Docker prefixes', text: '"auths":{'.repeat(11_111), secret: false },
+  { label: 'realistic query', text: ('https://example.test/?' + Array.from({ length: 2_000 }, (_, i) => `item${i}=ordinary${i}`).join('&')).slice(0, 40_000), secret: false },
+  { label: 'minified bundle', text: '(()=>{const a=1,b="ordinary";function f(x){return x+a}window.result=f(b.length)})();'.repeat(1_400).slice(0, 106_000), secret: false },
+];
+
 describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('outbound text — %s credential screen', (_screen, looksSecret) => {
+  it.each(PERFORMANCE_CASES)('performance: screens $label without rescanning overlapping values', ({ text, secret }) => {
+    const started = performance.now();
+    const result = looksSecret(text);
+    const elapsed = performance.now() - started;
+    expect(result).toBe(secret);
+    expect(elapsed).toBeLessThan(200);
+  });
+
+  it.each([
+    ...[
+      'a=password="p"', '--a=password="p"', 'ENV a password="p"', 'machine  password "p"',
+      'Server=jdbc:x?password=ref(Server=s;Password=p)', 'Server=nope\nServer=host;Password=p',
+      'jdbc:jdbc:host?pwd=p', 'SharedAccessSignature=SharedAccessSignature=x&sig=p',
+      '"auths":{"auths":{"auth":"p"}}',
+      'Server=jdbc:x?password=ref() Server=s;Password=p',
+      'Server=no-password; jdbc:x?password=ref(Server=s;Password=p)',
+    ].map(text => ({ text, secret: true })),
+    ...[
+      'Server=not-password\npassword=p', 'jdbc:x no?password=p',
+      'SharedAccessSignature=x" &sig=p', '"auths":{} "auth":"p"',
+    ].map(text => ({ text, secret: false })),
+  ])('preserves nested keys, earliest connection matches and format boundaries: $text', ({ text, secret }) => {
+    expect(looksSecret(text)).toBe(secret);
+  });
+
   it.each(CREDENTIAL_FORMAT_CASES)('credential-format corpus | $group | $label | $variant', ({ text, secret }) => {
     expect(looksSecret(text)).toBe(secret);
   });

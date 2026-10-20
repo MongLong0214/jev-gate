@@ -29,7 +29,9 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
 // Recognising one token is never grounds for discarding the rest of a value.
 const TEMPLATE_VALUE = String.raw`\$\{\{[^{}\r\n]*\}\}|\$\{[^{}\r\n]*\}|\{\{[^{}\r\n]*\}\}|\{[^{}\r\n]*\}|<[^<>\r\n]*>`;
 const BARE_VALUE = String.raw`(?:${TEMPLATE_VALUE}|\$(?!\{)|[A-Za-z0-9_%+./~:=@!?*-]|[ \t]*(?:\([^()\r\n]*\)|\[[^\[\]\r\n]*\])|[ \t]+(?:\?\.|\.)[ \t]*[A-Za-z_$][\w$]*)+`;
-const ASSIGNMENT_VALUE = String.raw`(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\x60([^\x60\r\n]*)\x60|(${BARE_VALUE}))`;
+// Freeze the greedy bare value before a caller tests a suffix (notably netrc line endings).
+// Its alternatives end in non-whitespace, so shortening it cannot help a trailing whitespace/end check.
+const ASSIGNMENT_VALUE = String.raw`(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\x60([^\x60\r\n]*)\x60|(?=(?<bareValue>${BARE_VALUE}))\k<bareValue>)`;
 
 // Shell operators carry literal fallback/alternate/error text. Expand balanced expressions from the inside out,
 // retaining plain references (including an empty default) for the same placeholder rules as every other value.
@@ -83,12 +85,13 @@ const credentialKey = (key: string): string | undefined => {
   return undefined;
 };
 // A shell default (${PASSWORD:-default}) contains a colon, but its parameter name is not an assignment key.
-const CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(?<!\$\{)([\w.-]+)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'g');
-const CLI_CREDENTIAL_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])--([\w.-]+)(?:\s*=\s*|[ \t]+)` + ASSIGNMENT_VALUE, 'g');
+const CREDENTIAL_ASSIGNMENT = /(?:^|[^\w.-])(?<!\$\{)([\w.-]+)["'`]?\s*(?:=>|[:=])\s*(?!\s)/dg;
+const CLI_CREDENTIAL_ASSIGNMENT = /(?:^|[^\w.-])--([\w.-]+)(?:\s*=\s*(?!\s)|[ \t]+(?![ \t]))/dg;
 // Cookie-specific suffixes remain supported; arbitrary trailing segments (token_count, auth_options) are not keys.
 const COOKIE_ASSIGNMENT = new RegExp(String.raw`(?:^|[^\w.-])(?<!\$\{)(sessionid|session|sid|connect\.sid|PHPSESSID|JSESSIONID|_session|[\w.-]*(?:auth(?:entication)?|token)(?:[_.-]?(?:cookie|token|session))?)["'\x60]?\s*(?:=>|[:=])\s*` + ASSIGNMENT_VALUE, 'gi');
-const NETRC_PASSWORD = new RegExp(String.raw`^(?:[ \t]*|[ \t]*machine[ \t]+[^\r\n]*?[ \t]+)(password)[ \t]+` + ASSIGNMENT_VALUE + String.raw`[ \t]*\r?$`, 'gim');
-const DOCKER_ENV_ASSIGNMENT = new RegExp(String.raw`^[ \t]*(?:ENV|ARG)[ \t]+([\w.-]+)[ \t]+` + ASSIGNMENT_VALUE, 'gm');
+const NETRC_PASSWORD = new RegExp(String.raw`^(?:[ \t]*|[ \t]*machine[ \t][^\r\n]*?[ \t])(password)[ \t]+(?![ \t])` + ASSIGNMENT_VALUE + String.raw`[ \t]*\r?$`, 'gim');
+const DOCKER_ENV_ASSIGNMENT = /^[ \t]*(?:ENV|ARG)[ \t]+([\w.-]+)[ \t]+(?![ \t])/dgm;
+const ASSIGNMENT_LITERAL = new RegExp(ASSIGNMENT_VALUE, 'y');
 const COOKIE_VALUE = new RegExp(String.raw`(?:^|;[ \t]*)([\w.-]+)\s*=\s*` + ASSIGNMENT_VALUE, 'g');
 const CURL_COOKIE = new RegExp(String.raw`(?:^|\s)-b[ \t]*` + ASSIGNMENT_VALUE, 'g');
 const literalCookie = (text: string): boolean => [...text.matchAll(COOKIE_VALUE)]
@@ -96,17 +99,26 @@ const literalCookie = (text: string): boolean => [...text.matchAll(COOKIE_VALUE)
 
 const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolean => {
   const assignments = new RegExp(pattern);
+  const keyFirst = pattern === CREDENTIAL_ASSIGNMENT || pattern === CLI_CREDENTIAL_ASSIGNMENT || pattern === DOCKER_ENV_ASSIGNMENT;
+  const values = new RegExp(ASSIGNMENT_LITERAL);
   let match: RegExpExecArray | null;
   while ((match = assignments.exec(text))) {
     const key = credentialKey(match[1]!);
-    if ((pattern === CREDENTIAL_ASSIGNMENT || pattern === CLI_CREDENTIAL_ASSIGNMENT || pattern === DOCKER_ENV_ASSIGNMENT) && !key) {
-      // An unrelated key's quoted value may itself contain a credential assignment. Do not skip its contents.
-      assignments.lastIndex = match.index + 1;
-      continue;
-    }
+    let captures: (string | undefined)[];
+    if (keyFirst) {
+      values.lastIndex = assignments.lastIndex;
+      // A key cannot contain another assignment key. Resume at its end, preserving the boundary before a
+      // nested assignment in an unrelated value, without first reading that value or retrying the key.
+      assignments.lastIndex = match.indices![1]![1];
+      if (!key) continue;
+      const value = values.exec(text);
+      if (!value) continue;
+      assignments.lastIndex = values.lastIndex;
+      captures = value.slice(1);
+    } else captures = match.slice(2);
     // Credential keys own their thresholds; the broader cookie-name pattern must not bypass them.
     if (pattern === COOKIE_ASSIGNMENT && key && !/^(?:cookie|set[_.-]?cookie)$/i.test(key)) continue;
-    const raw = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? '').trim();
+    const raw = (captures[0] ?? captures[1] ?? captures[2] ?? captures[3] ?? '').trim();
     // Header keys use the same spelling/quote parser as assignments. The cookie pair's value, rather than its
     // unfamiliar name or attributes, owns the placeholder decision; computed Cookie values contain no pair.
     if (pattern !== COOKIE_ASSIGNMENT && /^(?:cookie|set[_.-]?cookie)$/i.test(key ?? '')) {
@@ -117,7 +129,7 @@ const literalAssignment = (text: string, pattern: RegExp, minLength = 1): boolea
     if (value.length < minLength) continue;
     // The header screen owns schemes, including their placeholder and concatenation rules.
     if (/^authorization$/i.test(key ?? '') && /^(?:bearer|basic|token)(?:\s|$)/i.test(raw)) continue;
-    const quoted = match[5] === undefined;
+    const quoted = captures[3] === undefined;
     const hasDigit = /\d/.test(value);
     const identifier = IDENTIFIER.test(value);
     const generic = pattern === COOKIE_ASSIGNMENT || GENERIC_CREDENTIAL_KEY.test(key ?? match[1]!);
@@ -171,11 +183,34 @@ const URL_PASSWORD = /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s/?#@:"'`]{0,64}:([^\s/?#@
 const BASIC_INPUT = /\b(?:btoa|Buffer\.from)\(\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|`([^`\r\n]*)`)/g;
 // These formats establish that even a short value is a password/signature/base64 credential. SAS metadata stays
 // outside the captured signature, and Docker's generic auth key is only special inside an auths object.
-const CONNECTION_VALUE = new RegExp(String.raw`(?:\bjdbc:[^\s"'\x60]*?[?&](?:password|pwd)=|\b(?:Server|Data[ \t]+Source)=[^"'\x60\r\n]*?;[ \t]*(?:Password|Pwd)=|\bSharedAccessSignature=[^"'\x60\r\n]*?[&?]sig=|["'\x60]auths["'\x60]\s*:\s*\{[^}]*?["'\x60]auth["'\x60]\s*:\s*)` + ASSIGNMENT_VALUE, 'gi');
+const CONNECTION_START = /(\bjdbc:)|(\b(?:Server|Data[ \t]+Source)=)|(\bSharedAccessSignature=)|(["'`]auths["'`]\s*:\s*\{)/gi;
+const CONNECTION_VALUES = [
+  { prefix: String.raw`[^\s"'\x60]*?[?&](?:password|pwd)=`, boundary: /[\s"'`]/g },
+  { prefix: String.raw`[^"'\x60\r\n]*?;[ \t]*(?:Password|Pwd)=`, boundary: /["'`\r\n]/g },
+  { prefix: String.raw`[^"'\x60\r\n]*?[&?]sig=`, boundary: /["'`\r\n]/g },
+  { prefix: String.raw`[^}]*?["'\x60]auth["'\x60]\s*:\s*`, boundary: /}/g },
+];
 const WEBHOOK_URL = new RegExp(String.raw`\bhttps:\/\/(?:hooks\.slack\.com\/services\/[A-Z0-9]+\/[A-Z0-9]+\/|discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/)(${TEMPLATE_VALUE}|[^\s/?#"'\x60]+)`, 'gi');
 const literalPassword = (text: string): boolean => {
   for (const match of text.matchAll(URL_PASSWORD)) if (literalRemainder(match[1]!)) return true;
-  for (const match of text.matchAll(CONNECTION_VALUE)) {
+  const connections = new RegExp(CONNECTION_START);
+  const values = CONNECTION_VALUES.map(({ prefix, boundary }) => ({
+    value: new RegExp(prefix + ASSIGNMENT_VALUE, 'iy'), boundary: new RegExp(boundary), missingUntil: 0,
+  }));
+  let start: RegExpExecArray | null;
+  while ((start = connections.exec(text))) {
+    const candidate = values[start.slice(1).findIndex(part => part !== undefined)]!;
+    if (start.index < candidate.missingUntil) continue;
+    candidate.value.lastIndex = connections.lastIndex;
+    const match = candidate.value.exec(text);
+    if (!match) {
+      // A failed prefix proved this whole region has no matching value. Later prefixes of the same format
+      // cannot add one before its boundary; keep other formats searchable without scanning this region again.
+      candidate.boundary.lastIndex = connections.lastIndex;
+      candidate.missingUntil = candidate.boundary.exec(text)?.index ?? text.length;
+      continue;
+    }
+    connections.lastIndex = candidate.value.lastIndex;
     const raw = match[1] ?? match[2] ?? match[3] ?? match[4] ?? '';
     if (match[4] !== undefined && (COMPUTED_REFERENCE.test(raw) || PATH_REFERENCE.test(raw))) continue;
     if (literalRemainder(raw)) return true;
