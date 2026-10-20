@@ -64,8 +64,8 @@ const printOnlySed = (args: string[]): boolean => {
 };
 const readOnlyArgv = ([command, ...args]: string[]): boolean => {
   if (READ_ONLY.has(command ?? '')) return true;
-  // A lone version flag on a program found by name, as in `node --version`.
-  if (command && !command.includes('/') && args.length === 1 && /^(?:--version|-v|-V)$/.test(args[0]!)) return true;
+  // A lone --version on a program found by name, as in `node --version`. Short -v/-V can start an interpreter (python -v, bash -v).
+  if (command && !command.includes('/') && args.length === 1 && args[0] === '--version') return true;
   if (command === 'rg') return !args.some(a => /^--pre(?:=|$)/.test(a));
   if (command === 'find') return !args.some(a => /^-(?:delete|exec|execdir|ok|okdir|fls|fprint|fprint0|fprintf)$/.test(a));
   if (command === 'gh') return /^(?:issue|pr)$/.test(args[0] ?? '') && /^(?:view|list|status|diff|checks)$/.test(args[1] ?? '');

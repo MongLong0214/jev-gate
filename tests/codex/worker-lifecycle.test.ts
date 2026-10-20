@@ -330,7 +330,7 @@ describe('Codex write scope from native tool targets (#234)', () => {
   it('keeps the read commands Codex workers ran during a settlement available and their writing forms blocked (#287)', async () => {
     const f = await scoped();
     for (const command of ['nl -ba src/file.ts', `sed -n '1,80p' src/file.ts`, `sed -n -e '10p;20,30p' -e '$p' a b`, `rg -n foo src | nl -ba | sed -n '1,40p'`, 'command -v codex', 'command -V node',
-      'which node', 'node --version', 'npm -v', 'python3 -V', 'git rev-parse --show-toplevel', 'git ls-files src', 'git branch --show-current', 'git blame -L 1,9 src/a.ts',
+      'which node', 'node --version', 'git rev-parse --show-toplevel', 'git ls-files src', 'git branch --show-current', 'git blame -L 1,9 src/a.ts',
       'git cat-file -p HEAD', 'git merge-base HEAD origin/main', 'git describe --tags', 'git remote -v', 'git remote get-url origin', 'git config --get user.name',
       'sort -u a', 'uniq -c a', 'cut -d: -f1 a', 'tr a-z A-Z < a', 'stat a', 'file a', 'diff a b', 'jq .x a.json', 'basename a/b', 'dirname a/b', 'realpath a',
       'echo ok', `printf '%s\\n' a`, 'true', 'test -f a', '[ -d src ]', 'date +%s', 'date -u']) {
@@ -338,7 +338,7 @@ describe('Codex write scope from native tool targets (#234)', () => {
     }
     for (const command of ['sed -i s/a/b/ src/file.ts', `sed -n '1,80p' -i src/file.ts`, 'sed --in-place -n 1p a', `sed -n 'w out' a`, `sed -n '1w out' a`, `sed -n '1e touch x' a`,
       `sed -n -f script.sed a`, `sed '1,80p' a`, 'sort -o out a', 'sort --output=out a', 'sort -no out a', 'uniq a b', 'date -s 2026-01-01', 'date 0101000026', 'printf -v x y',
-      'nl a > out', 'echo x >> src/file.ts', 'jq . a > b', 'command node x.js', 'node --version extra', './run.sh --version', 'file -C -m magic', 'git branch -D main', 'git branch new',
+      'nl a > out', 'echo x >> src/file.ts', 'jq . a > b', 'command node x.js', 'node --version extra', 'npm -v', 'python -v', 'bash -V', './run.sh --version', 'file -C -m magic', 'git branch -D main', 'git branch new',
       'git remote add x y', 'git config user.name x', 'git config --unset user.name', 'awk 1 a', 'xargs rm', 'env', 'tee out', `cd ${f.root} && node script.mjs`]) {
       expect(await f.blocked('Bash', { command }), command).toBe(true);
     }
