@@ -14,6 +14,8 @@ const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== 
 /** Each session's root record lives under this prefix in the plugin's store, so a resume finds its native pair. */
 const ROOT_KEY = 'router-root:';
 const MAX_ROOT_RECORDS = 200;
+/** #277: one key per model, true when its last root effort change read the cache. */
+const EFFORT_KEY = 'router-effort-cache:';
 
 const installedKey = async ($: EngineInterface): Promise<string | undefined> => {
   const existing = await $.env.get('TYPESAFE_API_KEY');
@@ -130,6 +132,12 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine =>
     const keys = (await $.store.keys()).filter(k => k.startsWith(ROOT_KEY));
     for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ROOT_RECORDS))) await $.store.delete(k);
   },
+  effortCacheHits: async () => {
+    const keys = (await $.store.keys()).filter(k => k.startsWith(EFFORT_KEY));
+    const hits = await Promise.all(keys.map(async k => await $.store.get(k) === true ? k.slice(EFFORT_KEY.length) : null));
+    return hits.filter((id): id is string => id !== null);
+  },
+  saveEffortCache: (model, hit) => $.store.set(`${EFFORT_KEY}${model}`, hit),
   modelAliases: async () => {
     const [opus, sonnet, haiku, fable, bedrock, vertex, foundry, mantle, version] = await Promise.all([
       $.env.get('ANTHROPIC_DEFAULT_OPUS_MODEL'), $.env.get('ANTHROPIC_DEFAULT_SONNET_MODEL'), $.env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL'),

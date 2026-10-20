@@ -5,8 +5,7 @@ tier('user');
 test('child tool steps use fresh assessments in the real host engine', async ($, on) => {
   mock.env(on, { TYPESAFE_API_KEY: 'sk-router-testonlynotakey' });
   mock.clock(on);
-  // Haiku 5.5 needs host 2.1.293. Its cold write costs no more than Opus's warm read, so the switch guard lets it
-  // through; a cold Sonnet move would be held.
+  // A step keeps the spawn's model, whose cache the child wrote, and moves effort only (tests/router/child-steps.test.ts).
   on('session.version', () => ({ value: { version: '2.1.293', base: '2.1.293' } }));
   on('session.id', () => ({ value: 'child-fixture' }));
   on('settings.read', () => ({ value: { effortLevel: 'high' } }));
@@ -50,7 +49,7 @@ test('child tool steps use fresh assessments in the real host engine', async ($,
     while (!(await stream.next()).done) { /* preserve the host stream */ }
     expect({ calls, sent: calls === phase + 1 ? [] : sent }).toEqual({ calls: phase + 1, sent: [] });
   }
-  expect(sent).toEqual([{ model: 'claude-opus-5-5', effort: 'high' }, { model: 'claude-haiku-5-5', effort: 'low' }, { model: 'claude-opus-5-5', effort: 'high' }]);
+  expect(sent).toEqual([{ model: 'claude-opus-5-5', effort: 'high' }, { model: 'claude-opus-5-5', effort: 'low' }, { model: 'claude-opus-5-5', effort: 'high' }]);
   expect(contexts).toEqual(['child', 'child']);
 });
 
