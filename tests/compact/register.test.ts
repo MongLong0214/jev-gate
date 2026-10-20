@@ -114,7 +114,7 @@ describe('register', () => {
     const on = (await hooksFor({ enabled: true, mode: 'active', compactSubagents: false, compactManual: false })).get('session.compact')!;
     logs.length = 0;
     await on($, { trigger: 'manual', messages: conversation() }, next);
-    await on($, { trigger: 'precompute', messages: conversation() }, next);
+    await on($, { trigger: 'plugin', messages: conversation() }, next);
     await on($, { trigger: 'auto', agentId: 'a1', messages: conversation() }, next);
     await on($, { trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] }, next);
     expect(calls).toHaveLength(4);
@@ -124,6 +124,26 @@ describe('register', () => {
     await manual($, { trigger: 'manual', instructions: 'keep the plan', messages: conversation() }, next);
     expect(calls).toHaveLength(5);
     expect(await manual($, { trigger: 'manual', messages: conversation() }, next)).not.toBe(CORE);
+  });
+
+  it('precompute: active computes nothing ahead of a compaction it answers; shadow and an excluded subagent leave it to the engine', async () => {
+    const parse = () => logs.map((l) => JSON.parse(l.replace(/^jev-compact /, '')) as Record<string, unknown>);
+    const { next, calls } = nextSpy();
+    const active = (await hooksFor({ enabled: true, mode: 'active', compactSubagents: false })).get('session.compact')!;
+    logs.length = 0;
+    expect(await active($, { trigger: 'precompute', messages: conversation() }, next)).toEqual({ skip: expect.any(String) });
+    expect(calls).toEqual([]);
+    expect(parse()).toEqual([expect.objectContaining({ trigger: 'precompute', mode: 'active', subagent: false, skipped: 'precompute' })]);
+    const all = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+    expect(await all($, { trigger: 'precompute', agentId: 'a1', messages: conversation() }, next)).toEqual({ skip: expect.any(String) });
+    expect(calls).toEqual([]);
+    logs.length = 0;
+    const sub = { trigger: 'precompute', agentId: 'a1', messages: conversation() };
+    expect(await active($, sub, next)).toBe(CORE);
+    const shadow = { trigger: 'precompute', messages: conversation() };
+    expect(await (await hooksFor({ enabled: true, mode: 'shadow' })).get('session.compact')!($, shadow, next)).toBe(CORE);
+    expect(calls).toEqual([sub, shadow]);
+    expect(parse().map((x) => x['deferred'])).toEqual(['subagent', 'trigger']);
   });
 
   it('when the engine refuses a compaction it was handed, the line is still written and the refusal passes up', async () => {

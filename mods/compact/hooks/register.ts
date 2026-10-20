@@ -35,7 +35,8 @@ const quietly = (f: () => void): void => {
 /**
  * On by default; off registers no hook at all. `shadow` builds the digest, logs its size and lets the engine
  * compact as usual (logging how long that took and what its summarizer used); `active` answers the compaction with
- * the digest and the kept tail, so no summarizer request runs. `/compact` stays the engine's unless `compactManual`.
+ * the digest and the kept tail, so no summarizer request runs, ahead of time (`precompute`) included. `/compact` stays the
+ * engine's unless `compactManual`.
  */
 export const register: Register = (on, options) => {
   const resolved = resolveCompactConfig(options);
@@ -63,11 +64,17 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
     const runId = `${Date.now()}-${++sequence}`;
     const log = (fields: Record<string, unknown>): void =>
       quietly(() => recorder.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`));
-    const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual);
+    // `precompute` asks the engine's summarizer ahead of the compaction that comes. Where active answers that one itself,
+    // the summary would be paid for and dropped, or consumed in the digest's place, so none is computed.
+    const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual) || (e.trigger === 'precompute' && config.mode === 'active');
     const deferred = !handled ? 'trigger' : e.agentId !== undefined && !config.subagents ? 'subagent' : e.trigger === 'manual' && e.instructions ? 'instructions' : null;
     if (deferred) {
       log({ deferred });
       return forward(e);
+    }
+    if (e.trigger === 'precompute') {
+      log({ skipped: 'precompute' });
+      return { skip: 'jev-gate compact answers the compaction that comes' };
     }
 
     log({ stage: 'started', messages: e.messages.length });
