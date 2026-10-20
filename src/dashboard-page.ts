@@ -33,12 +33,12 @@ main{position:relative;padding-top:20px}.notice{position:absolute;left:0;right:0
 .rgrid{display:grid;grid-template-columns:96px minmax(200px,1.3fr) minmax(200px,1.2fr) minmax(200px,1fr) 124px 76px 64px;align-items:center;column-gap:20px}
 .rhead{padding:0 20px;height:34px;border-bottom:1px solid var(--line);font-size:11px;color:var(--faint)}.rhead .r{text-align:right;justify-self:end}.row .r{text-align:right}
 .rlist{list-style:none;margin:0;padding:0;height:660px;overflow:auto;overscroll-behavior:contain}.rlist li{border-bottom:1px solid var(--line)}.rlist li:last-child{border-bottom:0}.rlist .empty{padding:24px 20px;color:var(--faint);font-size:13px}
-.row{appearance:none;width:100%;border:0;background:transparent;color:inherit;font:inherit;text-align:left;padding:0 20px;height:66px;transition:background .6s}.row:hover{background:var(--hover)}.row.sel{background:var(--raised)}.row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.row.zap{background:color-mix(in srgb,var(--accent) 9%,transparent);transition:none}
+.row{appearance:none;width:100%;border:0;background:transparent;color:inherit;font:inherit;text-align:left;padding:0 20px;height:66px;transition:background .3s}.row:hover{background:var(--hover)}.row.sel{background:var(--raised)}.row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.row.zap{background:color-mix(in srgb,var(--accent) 9%,transparent);transition:none}
 .st{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);white-space:nowrap}.c-st{white-space:normal}.st i{position:relative;width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}.st.run i{background:var(--accent)}.st.run i::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px solid var(--accent);animation:halo 1.4s ease-out infinite}
 @keyframes halo{from{transform:scale(.5);opacity:.9}to{transform:scale(1.4);opacity:0}}
 .st.run{color:var(--ink)}.st.ok i{background:var(--ok)}.st.wa i{background:var(--warn)}.st.er i{background:var(--err)}
 .nm{min-width:0}.nm b{display:block;font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.nm small{display:flex;gap:6px;align-items:center;margin-top:3px;font-size:12px;color:var(--faint);white-space:nowrap;overflow:hidden}.nm small .h{color:var(--muted)}.nm small .h::before{content:"";display:inline-block;width:6px;height:6px;border-radius:2px;margin-right:5px;vertical-align:1px;background:var(--claude)}.nm small .h.cx::before{background:var(--codex)}.nm small .mdl{color:var(--muted)}
-.fx{display:flex;flex-wrap:wrap;align-content:center;gap:4px;overflow:hidden;min-width:0;height:44px}.fx .f{flex:none;font-size:11px;line-height:20px;padding:0 7px;border-radius:5px;background:var(--chip);color:var(--muted);white-space:nowrap;transition:background .45s,color .45s}.fx .f.k{color:var(--faint);background:transparent;border:1px dashed var(--line);line-height:18px}.fx .f.e{color:var(--err);background:color-mix(in srgb,var(--err) 10%,transparent)}.fx .f.hit{background:var(--accent);color:var(--on-accent);transition:none}
+.fx{display:flex;flex-wrap:wrap;align-content:center;gap:4px;overflow:hidden;min-width:0;height:44px}.fx .f{flex:none;font-size:11px;line-height:20px;padding:0 7px;border-radius:5px;background:var(--chip);color:var(--muted);white-space:nowrap;transition:background .3s,color .3s}.fx .f.k{color:var(--faint);background:transparent;border:1px dashed var(--line);line-height:18px}.fx .f.e{color:var(--err);background:color-mix(in srgb,var(--err) 10%,transparent)}.fx .f.hit{background:var(--accent);color:var(--on-accent);transition:none}
 .md{position:relative;height:20px;overflow:hidden;font-size:12px;color:var(--muted);min-width:0}.md.none{color:var(--faint)}
 .rec{position:absolute;inset:0;display:flex;align-items:center;gap:8px;white-space:nowrap;font-size:12px}.rec em{font-style:normal;color:var(--faint);flex:none}.rec b{font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}.rec .ms{margin-left:auto;color:var(--faint);flex:none;font-variant-numeric:tabular-nums}
 .rec.in{animation:recin .16s ease-out}.rec.out{animation:recout .16s ease-in forwards}@keyframes recin{from{transform:translateY(100%);opacity:0}to{transform:none;opacity:1}}@keyframes recout{to{transform:translateY(-100%);opacity:0}}
@@ -121,14 +121,14 @@ const PHRASES=[
 ['요청의 실행 형태 선택','Choose execution path'],['워커 등급','Worker tier'],['Agent 실행과 수락','Agent execution and acceptance'],['모델·effort 선택','Model and effort selection'],['요약 대신 digest 구성','Build digest instead of summary'],['독립 문맥 인계','Independent context handoff'],['호스트 이벤트별 독립 실행','Independent host event paths'],['직접 처리 ↘ root','Direct ↘ root'],['위임 →','Delegate →'],['후보 검색','Find candidates'],
 ['선택한 실행','Selected run'],['실행 요청','User request'],['호스트가 제출한 작업','Work submitted by host'],['선택형 판정','Typed judgment'],['코드 정책','Code policy'],['적용 여부 결정','Apply or preserve'],['확률·제약·안전 조건','Probabilities · constraints · rules'],['실제 실행','Actual execution'],['모델·도구·수락 결과','Model · tool · acceptance'],['Jev 응답','Jev response'],['기록 없음','No record'],['선택형 결과 기록 대기','Awaiting typed result'],['유형 판단',' typed judgments'],['결정 기록 대기','Awaiting code decision'],['원래 경로 보존 가능','Original path may be preserved'],['호스트 결과','Host result'],['실행 기록 대기','Awaiting execution record'],['관측된 결과만 표시','Showing observed results only'],
 ['실제 모델 관측 · 요청 모델 미확인','Actual model observed · requested model unverified'],['Router · 요청 전달 준비','Router · Request preparation'],['변경 설정 전달 준비 · 실행 응답 확인은 별도','Changed settings prepared · response confirmation is separate'],['기존 설정 전달 준비 · 실행 응답 확인은 별도','Native settings prepared · response confirmation is separate'],['요청 전 점검만 기록됨 · Jev 새 호출이나 실제 모델 응답 완료를 뜻하지 않음','Pre-request checks only · not a new Jev call or a completed model response'],['호스트가 에이전트 생성을 거부함 · 실행되지 않음','Host refused agent creation · no execution'],['전체 실행','All executions'],['Gate A · 실행 형태','Gate A · Execution path'],['Gate B · 등급 배정','Gate B · Tier allocation'],['워커 · 수락 검사','Worker · Acceptance'],['Router · 모델과 effort','Router · Model and effort'],['Compact · 요약 대체','Compact · Summary replacement'],
-['워커 호출','Worker dispatch'],['백그라운드 실행 준비','Background dispatch prepared'],['백그라운드 워커 실행','Background worker running'],['메인 대화 계속','Main conversation continues'],['백그라운드 워커 종료','Background worker ended'],['원래 작업에 실행 예약 연결 · 시작 확인 대기','Execution reserved for original job · waiting for start'],['시작과 실제 종료 연결됨','Launch linked to observed termination'],['시작 기록 있음 · 종료 결과 미관측','Launch recorded · terminal result unobserved'],['워커 실행 중 · 메인에서 질문 가능','Worker running · main available for questions'],['시작 알림은 완료·수락 결과가 아닙니다','A launch receipt is not completion or acceptance'],['원래 작업 유지 · 종료 결과 대기 ','Original job retained · awaiting terminal results '],['호스트에서 실제 종료 확인 · 계약 수락은 별도 검사','Native termination observed · contract acceptance checked separately'],['호스트에서 중단·실패 확인 · 성공 수락 없음','Native interruption or failure observed · no success accepted'],['이전 작업 결과 · 현재 계획 미진행','Retired result · current plan unchanged'],['워커 결과 · 수락 판정','Worker result · Acceptance'],['호스트 호출 실패','Host invocation failed'],['턴 종료','Turn ended'],['문맥 선택','Context selection'],['등급 결정','Tier decision'],['실행 형태','Execution path'],['요약 대체','Summary replacement'],['수락 검사','Acceptance'],['의존성','Dependencies'],['압축','Compaction'],
+['워커 호출','Worker dispatch'],['백그라운드 실행 준비','Background dispatch prepared'],['백그라운드 워커 실행','Background worker running'],['메인 대화 계속','Main conversation continues'],['백그라운드 워커 종료','Background worker ended'],['원래 작업에 실행 예약 연결 · 시작 확인 대기','Execution reserved for original job · waiting for start'],['시작과 실제 종료 연결됨','Launch linked to observed termination'],['시작 기록 있음 · 종료 결과 미관측','Launch recorded · terminal result unobserved'],['워커 실행 중 · 메인에서 질문 가능','Worker running · main available for questions'],['시작 알림은 완료·수락 결과가 아닙니다','A launch receipt is not completion or acceptance'],['원래 작업 유지 · 종료 결과 대기 ','Original job retained · awaiting terminal results '],['호스트에서 실제 종료 확인 · 계약 수락은 별도 검사','Native termination observed · contract acceptance checked separately'],['호스트에서 중단·실패 확인 · 성공 수락 없음','Native interruption or failure observed · no success accepted'],['이전 작업 결과 · 현재 작업 미진행','Retired result · current task unchanged'],['워커 결과 · 수락 판정','Worker result · Acceptance'],['Agent 호출 결과 · 계약 판정 없음','Agent result · No contract verdict'],['호스트 호출 실패','Host invocation failed'],['턴 종료','Turn ended'],['문맥 선택','Context selection'],['등급 결정','Tier decision'],['실행 형태','Execution path'],['요약 대체','Summary replacement'],['수락 검사','Acceptance'],['의존성','Dependencies'],['압축','Compaction'],
 ['응답 기록과 연결됨','Matched with response record'],['응답을 기다리는 중','Awaiting response'],['응답 기록 없음 · 진행 여부 미확인','No response record · status unknown'],['전송 없이 원래 경로 유지','Original path preserved without sending'],['응답 기록됨','Response recorded'],['응답 기록 · 선택형 결과 미확인','Response recorded · typed result unavailable'],['선택형 응답 · 코드가 정책 판정에 사용',' typed answers · used by code policy'],['Jev 요청 전송 · 응답 대기','Jev request sent · awaiting response'],['전송 안 함','Not sent'],['등록되지 않은 하위 실행 · 원래 설정 유지','Unregistered child run · host setting kept'],['라우팅이 멈춘 하위 실행 · 원래 설정 유지','Child run with routing stopped · host setting kept'],['Jev 전송 없음','Jev not sent'],['전송 여부 기록 없음','Send status unrecorded'],['사용량 미기록','Usage unrecorded'],['요청 변경 모델','Requested model change'],['요청 변경 effort','Requested effort change'],['기존 모델','Previous model'],['기존 effort','Previous effort'],['모델 이유','Model reason'],['effort 이유','Effort reason'],['실제 적용 effort','Applied effort'],['관측 모델','Observed model'],['요청 모델','Requested model'],['실행 모델','Observed model'],['호출 모델','Called model'],['모델 고정','Model pinned'],['원래 프로필','Original profile'],['요청 등급','Requested tier'],['세션 문맥','Session context'],['실행 floor','Execution floor'],['호스트 창','Host window'],['계산에 사용한 루트 턴','Estimated root turns'],['위임 가격 계산','Delegation cost estimate'],['측정된 절감 아님','Not measured savings'],
-['필수','Required'],['근거','Evidence'],['Jev 호출','Jev calls'],['캐시','Cache'],['후보','Candidates'],['작업','Tasks'],['요청 ','Requested '],['적용 ','Applied '],['worker 보고 pass','Worker reported pass'],['미실행','Not run'],['실행 기록','Execution record'],['모순','Contradicted'],['미관측','Unobserved'],['변경 전 통과','Passed before the last change'],['계약 판정 없음','No contract verdict'],['계약 수락','Contract accepted'],['계약 미충족','Contract not met'],['판정 미확인','Verdict unknown'],['새 계획으로 교체된 작업','Task replaced by a newer plan'],['워커 응답 형식 오류','Invalid worker reply'],['워커 응답 없음','No worker reply'],['통과 보고 검사가 실행 기록에서 실패','Reported pass failed in the worker transcript'],['통과 보고 검사의 실행 미관측','Reported pass not seen in the worker transcript'],['마지막 변경 전의 통과 기록','Pass recorded before the last change'],['워커가 차단·재계획 보고','Worker reported blocked or replan'],['필수 검사 보고 미충족','Required checks not met in the report'],['이전 세대의 늦은 결과 · 현재 계획 미진행','Late result from previous generation · current plan unchanged'],['거절','Denied'],['현재 작업에 필요한 근거 선택','Current task dependencies selected'],['기존 최근순 유지','Existing recency kept'],['선별할 과거 결과 없음','No past results to select'],['Jev 선별 꺼짐','Jev selection off'],['민감정보 감지 · 로컬 유지','Sensitive input detected · local compaction kept'],['판정 입력 한도 초과 · 로컬 유지','Judgment input limit · local compaction kept'],['Jev 응답 시간 초과 · 로컬 유지','Jev timed out · local compaction kept'],['유효하지 않은 판정 · 로컬 유지','Invalid judgment · local compaction kept'],['중단 · 판정 미적용','Interrupted · judgment not applied'],['새 턴으로 변경 · 판정 미적용','Turn changed · judgment not applied'],['선별 오류 · 로컬 유지','Selection error · local compaction kept'],['Jev 연결 오류 · 로컬 유지','Jev connection error · local compaction kept'],['Jev 인증 실패 · 로컬 유지','Jev authentication failed · local compaction kept'],['Jev 인증 확인 필요 · 로컬 유지','Jev credentials need review · local compaction kept'],['실행 중인 Jev 요청 한도 · 로컬 유지','Jev request capacity · local compaction kept'],['Jev 입력','Jev input'],['작업 근거 선택 → digest 구성','Dependencies → digest'],['Jev + 로컬','Jev + local'],['Jev 작업 의존 근거 선택','Jev task dependencies'],['Jev 전송 여부 미확인','Jev dispatch unconfirmed'],['필수 근거','Selected dependencies'],['대화 압축 시작','Conversation compaction started'],['호스트 압축으로 넘김','Deferred to host compaction'],['로컬 digest 적용 · 요약 모델 호출 대체','Local digest applied · summarizer call replaced'],['호스트 압축 사용','Host compaction used'],['호스트 건너뜀','Host skipped'],['트리거','Trigger'],['서브에이전트','Subagent'],['메시지','Messages'],['빌드','Build'],['호스트 보고 압축 전','Host reported tokens before'],['파서','Parser'],['Jev 제어','Jev control'],['명확도','Task clarity'],['일반 위험','Ordinary risk'],['점수','Score'],['참 확률','True probability'],['확신','Confidence'],['참','True'],['거짓','False'],['입력','Input'],['출력','Output'],['토큰','tokens']];
+['필수','Required'],['근거','Basis'],['Jev 호출','Jev calls'],['캐시','Cache'],['후보','Candidates'],['작업','Tasks'],['요청 ','Requested '],['적용 ','Applied '],['worker 보고 pass','Worker reported pass'],['미실행','Not run'],['실행 기록','Execution record'],['모순','Contradicted'],['미관측','Unobserved'],['변경 전 통과','Passed before the last change'],['계약 판정 없음','No contract verdict'],['계약 수락','Contract accepted'],['계약 미충족','Contract not met'],['판정 미확인','Verdict unknown'],['새 작업으로 교체됨','Replaced by a newer task'],['워커 응답 형식 오류','Invalid worker reply'],['워커 응답 없음','No worker reply'],['통과 보고 검사가 실행 기록에서 실패','Reported pass failed in the worker transcript'],['통과 보고 검사의 실행 미관측','Reported pass not seen in the worker transcript'],['마지막 변경 전의 통과 기록','Pass recorded before the last change'],['워커가 차단·재계획 보고','Worker reported blocked or replan'],['필수 검사 보고 미충족','Required checks not met in the report'],['이전 세대의 늦은 결과 · 현재 작업 미진행','Late result from previous generation · current task unchanged'],['거절','Denied'],['현재 작업에 필요한 근거 선택','Current task dependencies selected'],['기존 최근순 유지','Existing recency kept'],['선별할 과거 결과 없음','No past results to select'],['Jev 선별 꺼짐','Jev selection off'],['민감정보 감지 · 로컬 유지','Sensitive input detected · local compaction kept'],['판정 입력 한도 초과 · 로컬 유지','Judgment input limit · local compaction kept'],['Jev 응답 시간 초과 · 로컬 유지','Jev timed out · local compaction kept'],['유효하지 않은 판정 · 로컬 유지','Invalid judgment · local compaction kept'],['중단 · 판정 미적용','Interrupted · judgment not applied'],['새 턴으로 변경 · 판정 미적용','Turn changed · judgment not applied'],['선별 오류 · 로컬 유지','Selection error · local compaction kept'],['Jev 연결 오류 · 로컬 유지','Jev connection error · local compaction kept'],['Jev 인증 실패 · 로컬 유지','Jev authentication failed · local compaction kept'],['Jev 인증 확인 필요 · 로컬 유지','Jev credentials need review · local compaction kept'],['실행 중인 Jev 요청 한도 · 로컬 유지','Jev request capacity · local compaction kept'],['Jev 입력','Jev input'],['작업 근거 선택 → digest 구성','Dependencies → digest'],['Jev + 로컬','Jev + local'],['Jev 작업 의존 근거 선택','Jev task dependencies'],['Jev 전송 여부 미확인','Jev dispatch unconfirmed'],['필수 근거','Selected dependencies'],['대화 압축 시작','Conversation compaction started'],['호스트 압축으로 넘김','Deferred to host compaction'],['로컬 digest 적용 · 요약 모델 호출 대체','Local digest applied · summarizer call replaced'],['호스트 압축 사용','Host compaction used'],['호스트 건너뜀','Host skipped'],['트리거','Trigger'],['서브에이전트','Subagent'],['메시지','Messages'],['빌드','Build'],['호스트 보고 압축 전','Host reported tokens before'],['파서','Parser'],['Jev 제어','Jev control'],['명확도','Task clarity'],['일반 위험','Ordinary risk'],['점수','Score'],['참 확률','True probability'],['확신','Confidence'],['참','True'],['거짓','False'],['입력','Input'],['출력','Output'],['토큰','tokens']];
 PHRASES.push(...[
-['게이트 세션','Gate session'],['Router 실행','Router run'],['Compact 실행','Compact run'],['개 기록 단계',' recorded steps'],['개 Jev 지연 측정',' measured Jev calls'],['개 결과 미확인',' unconfirmed results'],['단계 / 출처','Stage / source'],['기록 기준','Recorded time'],['소요','Duration'],['처리 시간','Timing'],['기록된 결과','Recorded outcome'],['기록 필드','Recorded fields'],['기록 사이 경과','Elapsed between records'],['현재 상태','Current state'],['미측정','Not measured'],['Jev 선택형 응답','Jev typed answers'],['응답 확신','Answer confidence'],['작업 의존성','Task dependencies'],['필수 검사','required checks'],['시작','Start'],['표시할 이벤트가 없습니다.','No events to show.'],['조건에 맞는 실행이 없습니다.','No executions match the filters.'],['실행을 선택하면 시간축을 표시합니다.','Select an execution to see its timeline.'],['시간축에서 단계를 선택하세요.','Select a stage on the timeline.'],['결과 요약 없음','No outcome summary'],['기록 없음은 전송 안 함이나 0ms를 뜻하지 않습니다.','No record does not mean no request or 0 ms.'],['연결됨','Connected'],['미설정','Unavailable'],['파일','files'],['읽기 오류','read errors'],['Jev 요청','Jev request'],['정책','Policy'],['계획','Plan'],['워커','Worker'],['호스트','Host'],['로컬','Local'],['단계',' stages'],['미기록','Unrecorded'],['미확인','Unconfirmed'],['도구','Tool'],['예약과 일치하지 않는 호출','Invocation did not match reservation'],['결과 기록','Outcome recorded'],['원격 판정 허용','Remote judgment enabled'],['로컬만','Local only'],['생략','Omitted'],['유지','Retained'],['후','after'],['모드','Mode'],['응답','Answer'],['요청','Request']]);
+['게이트 세션','Gate session'],['Router 실행','Router run'],['Compact 실행','Compact run'],['개 기록 단계',' recorded steps'],['개 Jev 지연 측정',' measured Jev calls'],['개 결과 미확인',' unconfirmed results'],['단계 / 출처','Stage / source'],['기록 기준','Recorded time'],['소요','Duration'],['처리 시간','Timing'],['기록된 결과','Recorded outcome'],['기록 필드','Recorded fields'],['기록 사이 경과','Elapsed between records'],['현재 상태','Current state'],['미측정','Not measured'],['Jev 선택형 응답','Jev typed answers'],['응답 확신','Answer confidence'],['작업 의존성','Task dependencies'],['필수 검사','required checks'],['시작','Start'],['표시할 이벤트가 없습니다.','No events to show.'],['조건에 맞는 실행이 없습니다.','No executions match the filters.'],['실행을 선택하면 시간축을 표시합니다.','Select an execution to see its timeline.'],['시간축에서 단계를 선택하세요.','Select a stage on the timeline.'],['결과 요약 없음','No outcome summary'],['기록 없음은 전송 안 함이나 0ms를 뜻하지 않습니다.','No record does not mean no request or 0 ms.'],['연결됨','Connected'],['미설정','Unavailable'],['파일','files'],['읽기 오류','read errors'],['Jev 요청','Jev request'],['정책','Policy'],['워커','Worker'],['호스트','Host'],['로컬','Local'],['단계',' stages'],['미기록','Unrecorded'],['미확인','Unconfirmed'],['도구','Tool'],['예약과 일치하지 않는 호출','Invocation did not match reservation'],['결과 기록','Outcome recorded'],['원격 판정 허용','Remote judgment enabled'],['로컬만','Local only'],['생략','Omitted'],['유지','Retained'],['후','after'],['모드','Mode'],['응답','Answer'],['요청','Request']]);
 PHRASES.push(...[
 ['선택 결과 · 전송과 응답 확인은 별도 기록','Selection recorded · submission and response are separate'],['Codex 요청에 설정 제출','Settings submitted to Codex'],['요청 전송 관측 · 응답 모델과 실제 effort는 아직 미확인','Request submission observed · response model and effort unconfirmed'],['Codex 응답 관측','Codex response observed'],['응답이 보고한 값만 표시','Only response-reported values shown'],['모델 미확인','Model unknown'],['effort 미확인','Effort unknown'],['목록 부분/미확인','Catalog partial or unknown'],['목록 완전','Catalog complete'],['Astra 자동 선택','Automatic Astra selection'],['Fable 자동 선택','Automatic Fable selection'],['model 질문','Model asked'],['effort 질문','Effort asked'],['발견','Discovered'],['적격','Eligible'],['제시','Offered'],['제외','Excluded']]);
-PHRASES.push(['선택 모델과 실제 모델 일치','Selected and observed models match'],['선택 모델과 실제 모델 불일치','Selected and observed models differ'],['결정 근거','Decision evidence'],['Codex 실행','Codex execution']);
+PHRASES.push(['선택 모델과 실제 모델 일치','Selected and observed models match'],['선택 모델과 실제 모델 불일치','Selected and observed models differ'],['결정 근거','Decision basis'],['Codex 실행','Codex execution']);
 EN.skip='Skip to content';
 PHRASES.push(['API 설정 관측 · 요청 종류 미확인','API settings observed · request purpose unknown']);
 PHRASES.push(['실행 전 점검 충돌','Preflight conflict'],['부모 권한 전달 불가','Parent permissions unavailable'],['Worktree 생성 불가','Worktree unavailable'],['배정 모델·effort 사용 불가','Allocated model or effort unavailable'],['시작 전 취소','Cancelled before start'],['실행 예약 기록 불가','Reservation unavailable'],['Codex 워커 시작 거부','Codex worker start rejected'],['Codex 워커 턴 실패','Codex worker turn failed'],['워커 중단','Worker interrupted'],['워커 종료 미확인 · 예약 유지','Worker termination unconfirmed · reservation kept'],['워커 미실행 · 완료 주장 없음','Worker not started · no completion claimed']);
@@ -142,7 +142,7 @@ PHRASES.push(['사람이 입력한 현재 작업 없음','No current human task'
 PHRASES.sort((a,b)=>b[0].length-a[0].length);
 PHRASES.push(['연결 중','Connecting']);PHRASES.sort((a,b)=>b[0].length-a[0].length);
 let lang='ko';
-function tr(value){if(lang!=='en')return String(value);let out=String(value).replace(/(\\S+)에서 변경/g,'Changed from $1');for(const [ko,en] of PHRASES)out=out.replaceAll(ko,en);return out.replace(/([0-9][0-9,.]*)개/g,'$1').replace(/([0-9][0-9,.]*)건/g,'$1 records').replace(/([0-9][0-9,.]*)회/g,'$1 times').replace(/([0-9][0-9,.]*)자/g,'$1 chars')}
+function tr(value){const named=String(value).replace(/[a-z][a-z0-9_]+/g,code=>REASONS[code]&&(code.includes('_')||String(value)===code)?label(...REASONS[code]):code);if(lang!=='en')return named;let out=named.replace(/(\\S+)에서 변경/g,'Changed from $1');for(const [ko,en] of PHRASES)out=out.replaceAll(ko,en);return out.replace(/([0-9][0-9,.]*)개/g,'$1').replace(/([0-9][0-9,.]*)건/g,'$1 records').replace(/([0-9][0-9,.]*)회/g,'$1 times').replace(/([0-9][0-9,.]*)자/g,'$1 chars')}
 function applyLanguage(){document.documentElement.lang=lang;for(const x of document.querySelectorAll('[data-en-aria]')){if(!x.dataset.koAria)x.dataset.koAria=x.getAttribute('aria-label');x.setAttribute('aria-label',lang==='en'?x.dataset.enAria:x.dataset.koAria)}document.title=lang==='en'?'Jev Gate · Execution overview':'Jev Gate · 실행 관측';for(const x of document.querySelectorAll('[data-i18n]')){if(!x.dataset.ko)x.dataset.ko=x.textContent;x.textContent=lang==='en'?(EN[x.dataset.i18n]||x.dataset.ko):x.dataset.ko}$('search').placeholder=label('실행·기능·모델 검색','Search runs, features, models');const dark=document.documentElement.dataset.theme==='dark';document.querySelector('meta[name=theme-color]').content=dark?'#0c0c0f':'#f6f3f4';$('theme').textContent=dark?label('화이트','Light'):label('다크','Dark');$('theme').setAttribute('aria-label',label('테마 전환','Change theme'));$('language').textContent=lang==='en'?'KO':'EN';$('language').setAttribute('aria-label',label('언어 전환','Change language'));$('pause').textContent=paused?label('실시간 재개','Resume live'):label('일시정지','Pause');$('connection').textContent=tr($('connection').dataset.label||'연결 중');$('recording-label').textContent=label('실행 기록','Execution recording');$('dashboard-label').textContent=label('대시보드 자동 열기','Open dashboard automatically');if(data)draw(data)}
 const $=id=>document.getElementById(id);
 const el=(tag,cls,value)=>{const x=document.createElement(tag);if(cls)x.className=cls;if(value!==undefined)x.textContent=tr(String(value));return x};
@@ -206,7 +206,7 @@ const traffic=ops=>ticks($('comm'),recent(ops,COMM_MS,isJev),COMM_MS,(i,s)=>{if(
 function recSpan(x,cls){const rec=el('span','rec'+(cls?' '+cls:''));rec.append(el('em','',x.f),el('b','',x.v));if(x.m)rec.append(el('span','ms',x.m));return rec}
 // Each run keeps one row; a row is rebuilt only when its run, selection, landed records or language change.
 // A draw fills at most ROWS_AT_ONCE rows and the rest follow in later tasks, so a first frame of hundreds of runs is no long task.
-const rowEls=new Map(),heldIn=id=>{let n=0;for(const v of held.values())if(v===id)n++;return n},ROWS_AT_ONCE=20;
+const rowEls=new Map(),heldIn=()=>0,ROWS_AT_ONCE=20;
 function runs(ops,top=$('runs').scrollTop){const base=baseRuns(ops),rows=base.filter(r=>stateFilter==='all'||r.state===stateFilter),root=$('runs');
   for(const b of $('state-filters').querySelectorAll('button')){b.setAttribute('aria-pressed',String(b.dataset.state===stateFilter))}
   if(!rows.some(r=>r.id===selectedRun)){selectedRun=rows.find(r=>r.state==='active')?.id||rows[0]?.id||null;selectedStep=null}
@@ -223,11 +223,11 @@ function fill(li,r,hit){const b=li.firstChild,mine=r.steps.filter(s=>isCall(s)&&
   b.className='row rgrid'+(sel?' sel':'')+(r.state==='active'?' live':'');b.setAttribute('aria-pressed',String(sel));b.setAttribute('aria-label',tr(r.title)+', '+tr(state[r.state])+', '+label('Jev 호출 '+mine.length+'회',mine.length+' Jev calls'));
   const st=el('span','c-st st '+RUNST[r.state]);st.append(pip(),tr(state[r.state]));
   const nm=el('span','c-nm nm'),small=el('small'),model=runModel(r);nm.append(el('b','',r.title),small);const lastCall=[...r.steps].reverse().find(s=>!s.lifecycle&&!isHeld(r.id,s.id)&&CIRCUIT.includes(s.feature));joined(small,[r.source!=='codex'&&el('span','h '+(r.host==='codex'?'cx':'cl'),r.host==='codex'?'Codex':'Claude'),model&&!ROUTED.has(lastCall?.feature)&&el('span','mdl',model)]);
-  const fx=el('span','c-stg fx');for(const id of CIRCUIT){const steps=r.steps.filter(s=>circuitStep(s)&&s.feature===id&&!isHeld(r.id,s.id));if(!steps.length)continue;const e=steps.some(s=>s.state==='error'),k=steps.every(s=>s.state==='skipped'),chip=el('span','f'+(e?' e':k?' k':''),tr(featureInfo[id][0])+(e?label(' 오류',' error'):k?label(' 생략',' skipped'):''));if(hit?.feature===id){chip.classList.add('hit');setTimeout(()=>chip.classList.remove('hit'),450)}fx.append(chip)}
+  const fx=el('span','c-stg fx');for(const id of CIRCUIT){const steps=r.steps.filter(s=>circuitStep(s)&&s.feature===id&&!isHeld(r.id,s.id));if(!steps.length)continue;const e=steps.some(s=>s.state==='error'),k=steps.every(s=>s.state==='skipped'),chip=el('span','f'+(e?' e':k?' k':''),tr(featureInfo[id][0])+(e?label(' 오류',' error'):k?label(' 생략',' skipped'):''));if(hit?.feature===id){chip.classList.add('hit');setTimeout(()=>chip.classList.remove('hit'),300)}fx.append(chip)}
   const last=lastCall,md=el('span','c-md md'+(last?'':' none'));
   if(last){const x={id:last.id,f:fx.children.length===1?'':tr(featureInfo[last.feature][0]),v:valueText(last),m:isCall(last)?ms(last.durationMs):''},prev=lastRec.get(r.id);if(hit&&prev&&prev.id!==x.id&&motion()){const old=recSpan(prev,'out');old.addEventListener('animationend',()=>old.remove());md.append(old,recSpan(x,'in'))}else md.append(recSpan(x));lastRec.set(r.id,x)}else md.textContent='–';
   const jc=el('span','c-jc jc'),spk=el('span','spk'),n=el('span','n',mine.length),bars=mine.slice(0,12).reverse();spk.setAttribute('aria-hidden','true');
-  for(let k=0;k<12;k++){const s=bars[k-12+bars.length],i=el('i');i.style.height=s?barHeight(s.durationMs,view):'0%';if(s)i.dataset.ms=s.durationMs;if(s&&hit?.id===s.id){i.className='now';setTimeout(()=>i.classList.remove('now'),900)}spk.append(i)}
+  for(let k=0;k<12;k++){const s=bars[k-12+bars.length],i=el('i');i.style.height=s?barHeight(s.durationMs,view):'0%';if(s)i.dataset.ms=s.durationMs;if(s&&hit?.id===s.id){i.className='now';setTimeout(()=>i.classList.remove('now'),300)}spk.append(i)}
   if(hit&&isCall(hit)){n.classList.add('hot');setTimeout(()=>n.classList.remove('hot'),120)}jc.append(spk,n);
   const du=el('span','c-du du r',dur((r.state==='active'?(frozenAt??Date.now()):Date.parse(r.lastAt))-Date.parse(r.firstAt)));if(r.state==='active')du.dataset.since=r.firstAt;
   const ac=el('span','c-ac ac r',fmt((frozenAt??Date.now())-Date.parse(r.lastAt)));ac.dataset.at=r.lastAt;if(hit){b.classList.add('zap');setTimeout(()=>b.classList.remove('zap'),160)}
@@ -235,7 +235,7 @@ function fill(li,r,hit){const b=li.firstChild,mine=r.steps.filter(s=>isCall(s)&&
 // Routing and typed answers reach a page only with a step's detail, so a shown call fetches it once for its step.
 const ROUTED=new Set(['router','allocation']),routed=s=>detailed({id:s.runId},s.src);
 const SCOPE={root:['루트 턴','Root turn'],spawn:['Agent 생성','Agent spawn'],child:['하위 단계','Child step'],owned:['Gate B 워커','Gate B worker']};
-// A call outside routing names what it judged: the user request, an Agent call, a plan, a compaction or a search.
+// A call outside routing names what it judged: the user request, an Agent call or a compaction.
 const SCOPE_OF={admission:['사용자 요청','Request'],allocation:['Agent 호출','Agent call'],compact:['자동 압축','Compaction']};
 const scopeOf=x=>x.routing&&SCOPE[x.routing.scope]?label(...SCOPE[x.routing.scope]):SCOPE_OF[x.feature]?label(...SCOPE_OF[x.feature]):'–';
 // The reason of a routing decision is the dimension it changed, else its model reason.
@@ -293,7 +293,181 @@ function failureFacts(s,r,add){if(!failedStep(s))return;const i=s.impact;
   add(label('원인','Cause'),[s.cause,!s.cause&&label(...ISSUES[issueKind(s)])].filter(Boolean).join(' · '));
   add(label('현재 영향','Current impact'),label(...IMPACT[i?.now||'unknown']));if(i)add(label('마지막 관측','Last observation'),date(i.lastAt)+' · '+tr(state[i.lastState]));
   add(label('호스트','Host'),r?.host==='codex'?'Codex':'Claude');add(label('세션','Session'),s.sessionId||label('세션 기록 없음','Session not recorded'))}
-const routingReason=value=>{const reasons={same_value:['현재 모델·설정 유지','Keep current setting'],selected:['변경 선택','Change selected'],confidence_below_threshold:['변경 기준 미충족 · 유지','Below change threshold · kept'],low_confidence:['변경 기준 미충족 · 유지','Below change threshold · kept'],answer_invalid:['응답 검증 실패 · 유지','Invalid assessment · kept'],control_invalid:['요청 해석 응답 검증 실패 · 유지','Invalid control assessment · kept'],context_missing:['판단할 문맥 부족 · 유지','Insufficient context · kept'],control_unclear:['요청 해석 불명확 · 유지','Unclear request · kept'],control_low_confidence:['요청 해석 기준 미충족 · 유지','Low control confidence · kept'],effort_lock:['추론 강도가 고정됨 · 유지','Effort locked · kept'],model_lock:['모델이 고정됨 · 유지','Model locked · kept'],explicit_model:['호출에 명시된 모델 유지','Keep explicit caller model'],subagent_model_pinned:['호스트 자식 모델 고정 · 유지','Host child model pinned · kept'],routing_off:['라우팅 꺼짐 · 유지','Routing off · kept'],cache_preserved:['캐시 재사용을 위해 유지','Kept for cache reuse'],gate_allocated:['Gate B 최종 배정 사용','Final Gate B allocation'],applied:['변경 선택','Change selected'],not_asked:['이 항목은 판단하지 않음','Dimension not assessed'],low_confidence:['변경 기준 미충족 · 유지','Below change threshold · kept'],control_needs_context:['판단할 문맥 부족 · 유지','Insufficient context · kept'],control_lock:['사용자가 고정 · 유지','User locked · kept'],model_pinned:['명시 모델 고정 · 유지','Explicit model pin · kept'],gate_routed:['Gate B가 이미 배정','Already allocated by Gate B'],fork:['호스트 fork 상속','Host fork inheritance'],definition_unverified:['에이전트 정의 미확인 · 유지','Unverified agent definition · kept'],nothing_to_change:['변경 가능한 항목 없음','No mutable dimension'],timeout:['판단 시간 초과 · 유지','Assessment timeout · kept'],capability_unclear:['필요 역량 판단 불가 · 유지','Capability unclear · kept'],retry_step_up:['재시도 · 한 단계 상향','Retry · one role up'],superseded_baseline:['구버전 모델 · 최신 버전으로 교체','Superseded model · newest successor'],risk_blocks_downgrade:['실행 위험 · 하향 안 함','Action risk · no downgrade'],cost_hold:['전환 비용 · 모델 유지','Switch cost · model kept'],cost_unknown_hold:['전환 비용 미확인 · 모델 유지','Switch cost unknown · model kept'],baseline_reach:['기준 모델 캐시 범위 · 모델 유지','Baseline cache reach · model kept'],candidate_unavailable:['대상 모델 없음 · 유지','Target unavailable · kept']};return value?reasons[value]?label(...reasons[value]):value:label('기록 없음','Not recorded')};
+const REASONS={same_value:['현재 모델·설정 유지','Keep current setting'],selected:['변경 선택','Change selected'],confidence_below_threshold:['변경 기준 미충족 · 유지','Below change threshold · kept'],low_confidence:['변경 기준 미충족 · 유지','Below change threshold · kept'],answer_invalid:['응답 검증 실패 · 유지','Invalid assessment · kept'],control_invalid:['요청 해석 응답 검증 실패 · 유지','Invalid control assessment · kept'],context_missing:['판단할 문맥 부족 · 유지','Insufficient context · kept'],control_unclear:['요청 해석 불명확 · 유지','Unclear request · kept'],control_low_confidence:['요청 해석 기준 미충족 · 유지','Low control confidence · kept'],effort_lock:['추론 강도가 고정됨 · 유지','Effort locked · kept'],model_lock:['모델이 고정됨 · 유지','Model locked · kept'],explicit_model:['호출에 명시된 모델 유지','Keep explicit caller model'],subagent_model_pinned:['호스트 자식 모델 고정 · 유지','Host child model pinned · kept'],routing_off:['라우팅 꺼짐 · 유지','Routing off · kept'],cache_preserved:['캐시 재사용을 위해 유지','Kept for cache reuse'],gate_allocated:['Gate B 최종 배정 사용','Final Gate B allocation'],applied:['변경 선택','Change selected'],not_asked:['이 항목은 판단하지 않음','Dimension not assessed'],control_needs_context:['판단할 문맥 부족 · 유지','Insufficient context · kept'],control_lock:['사용자가 고정 · 유지','User locked · kept'],model_pinned:['명시 모델 고정 · 유지','Explicit model pin · kept'],gate_routed:['Gate B가 이미 배정','Already allocated by Gate B'],fork:['호스트 fork 상속','Host fork inheritance'],definition_unverified:['에이전트 정의 미확인 · 유지','Unverified agent definition · kept'],nothing_to_change:['변경 가능한 항목 없음','No mutable dimension'],timeout:['판단 시간 초과 · 유지','Assessment timeout · kept'],capability_unclear:['필요 역량 판단 불가 · 유지','Capability unclear · kept'],retry_step_up:['재시도 · 한 단계 상향','Retry · one role up'],superseded_baseline:['구버전 모델 · 최신 버전으로 교체','Superseded model · newest successor'],risk_blocks_downgrade:['실행 위험 · 하향 안 함','Action risk · no downgrade'],cost_hold:['전환 비용 · 모델 유지','Switch cost · model kept'],cost_unknown_hold:['전환 비용 미확인 · 모델 유지','Switch cost unknown · model kept'],baseline_reach:['기준 모델 캐시 범위 · 모델 유지','Baseline cache reach · model kept'],candidate_unavailable:['대상 모델 없음 · 유지','Target unavailable · kept'],
+tool_editing_floor:['편집 작업 최소 모델 유지','Editing model floor'],
+tool_read_only:['읽기 전용 도구 작업','Read-only tool work'],
+tool_editing:['편집 도구 작업','Editing tool work'],
+tool_unknown:['도구 범위 미확인 · 모델 유지','Unknown tool scope · model kept'],
+tool_ceiling:['도구 작업 모델 상한 유지','Tool model ceiling kept'],
+price_unknown:['모델 가격 미확인','Model price unknown'],
+price_invalid:['모델 가격 오류','Invalid model price'],
+usage_partial:['사용량 일부 미관측','Partial usage observed'],
+usage_invalid:['사용량 기록 오류','Invalid usage record'],
+write_ttl_unknown:['캐시 쓰기 TTL 미확인','Cache write TTL unknown'],
+unresolved_contract_reasoning:['계약 추론 미해결','Unresolved contract reasoning'],
+observed_reasoning_failure:['추론 실패 관측','Observed reasoning failure'],
+no_specific_basis:['구체적 상향 근거 없음','No specific upgrade basis'],
+not_checked:['전환 비용 미검사','Switch cost not checked'],
+upgrade_allowed:['상향 전환 허용','Upgrade allowed'],
+cost_allows:['전환 비용 기준 충족','Switch cost allows'],
+pair_invalid:['모델·effort 조합 불가','Invalid model and effort pair'],
+target_effort_unresolved:['대상 effort 미확인','Target effort unresolved'],
+input_secret:['민감정보 감지','Sensitive input detected'],
+input_too_large:['판정 입력 한도 초과','Judgment input too large'],
+no_alternative:['대체 모델 없음','No alternative model'],
+configuration_update_native_history:['설정 변경 · 네이티브 기록 유지','Settings changed; native history kept'],
+child_step_limit:['하위 단계 한도','Child step limit'],
+child_context_unavailable:['하위 실행 문맥 없음','Child context unavailable'],
+child_pair_changed_before_submission:['전송 전 하위 모델·effort 변경','Child model or effort changed before submission'],
+child_unregistered:['등록되지 않은 하위 실행','Unregistered child'],
+child_stopped:['하위 라우팅 중지','Child routing stopped'],
+native_child:['네이티브 하위 실행 유지','Native child kept'],
+key_missing:['Jev API 키 없음','Jev API key missing'],
+key_invalid:['Jev API 키 형식 오류','Invalid Jev API key'],
+no_key:['Jev API 키 없음','Jev API key missing'],
+disabled:['기능 꺼짐','Feature disabled'],
+router_disabled:['Router 꺼짐','Router disabled'],
+model_catalog_missing:['호스트 모델 목록 없음','Host model catalog missing'],
+capability_unknown:['모델 역량 미확인','Model capability unknown'],
+host_unverified:['호스트 호환 미확인','Host compatibility unverified'],
+alias_remapped:['모델 별칭 변경','Model alias remapped'],
+baseline_unknown:['기준 모델 미확인','Baseline model unknown'],
+no_applicable_target:['적용 가능한 대상 없음','No applicable target'],
+rank_unknown:['모델 등급 미확인','Model rank unknown'],
+turn_retired:['종료된 턴','Retired turn'],
+internal_error:['내부 오류','Internal error'],
+incoming_divergence:['호스트 설정 변경','Host settings diverged'],
+effort_pinned:['effort 고정','Effort pinned'],
+model_not_allowed:['허용되지 않은 모델','Model not allowed'],
+target_not_allowed:['허용되지 않은 대상','Target not allowed'],
+context_unverified:['문맥 호환 미확인','Context compatibility unverified'],
+no_record:['기록 없음','No record'],
+no_cache:['캐시 없음','No cache'],
+shorter_request:['이전보다 짧은 요청','Shorter request'],
+task_notification_without_request:['요청 없는 작업 알림','Task notification without request'],
+no_task_text:['사용자 작업 입력 없음','No user task text'],
+first_step_native:['첫 단계 네이티브 유지','Native first step'],
+next_turn:['다음 턴','Next turn'],
+step_abandoned:['단계 중단','Step abandoned'],
+step_failed:['단계 실패','Step failed'],
+session_ended:['세션 종료','Session ended'],
+host_request_failed:['호스트 요청 실패','Host request failed'],
+effort_unknown:['effort 미확인','Effort unknown'],
+policy_unavailable:['정책 확인 불가','Policy unavailable'],
+policy_denied:['정책이 호출 거부','Policy denied'],
+no_eligible_model:['적격 모델 없음','No eligible model'],
+restricted_baseline:['제한된 기준 모델','Restricted baseline'],
+unverified:['미검증','Unverified'],
+child_history_full:['하위 실행 기록 한도','Child history full'],
+resumed:['기존 실행 재개','Existing run resumed'],
+observed_miss_floor_restored:['관측 누락 · 최소 effort 복원','Observed miss; effort floor restored'],
+incoming_changed:['호스트 effort 변경','Incoming effort changed'],
+admission_answer_only:['응답만 필요한 요청','Answer-only request'],
+admission_too_small:['위임하기 작은 요청','Request too small to delegate'],
+admission_external_tools:['외부 도구 요청 유지','External tool request kept'],
+route_invalid:['등급 응답 검증 실패','Invalid tier assessment'],
+route_tie:['등급 판정 동률','Tier assessment tied'],
+route_abstain:['등급 판단 보류','Tier assessment abstained'],
+route_low_confidence:['등급 확신 부족','Low tier confidence'],
+basis_invalid:['상향 근거 검증 실패','Invalid upgrade basis'],
+basis_tie:['상향 근거 동률','Upgrade basis tied'],
+basis_absent:['상향 근거 없음','Upgrade basis absent'],
+basis_low_confidence:['상향 근거 확신 부족','Low upgrade basis confidence'],
+generation_changed:['현재 작업 세대 변경','Task generation changed'],
+pinned:['호출 설정 고정','Caller settings pinned'],
+dispatch_ineligible:['실행 적격 조건 미충족','Dispatch ineligible'],
+task_active:['작업 실행 중','Task already active'],
+attempt_mismatch:['실행 시도 불일치','Attempt mismatch'],
+stale_generation:['이전 작업 세대','Stale task generation'],
+bounds_exhausted:['실행 시도 한도','Attempt limit reached'],
+preflight_conflict:['실행 전 점검 충돌','Preflight conflict'],
+permissions_unavailable:['부모 권한 전달 불가','Parent permissions unavailable'],
+worktree_unavailable:['작업 공간 생성 불가','Worktree unavailable'],
+allocation_unavailable:['배정 설정 사용 불가','Allocation unavailable'],
+cancelled:['시작 전 취소','Cancelled before start'],
+reservation_unavailable:['실행 예약 기록 불가','Reservation unavailable'],
+native_start_rejected:['호스트가 시작 거부','Host rejected start'],
+native_failed_turn:['호스트 워커 턴 실패','Native worker turn failed'],
+interrupted:['워커 중단','Worker interrupted'],
+termination_unconfirmed:['워커 종료 미확인','Worker termination unconfirmed'],
+credential_refused:['인증 확인 필요','Credentials need review'],
+aborted:['중단됨','Aborted'],
+saturated:['동시 요청 한도','Concurrent request limit'],
+network:['연결 오류','Network error'],
+rejected_input:['입력 거절','Input rejected'],
+context_exceeded:['문맥 길이 한도 초과','Context limit exceeded'],
+unauthorized:['인증 실패','Unauthorized'],
+payment_required:['크레딧 소진','Credits exhausted'],
+rate_limited:['요청 속도 한도','Rate limited'],
+overloaded:['서버 과부하','Server overloaded'],
+http_other:['HTTP 오류','HTTP error'],
+response_too_large:['응답 크기 한도 초과','Response too large'],
+response_invalid:['응답 검증 실패','Invalid response'],
+malformed:['응답 형식 오류','Malformed response'],
+model_mismatch:['응답 모델 불일치','Response model mismatch'],
+invalid_answers:['판정 형식 오류','Invalid assessment'],
+not_eligible:['추출 적격 조건 미충족','Not eligible for extraction'],
+superseded:['새 턴으로 교체됨','Superseded by a new turn'],
+error:['선별 오류','Selection error'],
+mode_off:['Gate 꺼짐','Gate off'],
+mode_native:['호스트 기본 모드','Native host mode'],
+not_agent_tool:['Agent 외 도구','Non-Agent tool'],
+child_caller:['하위 실행의 호출','Child caller'],
+custom_agent_session:['사용자 정의 에이전트 세션','Custom agent session'],
+missing_ids:['호출 식별자 없음','Missing call identifiers'],
+bad_tool_input:['도구 입력 형식 오류','Invalid tool input'],
+role_not_owned:['Gate 소유 역할 아님','Role outside Gate ownership'],
+not_foreground:['전면 호출 아님','Not a foreground call'],
+execution_control_present:['호스트 실행 제어 유지','Host execution control kept'],
+subagent_model_override:['하위 모델 재정의 유지','Subagent model override kept'],
+fork_or_background_override:['fork·백그라운드 재정의 유지','Fork or background override kept'],
+prompt_too_large:['프롬프트 크기 한도','Prompt too large'],
+prompt_invalid_unicode:['프롬프트 문자 오류','Invalid prompt Unicode'],
+request_too_large:['요청 크기 한도','Request too large'],
+config_invalid:['설정 검증 실패','Invalid configuration'],
+trace_intent_failed:['요청 의도 기록 실패','Trace intent write failed'],
+output_too_large:['훅 출력 크기 한도','Hook output too large'],
+no_state:['작업 상태 없음','No job state'],
+host_unsupported:['지원하지 않는 호스트','Unsupported host'],
+deadline_exhausted:['훅 시간 한도 소진','Hook deadline exhausted'],
+state_corrupt:['상태 기록 손상','Corrupt state'],
+state_too_large:['상태 크기 한도','State too large'],
+state_locked:['상태 잠금 중','State locked'],
+state_symlink:['상태 심볼릭 링크 거부','State symlink refused'],
+state_write_failed:['상태 기록 실패','State write failed'],
+stdin_too_large:['입력 크기 한도','Input too large'],
+stdin_invalid_json:['입력 JSON 오류','Invalid input JSON'],
+stdin_invalid_utf8:['입력 UTF-8 오류','Invalid input UTF-8'],
+stdin_read_failed:['입력 읽기 실패','Input read failed'],
+internal:['내부 오류','Internal error'],
+precompute:['사전 계산 생략','Precompute skipped'],
+request_identity_unknown:['요청 식별 미확인','Request identity unknown'],
+response_unconfirmed:['응답 미관측','Response unconfirmed'],
+response_model_confirmed:['응답 모델 일치','Response model confirmed'],
+request_applied:['요청 설정 적용','Request settings applied'],
+http_400:['HTTP 400 오류','HTTP 400 error'],
+http_401:['HTTP 401 오류','HTTP 401 error'],
+http_402:['HTTP 402 오류','HTTP 402 error'],
+http_413:['HTTP 413 오류','HTTP 413 error'],
+http_415:['HTTP 415 오류','HTTP 415 error'],
+http_422:['HTTP 422 오류','HTTP 422 error'],
+http_429:['HTTP 429 오류','HTTP 429 error'],
+http_529:['HTTP 529 오류','HTTP 529 error'],
+admission_not_worth:['위임 이득 부족','Delegation not worth it'],
+admission_needs_context:['앞선 대화 문맥 필요','Needs earlier conversation context'],
+admission_low_confidence:['판정 확신 부족','Low judgment confidence'],
+admission_invalid:['응답 검증 실패','Invalid assessment'],
+admission_tie:['판정 동률','Tied judgment'],
+admission_abstain:['Jev 판단 보류','Jev abstained'],
+admission_forced:['실험 설정으로 고정','Fixed by experiment setting'],
+admission_forbids_delegation:['요청이 위임을 금지','Request forbids delegation'],
+admission_shape_unknown:['실행 형태 미확인','Execution path unknown'],
+admission_delivery_failed:['필수 원문 전달 불가','Required text cannot be delivered'],
+prompt_id_absent:['프롬프트 식별자 없음','No prompt id'],
+depth_unknown:['세션 깊이 미확인','Session depth unknown'],
+depth_below_floor:['세션이 위임 기준보다 얕음','Session below the delegation floor'],
+task_notification:['작업 알림 턴','Task notification turn'],ok:['정상','OK'],invalid:['유효하지 않음','Invalid'],unknown_model:['모델 미확인','Unknown model'],ambiguous:['판정 모호','Ambiguous']};
+const routingReason=value=>value?REASONS[value]?label(...REASONS[value]):value:label('기록 없음','Not recorded');
 const elapsed=(s,cls)=>{const e=el('span',cls||'',ms((frozenAt??Date.now())-Date.parse(runningSince(s))));e.dataset.since=runningSince(s);e.dataset.ms='';return e};
 // Only recorded values become facts; an absent value is left out rather than shown as zero.
 function stepFacts(s,r){const f=[],add=(k,v,wide)=>{if(v!=null&&v!=='')f.push([k,v,wide])},rc=s.receipt,m=s.model;
@@ -306,7 +480,7 @@ function stepFacts(s,r){const f=[],add=(k,v,wide)=>{if(v!=null&&v!=='')f.push([k
   // A Jev response's questions and probabilities are shown once, in the decision basis panel; a step outside the call log keeps them here.
   if(isCall(s)){const go=el('button','link',label('판단 근거 패널에서 보기 ↗','Open in decision basis ↗'));go.type='button';go.dataset.inspectCall=s.id;go.dataset.inspectRun=r.id;add(label('판단 근거','Decision basis'),go,true)}
   else for(const j of s.judgements||[])add(judgmentName(j.question),choiceName(j.question,j.value)+(j.confidence!==null?' · '+pct(j.confidence):'')+(j.probabilities.length?' ('+j.probabilities.map(p=>choiceName(j.question,p.label)+' '+pct(p.value)).join(' · ')+')':''),true);
-  const evidence=(s.details||[]).filter(x=>!x.includes('?')&&!x.includes('미기록')&&!s.judgements?.some(j=>x.startsWith(j.question+':'))&&!(rc&&(x.startsWith('Jev 요청 · ')||x.startsWith('Jev 입력 '))));if(evidence.length){const o=document.createDocumentFragment();for(const x of evidence)o.append(el('span','line',x));add(label('결정 근거','Decision evidence'),o,true)}
+  const evidence=(s.details||[]).filter(x=>!x.includes('?')&&!x.includes('미기록')&&!s.judgements?.some(j=>x.startsWith(j.question+':'))&&!(rc&&(x.startsWith('Jev 요청 · ')||x.startsWith('Jev 입력 '))));if(evidence.length){const o=document.createDocumentFragment();for(const x of evidence)o.append(el('span','line',x));add(label('결정 근거','Decision basis'),o,true)}
   add(label('기록 시각','Recorded'),date(s.at));return f}
 // Frames leave out the fields only an opened stage shows; they are fetched for that stage and kept while it is unchanged.
 const stepDetails=new Map();
@@ -353,14 +527,11 @@ function draw(snapshot){const f=document.activeElement,key=f?.dataset?.run?['run
   for(const b of $('host-filters').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.host===hostFilter));$('pause').setAttribute('aria-pressed',String(paused));
   const calls=callsOf(ops),pend=pendingOf(ops);stats(ops,calls);runs(ops,tops[0]);pipeline(ops,calls,pend);receipts(ops,calls,pend);jevPanel(ops);trace(ops.runs.find(r=>r.id===selectedRun),tops[1]);settings(snapshot);
   if(key&&document.activeElement!==f)(f.isConnected?f:[...($(box)?.querySelectorAll('button')||[])].find(e=>e.dataset[key[0]]===key[1]))?.focus({preventScroll:true});tick()}
-// One landed record updates its node, its run row and the Jev views it belongs to; nothing else is redrawn.
-function land(s){const ops=view,li=rowEls.get(s.runId),r=ops?.runs.find(r=>r.id===s.runId);if(!ops)return;landNode(ops,s);if(li?.isConnected&&r)fill(li,r,s);if(!isJev(s))return;traffic(ops);
-  const calls=callsOf(ops),pend=pendingOf(ops);receipts(ops,calls,pend);if(isCall(s))$('k-last').dataset.last=calls[0]?.at||''}
 function tick(){const ref=frozenAt??Date.now(),k=$('k-last'),last=ref-Date.parse(k.dataset.last||'');
   for(const e of document.querySelectorAll('[data-at]'))put(e,e.dataset.at?fmt(ref-Date.parse(e.dataset.at)):e.dataset.none||'–');
   for(const e of document.querySelectorAll('[data-since]'))put(e,('ms' in e.dataset?ms:dur)(ref-Date.parse(e.dataset.since)));if($('trace')._bars)place($('trace')._bars,ref);
   for(const b of document.querySelectorAll('#pipeline .node')){const live=ref-Date.parse(b.querySelector('.ago').dataset.at||'')<ACTIVITY_MS;b.classList.toggle('live',live);b.classList.toggle('idle',!live)}
-  put(k,Number.isFinite(last)?label('마지막 응답 ','Last reply ')+(last<2000?label(Math.max(0,last/1000).toFixed(1)+'초 전',Math.max(0,last/1000).toFixed(1)+'s ago'):fmt(last)):label('응답 기록 없음','No response yet'))}
+  if(view)railStats(railCalls);put(k,Number.isFinite(last)?label('마지막 응답 ','Last reply ')+(last<2000?label(Math.max(0,last/1000).toFixed(1)+'초 전',Math.max(0,last/1000).toFixed(1)+'s ago'):fmt(last)):label('응답 기록 없음','No response yet'))}
 // Freezing and resuming redraw once; a resumed view rebuilds its sliding ticks at their true ages.
 const connection=(ok,text)=>{const was=frozenAt;frozenAt=!ok||paused?(frozenAt??Date.now()):null;$('connection').className='conn'+(ok?'':' warn');$('connection').dataset.label=text;$('connection').textContent=tr(text);if((was===null)!==(frozenAt===null)){if(frozenAt===null)resetTicks();if(data)draw(data)}tick()};
 $('pipeline').addEventListener('click',e=>{const b=e.target.closest('button[data-feature]');if(!b||!data)return;circuitFeature=b.dataset.feature;if(circuitMode==='live')selectedFeature=selectedFeature===circuitFeature?'all':circuitFeature;draw(data);if(matchMedia('(max-width:900px)').matches)$('circuit-inspector').scrollIntoView({block:'start',behavior:'instant'})});

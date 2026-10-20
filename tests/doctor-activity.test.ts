@@ -20,6 +20,65 @@ const check = (checks: ActivityCheck[], name: string): ActivityCheck => {
 };
 const level = (claude: Rec[], name: string, over: Partial<ActivityInput> = {}): string => check(run(claude, over), name).level;
 
+describe('dashboard activity facts from doctor', () => {
+  it('counts decisions, tier changes and owned terminal states without attributing native Agent calls', () => {
+    const rows = [rec('admission_result', { decision: { shape: 'orchestrated' } }),
+      rec('pre_result', { role: 'single_worker', called_tier: 'standard', decision: { tier: 'fast', reason: 'route_fast' } }),
+      ...['accepted', 'rejected', 'waiting', 'cancelled'].map(tool_use_id => rec('dispatch', { role: 'single_worker', tool_use_id })),
+      rec('post', { tool_use_id: 'accepted', subagent_type: 'jev-gate:worker', verdict: 'accept', reported_checks: { pass: 1 } }),
+      rec('post', { tool_use_id: 'rejected', subagent_type: 'jev-gate:worker', verdict: 'incomplete' }),
+      rec('failure', { tool_use_id: 'cancelled', failure_category: 'cancelled' }),
+      rec('post', { tool_use_id: 'native', subagent_type: 'general-purpose' }),
+      rec('failure', { tool_use_id: 'native-cancel', failure_category: 'cancelled' })];
+    const checks = run(rows);
+    expect(check(checks, 'gate_a').metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
+    expect(check(checks, 'gate_b').metrics).toMatchObject({ fired: 1, applied: 1 });
+    expect(check(checks, 'gate_b').message).toContain('reasons route_fast 1');
+    expect(check(checks, 'worker').metrics).toMatchObject({ fired: 4, accepted: 1, rejected: 1, pending: 1, cancelled: 1 });
+  });
+
+  it('settles expired reservations and counts post, failure and background cancellation receipts once per worker', () => {
+    const rows = [
+      ...['expired', 'claude', 'codex'].map(tool_use_id => rec('dispatch', { role: 'worker', tool_use_id }, 20)),
+      rec('post', { tool_use_id: 'expired', subagent_type: 'jev-gate:worker', verdict: 'unknown', verdict_reason: 'worker_no_result' }),
+      rec('post', { tool_use_id: 'claude', subagent_type: 'jev-gate:worker', verdict: 'unknown', verdict_reason: 'worker_cancelled' }),
+      rec('background_terminal', { tool_use_id: 'claude', status: 'cancelled', verdict_reason: 'worker_cancelled' }),
+      rec('failure', { tool_use_id: 'codex', failure_category: 'interrupted' }),
+      rec('background_terminal', { tool_use_id: 'codex', status: 'interrupted', failure_category: 'interrupted' }),
+    ];
+    expect(check(run(rows), 'worker').metrics).toMatchObject({ fired: 3, pending: 0, cancelled: 2, rejected: 2 });
+  });
+
+  it('retains unknown effect and budget when the records do not measure them', () => {
+    const checks = run([router('root', { sent: true }), rec('claude_compact', { stage: 'pre' }), rec('claude_compact', { stage: 'post', summary_chars: null, restored_chars: null, budget: 80000 })]);
+    expect(check(checks, 'router_cost').metrics).toMatchObject({ fired: 1, effect: null });
+    expect(check(checks, 'compact').metrics).toMatchObject({ fired: 1, applied: 1, budgetUsed: null, budget: 80000 });
+    expect(run([], { recording: false }).some(c => c.metrics)).toBe(false);
+  });
+
+  it('counts submitted effort switches even without usage and never prices missing usage as zero', () => {
+    const rows = [router('root', { sent: true, turn: 't1', from: { model: 'claude-opus-5-5', effort: 'high' }, patch: { effort: 'low' } }),
+      router('prepared', { turn: 't1', index: 0, scope: 'root', routed: true }),
+      router('root_result', { turn: 't1', index: 0, requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', applied: { effort: 'low' }, usage: {} })];
+    expect(check(run(rows), 'router_cost').metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
+  });
+
+  it('refreshes Router checks after a record replacement or the 24-hour boundary', () => {
+    const result = router('root_result', { requested: 'claude-sonnet-5-5', observed: 'claude-opus-5-5' }, 20);
+    const gate = rec('admission_result', {}, 1);
+    expect(check(run([result, gate]), 'router_applied').level).toBe('fail');
+    expect(check(run([{ ...result, observed: 'claude-sonnet-5-5' }, gate]), 'router_applied').level).toBe('ok');
+    expect(check(run([result, gate], { now: NOW + (24 * 60 - 10) * 60_000 }), 'router_applied')).toMatchObject({ level: 'info', message: expect.stringContaining('0 routed requests') });
+  });
+
+  it('counts Codex provider applications from their actual receipt, separately from selection', () => {
+    const rows = [rec('codex_router_result', { selected_model: 'gpt-6-sol', selected_effort: 'low', applied: false }),
+      rec('codex_route_applied', { request_id: 'sent', selected_model: 'gpt-6-sol', selected_effort: 'low', applied: true }),
+      rec('codex_route_applied', { request_id: 'mismatch', selected_model: 'gpt-6-sol', selected_effort: 'low', applied: false })];
+    expect(check(run([], { traces: { codex: { records: rows, unreadable: 0 } } }), 'router_cost').metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
+  });
+});
+
 describe('activity: untrackable (#279)', () => {
   it('warns 추적 불가 when there is no trace at all, and judges nothing else', () => {
     const checks = run([]);
@@ -155,6 +214,7 @@ describe('activity: router_cost', () => {
     expect(c).toMatchObject({ level: 'warn', message: expect.stringContaining('unknown/untracked') });
     expect(c.message).toContain('1 root requests with incomplete usage; 1 sessions excluded');
     expect(c.message).not.toContain('net ');
+    expect(c.metrics?.effect).toBeNull();
   });
 
   it('ACT-USAGE-01 computes explicit zero counters', () => {
@@ -165,6 +225,7 @@ describe('activity: router_cost', () => {
     const zero = check(run(result('claude-haiku-5-5', { input: 0, cache_read: 0, cache_creation: 0, output: 0 }, 5)), 'router_cost');
     expect(zero.level).toBe('ok');
     expect(zero.message).toContain('net +$0.00 at observed TTL');
+    expect(zero.metrics?.effect).toBe(0);
   });
 
   it.each(['input', 'cache_read', 'cache_creation', 'output'])('ACT-USAGE-01 distinguishes mixed zero and missing %s', (counter) => {
@@ -240,7 +301,9 @@ describe('activity: router_cost', () => {
       ...result('claude-opus-5-5', { input: 0, output: 100, cache_read: 0, cache_creation: 130_100 }, 28),
     ];
     // New content is 10,000, then zero. Savings .33992 minus the return rewrite 1.01478 = -.67486.
-    expect(check(run(rows), 'router_cost')).toMatchObject({ level: 'fail', message: expect.stringContaining('net -$0.67 at observed TTL') });
+    const c = check(run(rows), 'router_cost');
+    expect(c).toMatchObject({ level: 'fail', message: expect.stringContaining('net -$0.67 at observed TTL') });
+    expect(c.metrics?.effect).toBeCloseTo(-.67486);
   });
 
   it('uses the observed five-minute TTL on a return after ten minutes', () => {
@@ -264,6 +327,10 @@ describe('activity: router_cost', () => {
     const c = check(run([...rows, { ...call, event: 'request' }, { ...call, event: 'late' }]), 'router_cost');
     expect(c).toMatchObject({ level: 'fail', message: expect.stringContaining('minus Jev $0.0840') });
     expect(c.message).toContain('net -$0.05');
+    expect(c.metrics).toMatchObject({ fired: 1, applied: 1, regression: 1 });
+    expect(c.metrics?.effect).toBeCloseTo(-.048);
+    const withChild = check(run([...rows, router('prepared', { scope: 'child', agent_id: 'child', routed: true })]), 'router_cost');
+    expect(withChild.metrics).toMatchObject({ applied: 2, effect: c.metrics?.effect });
   });
 
   it.each(['usage', 'model', 'receipt'])('keeps Jev cost unknown without recorded %s', missing => {

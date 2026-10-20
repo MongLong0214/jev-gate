@@ -39,6 +39,42 @@ const rows = (p: ReturnType<typeof page>) => p.get('runs').querySelectorAll('but
 const node = (p: ReturnType<typeof page>, id: string) => p.w.document.querySelector(`#pipeline .node[data-feature="${id}"]`)! as HTMLElement;
 const filled = (p: ReturnType<typeof page>) => [...p.get('rc').querySelectorAll('li button')];
 
+it('keeps worker cards without a contract verdict honest in both languages', () => {
+  const p = page();
+  for (const outcome of [undefined, 'host_ended'] as const) {
+    p.push(snapshot([run('native', 'claude', [step('native', 'workers', 'host', outcome ? { outcome } : {})])]));
+    expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('판정 없음');
+  }
+  p.click('#language'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('No verdict');
+});
+
+it('renders doctor activity facts and unknown measurements in existing node lines and inspector', () => {
+  const p = page(), s = snapshot([run('r', 'claude', [step('x', 'router', 'host')])]);
+  const facts = [{ feature: 'router', level: 'warn', metrics: { fired: 9, applied: 3, effect: null, regression: 1 }, current: { model: { selected: 'sonnet', selectedEffort: 'high', observed: null } } }];
+  p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
+  expect(node(p, 'router').querySelector('.ds')!.textContent).toContain('발화 9 · 적용 3 · 회귀 1');
+  p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('효과 (루트 비용 추정) 미확인');
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('루트 · 선택 · sonnet · high');
+  p.click('#language'); expect(text(p, 'circuit-inspector')).toContain('effect (root cost estimate) unknown');
+  p.click('[data-host=codex]'); expect(node(p, 'router').querySelector('.ds')!.textContent).toBe('24h untrackable');
+});
+
+it.each([[0, '+$0.00'], [-.67486, '−$0.67'], [[-.1, .2], '−$0.10 / +$0.20']])('renders Router net %j without cache-price assumptions', (effect, expected) => {
+  const p = page(), s = snapshot([]), facts = [{ feature: 'router', level: 'ok', metrics: { fired: 1, applied: 1, regression: 0, effect } }];
+  p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain(expected);
+  p.click('.node[data-feature=router]');
+  expect(text(p, 'circuit-inspector')).toContain(expected);
+});
+
+it.each(['tool_editing_floor', 'tool_read_only', 'tool_editing', 'not_checked', 'upgrade_allowed', 'cost_allows', 'basis_absent', 'child_pair_changed_before_submission', 'ok', 'invalid', 'unknown_model', 'ambiguous'])('labels emitted reason %s and preserves future codes in either language', reason => {
+  const p = page(), s = (code: string) => snapshot([run('r', 'claude', [step('x', 'router', 'host', { routing: { scope: 'root', baseline: 'opus', modelReason: code, effortReason: code } })])]);
+  p.push(s(reason)); expect(node(p, 'router').querySelector('.nt')!.textContent).not.toContain(reason);
+  p.click('#language'); expect(node(p, 'router').querySelector('.nt')!.textContent).not.toContain(reason);
+  p.push(s('future_reason_987')); expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('future_reason_987');
+  p.click('#language'); expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('future_reason_987');
+});
+
 describe('dashboard live interactions', () => {
   it('shows the running version and honest latest-release status only when a version is known, in both languages', () => {
     const p = page(), release = { latest: '0.8.15', checkedAt: stamp, error: null };
@@ -116,10 +152,10 @@ describe('dashboard live interactions', () => {
     for (const li of p.get('runs').querySelectorAll('li')) expect(li.textContent?.trim()).not.toBe('');
     expect(text(p, 'rd-name')).toBe(''); expect(p.get('trace').querySelector('li.empty')).not.toBeNull();
   });
-  it('plays one round trip per new record and updates the node and the call log only on arrival', async () => {
+  it('updates values and the call log immediately, independently of round-trip motion', async () => {
     const p = page(), a = step('a', 'admission', 'jev', { durationMs: 60 }); p.push(snapshot([run('one', 'claude', [a])])); p.push(snapshot([run('one', 'claude', [a])]));
     p.push(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80, at: new Date().toISOString() })]), run('other', 'codex', [step('w', 'workers', 'host', { at: new Date().toISOString() })])]));
-    expect(node(p, 'allocation').querySelector('.dec b')!.textContent).toBe('–'); expect(filled(p)).toHaveLength(1);
+    expect(node(p, 'allocation').querySelector('.dec b')!.textContent).not.toBe('–'); expect(filled(p)).toHaveLength(2);
     await vi.waitFor(() => expect(filled(p)).toHaveLength(2), { timeout: 5000 });
     expect(node(p, 'allocation').querySelector('.dec b')!.textContent).not.toBe('–'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).not.toBe('–');
     expect(text(p, 'rc')).not.toContain('workers');
@@ -151,7 +187,7 @@ describe('dashboard live interactions', () => {
     })], { title: 'Codex 실행' }); p.push(snapshot([r])); p.click('#language'); p.click('.node[data-feature=router]');
     const all = ['runs', 'trace', 'rd-meta', 'circuit-inspector', 'rc', 'pipeline'].map(id => text(p, id)).join(' ');
     expect(all).not.toMatch(/[가-힣]/); expect(all).toContain('Selected and observed models match');
-    expect(all).toContain('Decision evidence'); expect(all).toContain('gpt-6.1-sol');
+    expect(all).toContain('Decision basis'); expect(all).toContain('gpt-6.1-sol');
   });
   it.each([['실행 전 점검 충돌', 'Preflight conflict'], ['실행 예약 기록 불가', 'Reservation unavailable'], ['Codex 워커 시작 거부', 'Codex worker start rejected'], ['Codex 워커 턴 실패', 'Codex worker turn failed'], ['워커 중단', 'Worker interrupted'], ['워커 종료 미확인 · 예약 유지', 'Worker termination unconfirmed · reservation kept'],
     ['부모 권한 전달 불가', 'Parent permissions unavailable'], ['Worktree 생성 불가', 'Worktree unavailable'], ['배정 모델·effort 사용 불가', 'Allocated model or effort unavailable'], ['시작 전 취소', 'Cancelled before start']])('translates the Codex dispatch failure reason %s (#233, #287)', (ko, en) => {
@@ -213,7 +249,7 @@ describe('dashboard live interactions', () => {
     const p = page(); p.push(snapshot([run('r', 'claude', [step('w', 'admission', 'jev', { state: 'active', at }), step('d', 'router', 'jev', { durationMs: 80, receipt: { status: 200, code: null, model: 'jev-1.14.0', input: 10, output: 1, costUsd: null, choice: 'claude-sonnet-5 · high', confidence: .9, threshold: .6, direction: null } })])]));
     const wait = p.w.document.querySelector('#rc button[data-call=w]')!;
     expect(wait.textContent).toContain('응답 대기'); expect(wait.querySelector('.run[data-since]')).not.toBeNull();
-    expect(p.w.document.querySelector('#pipeline .jb .v')?.textContent).toBe('1.14'); expect(p.w.document.querySelector('#pipeline .rail')?.classList.contains('wait')).toBe(true);
+    expect(p.w.document.querySelector('#pipeline .jb .v')?.textContent).toContain('p50 80ms'); expect(p.w.document.querySelector('#pipeline .rail')?.classList.contains('wait')).toBe(true);
     const first = wait.querySelector('.run')!.textContent; await vi.waitFor(() => expect(wait.querySelector('.run')!.textContent).not.toBe(first), { timeout: 3000 });
   });
   it('estimates today cost from recorded tokens only and labels it as an estimate', () => {
@@ -401,18 +437,18 @@ it('fills the first rows of a long list at once and the rest in later tasks, cou
   await vi.waitFor(() => expect(shown().every(Boolean)).toBe(true));
 });
 
-it('draws one strip tick per record of the last minute, caps a burst of trips and shows no per-minute rate', () => {
+it('draws every recent strip tick and updates a burst immediately alongside the live rate and rolling median', () => {
   const old = step('old', 'router', 'jev', { at: new Date(Date.now() - 90_000).toISOString(), durationMs: 40 });
   const base = Date.now(), records = (n: number) => Array.from({ length: n }, (_, i) => step(`r${i}`, 'router', 'jev', { durationMs: 50 + i, at: new Date(base + i).toISOString() }));
   const p = page(); p.push(snapshot([run('r', 'claude', [old, ...records(3)])]));
   expect(node(p, 'router').querySelectorAll('.strip .tr i')).toHaveLength(3); expect(node(p, 'router').querySelector('.strip')!.getAttribute('aria-hidden')).toBe('true');
   expect(filled(p)).toHaveLength(4);
   const rate = /\/분|분당|최근 1분|처리량|per minute|\/min/;
-  expect(p.w.document.body.textContent).not.toMatch(rate); p.click('#language'); expect(p.w.document.body.textContent).not.toMatch(rate);
+  expect(p.w.document.body.textContent).toMatch(rate); expect(p.w.document.querySelector('.jb .v')?.textContent).toContain('p50 50ms'); p.click('#language'); expect(p.w.document.body.textContent).toMatch(rate);
   const burst = page(); burst.push(snapshot([run('r', 'claude', records(1))])); burst.push(snapshot([run('r', 'claude', records(1))]));
   burst.push(snapshot([run('r', 'claude', records(40))]));
-  // The newest 24 wait for their trips; the older backlog shows at once.
-  expect(burst.get('rc').querySelector('button')!.textContent).toContain('65ms');
+  // Even a burst larger than the particle budget shows its newest value immediately.
+  expect(burst.get('rc').querySelector('button')!.textContent).toContain('89ms');
 });
 
 it('marks selection with a tint or a border colour only, never an inset or left accent bar', () => {
@@ -494,7 +530,7 @@ it('lands a recorded host step on its node, strip and run row without a Jev roun
   const p = page(); p.push(snapshot([base])); p.push(snapshot([base]));
   const ticks = () => node(p, 'workers').querySelectorAll('.strip .tr i').length; expect(ticks()).toBe(1);
   p.push(snapshot([run('x', 'codex', [...base.steps, step('t1', 'workers', 'host', { lifecycle: true, title: 'Codex · 도구 결과', at: new Date().toISOString() })])]));
-  expect(ticks()).toBe(1);
+  expect(ticks()).toBe(2);
   await vi.waitFor(() => { expect(node(p, 'workers').classList.contains('zap')).toBe(true); expect(p.get('runs').querySelector('[data-run="x"]')!.classList.contains('zap')).toBe(true); }, { timeout: 3000, interval: 5 });
   expect(ticks()).toBe(2); expect(p.w.document.querySelectorAll('.trip,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(0);
 });

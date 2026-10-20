@@ -3,9 +3,12 @@ import { lstatSync, opendirSync, statSync } from 'node:fs';
 import type { Env } from './config.js';
 import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './explain.js';
 import { readLiveness } from './liveness.js';
-import { buildOperations, type ModRecord, type OperationsView } from './operations.js';
+import { buildOperations, traceFeature, type ModRecord, type OperationStep, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
 import { memo, memoGeneration } from './memo.js';
+import { activityChecks, type ActivityCheck, type ActivityInput } from './doctor-activity.js';
+import { recordingStatus } from './recording.js';
+import { resolveApiKey } from './credentials.js';
 
 /**
  * A local view of calls the gate and the router already recorded. It whitelists short tokens from those records.
@@ -83,6 +86,8 @@ export interface ActivitySnapshot {
   routerChanges: number;
   events: ActivityEvent[];
   operations: OperationsView;
+  /** Doctor is the sole authority; no prose or free-form trace fields leave these checks. */
+  activity24h: Record<Host | 'all', Array<Pick<ActivityCheck, 'feature' | 'level' | 'metrics'> & { current?: Pick<OperationStep, 'model' | 'receipt'> }>>;
   /** The turn on screen. An intent with no result yet is `working` until the result file appears. */
   live: LiveBoard;
   notes: string[];
@@ -191,7 +196,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     const decision = sub(r, 'decision');
     const shape = decision ? token(decision['shape']) : null;
     const why = decision ? reasonText(decision['reason']) : null;
-    const shapeText = shape === 'orchestrated' ? '플래너에게 작업을 나눠 맡깁니다' : shape === 'direct' ? '이 세션이 이어서 처리합니다' : null;
+    const shapeText = shape === 'orchestrated' ? '워커에게 작업을 맡깁니다' : shape === 'direct' ? '이 세션이 이어서 처리합니다' : null;
     const price = priceText(r);
     // The skip line already carries the reason, so the second line only says what the session did.
     const used = call.kind === 'skipped' ? '원래 호출을 유지합니다' : [why ?? shapeText, why && shape === 'orchestrated' ? shapeText : null, price].filter((x): x is string => x !== null).join(' · ');
@@ -335,7 +340,6 @@ const OPEN_FOR_MS = 8_000;
 const INTENT_RESULT: Record<string, string> = {
   admission_intent: 'admission_result',
   pre_intent: 'pre_result',
-  interpretation_intent: 'interpretation_result',
 };
 
 const ROUTER_OPEN = new Set(['root', 'child', 'spawn']);
@@ -354,7 +358,6 @@ const phaseTitle = (r: Rec): string => {
   const phase = token(r['phase']);
   if (phase === 'admission_intent' || phase === 'admission_result') return '게이트 A';
   if (phase === 'pre_intent' || phase === 'pre_result') return '워커 등급';
-  if (phase?.startsWith('interpretation')) return '계획 해석';
   return phase ?? '기록';
 };
 
@@ -381,7 +384,7 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   const steps: Array<LiveStep & { turn: string }> = [];
   for (const r of records) {
     const phase = token(r['phase']);
-    if (!phase || INTENT_RESULT[phase]) continue;
+    if (!phase || !traceFeature(phase) || INTENT_RESULT[phase]) continue;
     const ev = gateEvent(r);
     const at = ev?.at || iso(r['written_at']);
     if (ev) {
@@ -547,6 +550,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
   const sources: SourceRows[] = [];
   let traceFiles = 0;
   let unreadable = 0;
+  const traces: ActivityInput['traces'] = {};
   const traceDirs = opts.traceDirs ?? (opts.traceDir ? [{ host: opts.host ?? 'claude', dir: opts.traceDir }] : []);
   const traceAvailable = traceDirs.some(source => readableDir(source.dir));
 
@@ -561,6 +565,11 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     const rows = deriveRows(read.records, source.host, opts.host, feed, known?.get(source.dir));
     known?.set(source.dir, rows);
     sources.push(rows);
+    for (const r of read.records) {
+      const host = r['host'] === 'codex' || r['host'] === 'claude' ? r['host'] : source.host;
+      (traces[host] ??= { records: [], unreadable: 0 }).records.push(r);
+    }
+    (traces[source.host] ??= { records: [], unreadable: 0 }).unreadable += read.unreadable;
   }
   // concat sizes each list once; the history is copied on every rebuild.
   const gateRecords = ([] as Rec[]).concat(...sources.map(rows => rows.gate)), modRecords = ([] as ModRecord[]).concat(...sources.map(rows => rows.mods));
@@ -584,6 +593,18 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     trace: traceAvailable,
     ...(host === 'codex' ? { host } : {}),
   });
+  const recording = recordingStatus(opts.env).enabled, keyPresent = !!resolveApiKey(opts.env);
+  const currentRouter = (only?: Host): Pick<OperationStep, 'model' | 'receipt'> | undefined => {
+    const step = operations.feed.find(s => s.feature === 'router' && s.routing?.scope === 'root' && (s.model || s.receipt?.choice) && (!only || s.host === only));
+    return step ? { ...(step.model ? { model: step.model } : {}), ...(step.receipt ? { receipt: step.receipt } : {}) } : undefined;
+  };
+  const check = (only?: Host): ActivitySnapshot['activity24h']['all'] => activityChecks({ traces: only ? { [only]: traces[only] } : traces,
+    now: now.getTime(), installed: null, recording, keyPresent, codexOwner: null, liveness: only === 'codex' ? null : liveness })
+    .filter(c => c.feature && c.metrics).map(c => {
+      const current = c.feature === 'router' ? currentRouter(only) : undefined;
+      return { feature: c.feature!, level: c.level, metrics: c.metrics!, ...(current ? { current } : {}) };
+    });
+  const claudeActivity = check('claude'), codexActivity = check('codex');
   return {
     host,
     at: now.toISOString(),
@@ -598,6 +619,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     routerChanges,
     events: events.slice(0, MAX_EVENTS),
     operations,
+    activity24h: { all: !traces.codex?.records.length ? claudeActivity : !traces.claude?.records.length ? codexActivity : check(), claude: claudeActivity, codex: codexActivity },
     live: feed ? buildLive(gateRecords, modRecords.flatMap(row => row.component === 'router' ? [{ at: row.at, rec: row.rec }] : []), now.getTime()) : buildLive([], [], now.getTime()),
     notes,
   };

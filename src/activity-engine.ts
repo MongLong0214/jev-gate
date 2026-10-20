@@ -3,6 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { loadActivity } from './activity.js';
+import { activityStableUntil } from './doctor-activity.js';
 import type { DashboardSources } from './dashboard.js';
 import { diffFrame, frameOperations, type FrameMemo, type FrameSnapshot } from './dashboard-patch.js';
 import { TraceDirectoryReader, type TraceRead } from './explain.js';
@@ -17,7 +18,7 @@ export interface LoadedActivity { key: string; base: string | null; patch: strin
 
 /** Owns the readers and their caches. It runs on the activity thread, or in process when that thread is unavailable. */
 export const activityHandler = (sources: DashboardSources) => {
-  const traceReader = new TraceDirectoryReader();
+  const traceReader = new TraceDirectoryReader(1000);
   const dirs = sources.traceDirs?.map(source => source.dir) ?? (sources.traceDir ? [sources.traceDir] : []);
   // A replacement thread starts a new key series, so no viewer can apply its patches to an older thread's frame.
   const epoch = randomUUID().slice(0, 8);
@@ -36,11 +37,12 @@ export const activityHandler = (sources: DashboardSources) => {
       // No record changed and no age or window edge passed: a rebuild would draw the same frame, so it is skipped.
       const reads = dirs.map(dir => traceReader.read(dir)), liveness = livenessStamp();
       if (last && Date.now() < last.loaded.until && liveness === last.liveness && reads.every((read, i) => read === last!.reads[i])) return { ...last.loaded, base: null, patch: null };
-      const activity = loadActivity({ ...sources, traceReader, now: new Date(), feed: false });
+      const now = new Date(), activity = loadActivity({ ...sources, traceReader, now, feed: false });
       const { events: _events, live: _live, ...rest } = activity, shown = { ...rest, operations: frameOperations(activity.operations) };
       const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
       memo = diff.memo; current = shown; whole = null; operations = activity.operations;
-      const loaded = { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until: operationsStableUntil(), ms: performance.now() - started };
+      const until = Math.min(operationsStableUntil(), ...reads.map(read => activityStableUntil(read.records, now.getTime())));
+      const loaded = { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until, ms: performance.now() - started };
       last = { loaded, reads, liveness };
       return loaded;
     },

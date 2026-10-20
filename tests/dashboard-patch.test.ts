@@ -12,6 +12,7 @@ const step = (id: string, extra: Partial<OperationStep> = {}): OperationStep => 
 const run = (id: string, steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, title: id, source: 'router', mode: 'm', firstAt: steps[0]?.at ?? '', lastAt: steps.at(-1)?.at ?? '', state: 'done', steps, ...extra });
 const snapshot = (runs: OperationRun[], extra: Record<string, unknown> = {}): ActivitySnapshot => ({
   host: 'claude', at: new Date().toISOString(), traceDir: null, traceFiles: 1, unreadable: 0, liveness: null, jevCalls: 0, credit: { exhausted: false, at: null }, direct: 0, orchestrated: 0, routerChanges: 0, events: [], notes: [],
+  activity24h: { all: [], claude: [], codex: [] },
   live: { mode: 'waiting', sig: 'x' } as unknown as ActivitySnapshot['live'],
   operations: { runs, features: [], feed: runs.flatMap(r => r.steps.map(s => ({ ...s, runId: r.id, runTitle: r.title, host: 'claude' as const }))), active: 0, attention: 0, requests: 0,
     latency: { measured: 0, p50: null, p95: null, fastest: null, latest: null, recent: [], today: {} } },
