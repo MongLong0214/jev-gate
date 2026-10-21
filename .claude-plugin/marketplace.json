@@ -10,8 +10,8 @@
       "name": "jev-gate",
       "source": {
         "source": "archive",
-        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.8.42/jev-gate-0.8.42.zip",
-        "sha256": "43fdc5b1fa75fd000a03b3c8b6cd4a72ce79ad1f99e7b6f56c91ee48704dd8cc"
+        "url": "https://github.com/MongLong0214/jev-gate/releases/download/v0.8.43/jev-gate-0.8.43.zip",
+        "sha256": "fa1e213b831baa9a51286b172cdc93512fe1c266e28fb31d6ef49828b9650e7a"
       },
       "displayName": "Jev Gate",
       "description": "Extractive compaction, a Jev effort and model router, and an orchestration gate, in one install. Gate, Compact, and the Router are on by default, and each of those three has a switch. Needs Node 22. A TypeSafe key is separate from a Claude login. The plugin configures Function Hooks automatically for compaction and routing.",

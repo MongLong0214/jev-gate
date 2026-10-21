@@ -58,7 +58,7 @@ const exactReferences = (request: Obj): { request: Obj; anchors: Set<number>; re
   const cutoff = results[Math.max(0, results.length - 6)] ?? 0;
   const retained = new Map<string, { item: number; call: string; encoded: string }>();
   let next: unknown[] | undefined;
-  const anchors = new Set<number>(); let removed = 0, references = 0, examined = 0;
+  const anchors = new Set<number>(), eligible = new Set<number>(); let removed = 0, references = 0, examined = 0;
   for (let at = 0; at < cutoff; at++) {
     const x = obj(input[at]); if (!x) { retained.clear(); continue; }
     // Do not carry a reference across a changed instruction/user window or opaque checkpoint.
@@ -73,6 +73,7 @@ const exactReferences = (request: Obj): { request: Obj; anchors: Set<number>; re
     examined += text.length + call.text.length;
     if (examined > 2_000_000) break;
     if (looksSecret(call.text) || looksSecret(text) || protectedText.test(text)) continue;
+    eligible.add(at);
     const encoded = JSON.stringify(output);
     const key = hash(JSON.stringify([x['type'], call.name, call.text, output]));
     const canonical = retained.get(key);
@@ -86,13 +87,14 @@ const exactReferences = (request: Obj): { request: Obj; anchors: Set<number>; re
     anchors.add(canonical.item); removed += reduction; references++;
   }
   let repetitions = 0;
-  // Encode a canonical repeated original once; every reference stays resolvable locally.
-  for (const at of anchors) {
-    const item = obj(next![at])!, output = item['output'];
+  // A complete repeated result has an exact representation even without another identical
+  // invocation. Keep the same old-result eligibility and never encode a replacement reference.
+  for (const at of eligible) {
+    const item = obj((next ?? input)[at])!, output = item['output'];
     const before = repetitions;
     const encode = (text: string) => { const value = exactRepetition(text); if (value !== text) { removed += text.length - value.length; repetitions++; } return value; };
     const encoded = typeof output === 'string' ? encode(output) : (output as Obj[]).map(b => ({ ...b, text: encode(String(b['text'])) }));
-    if (repetitions !== before) next![at] = { ...item, output: encoded };
+    if (repetitions !== before) { next ??= [...input]; next[at] = { ...item, output: encoded }; anchors.add(at); }
   }
   return next ? { request: { ...request, input: next }, anchors, removed, references, repetitions } : unchanged;
 };
@@ -167,7 +169,7 @@ export const prepareCodexCompact = async (args: {
   const request = exact.request;
   // An original referenced by another result must not be semantically omitted afterwards.
   const candidates = compactCandidates(request['input']).map(c => ({ ...c, parts: c.parts.filter(p => !exact.anchors.has(p.item)) })).filter(c => c.parts.length);
-  if (!candidates.length && !exact.references) return skip('no_candidates');
+  if (!candidates.length && !exact.removed) return skip('no_candidates');
   const unseen = candidates.filter(c => !state.decisions.has(c.id));
   let preserveReason = 'preserved';
   let assessmentFailed = false;
@@ -234,7 +236,7 @@ export const prepareCodexCompact = async (args: {
     const selection = state.selections.get(c.id); if (selection && !receipt.selection_ids.includes(selection)) receipt.selection_ids.push(selection);
     const key = `${p.item}:${p.block}`; const parts = replacements.get(key) ?? []; parts.push(p); replacements.set(key, parts);
   }
-  if (!replacements.size && !exact.references) return skip(preserveReason);
+  if (!replacements.size && !exact.removed) return skip(preserveReason);
   receipt.removed_chars = exact.removed;
   if (exact.references) receipt.exact_references = exact.references;
   if (exact.repetitions) receipt.exact_repetitions = exact.repetitions;
@@ -251,6 +253,6 @@ export const prepareCodexCompact = async (args: {
     else { const blocks = [...output as unknown[]]; blocks[first.block] = { ...obj(blocks[first.block])!, text: value }; input[first.item] = { ...item, output: blocks }; }
   }
   receipt.applied = receipt.removed_chars > 0;
-  write('prepared', { reason: replacements.size ? 'selected_old_tool_text' : 'exact_duplicate_reference', estimated_removed_tokens: null, total_token_saving: 'unmeasured' });
+  write('prepared', { reason: replacements.size ? 'selected_old_tool_text' : exact.references ? 'exact_duplicate_reference' : 'exact_repetition', estimated_removed_tokens: null, total_token_saving: 'unmeasured' });
   return { request: receipt.applied ? { ...request, input } : request, receipt };
 };

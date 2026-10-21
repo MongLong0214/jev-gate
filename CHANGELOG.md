@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.43 — 2026-10-21 — Preserve standalone repetition counts
+
+- Represent a wholly repeated eligible old tool output with its exact unit and count even when no identical invocation exists (#317). Keep the latest six results, tool links, metadata, error and secret handling, request boundaries and native compaction output unchanged. Exact representations remain protected from semantic omission; no paid assessment or external retrieval is added.
+- The unchanged separate OAuth fact/count probe used 72,875 tokens OFF versus 57,236 ON (21.46% less), with no Jev judgments or extra tools. Both ON responses recovered the 37/38 thresholds, 80/79 counts and Unicode exactly; both OFF responses miscounted 79 as 80. This narrow result does not establish representative quality or the overall 50% target in #300/#317.
+
 ## v0.8.42 — 2026-10-21 — Retain exact tool evidence without repeated input
 
 - Observe native Compact SSE even when OpenAI omits Content-Type; do not label a terminal client close as a failed compaction before buffered observation finishes (#325). Keep explicit JSON responses, real upstream failures and response usage distinct.
