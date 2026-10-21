@@ -1,9 +1,15 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const bootstrap = await build({ entryPoints: [join(root, 'src/codex/hook-bootstrap.ts')], bundle: true, platform: 'node', format: 'esm', target: 'node22', minify: true, write: false });
+const command = `node --input-type=module -e '${bootstrap.outputFiles[0].text.trim().replaceAll("'", "'\\''")}'`;
+const hooksPath = join(root, 'plugins/codex/hooks/hooks.json');
+const hooks = JSON.parse(readFileSync(hooksPath, 'utf8'));
+for (const groups of Object.values(hooks.hooks)) for (const group of groups) for (const hook of group.hooks) hook.command = command;
+writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + '\n');
 await build({
   entryPoints: {
     hook: join(root, 'src/codex/hook.ts'),

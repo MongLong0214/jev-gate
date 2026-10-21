@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.38 — 2026-10-21 — Hooks survive native plugin upgrades
+
+- Describe unavailable native token usage in Codex `depth_unknown` notices instead of Claude transcript/headless behavior (#311). Gate A keeps the original turn; Router application is observed separately.
+- Embed the Codex hook launcher in the trusted command so deleting a previous plugin cache version cannot remove the launcher itself (#310). Keep the loaded bundle while present; after native pruning, use only the sole valid replacement of the same installed plugin. Missing, ambiguous or corrupt installations preserve native execution.
+- Handle a closed host output pipe without a nonzero exit. Keep native hook trust, permission checks, existing deadlines and user settings.
+- The currently observed exit 1 was Node trying to load a deleted 0.8.32 hook before the hook error handler could run. This repair does not establish the cause of every historical hook failure or measured Router token savings.
+
 ## v0.8.37 — 2026-10-21 — Preserve the native Codex provider
 
 - Automatically configure the official `openai_base_url` endpoint instead of replacing the global provider (#304). Preserve native authentication, model, effort, comments and user settings, and restore only the owned legacy global provider selection while retaining its owned table as a historical-resume alias with Codex's revision-checked writer.
