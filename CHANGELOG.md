@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.42 — 2026-10-21 — Retain exact tool evidence without repeated input
+
+- Reference byte-identical older plaintext tool results to an original retained in the same request, without a paid Jev judgment (#317). Preserve call/result topology, recent results, media, failures and secrets; prevent cross-boundary references and semantic removal of referenced originals.
+- Represent a wholly repeated canonical original with its exact unit and count, verifying reconstruction locally. Retain all distinct content and occurrence counts; no transcript rewrite or external retrieval is introduced.
+- The unchanged bounded OAuth repeated-context comparison completed both reversed-order pairs with all required facts and no extra tools: native total 35,470 OFF versus 17,534 ON, no Jev calls, a 50.57% reduction for that fixture. This is not Router-only savings or representative work-quality proof; #300 and #317 retain their broader completion criteria.
+- Including an actual native compaction and follow-up in both pairs reduced total usage from 163,990 to 92,140 (43.81%), below the broader target. A separate frozen exact-fact/count probe reduced tokens 10.34%; ON passed both responses while OFF miscounted one value in both. Keep these limits alongside the first-response result.
+
 ## v0.8.41 — 2026-10-21 — Preserve active native connections
 
 - Distinguish a native plugin version replacement from removal (#322). Keep the serving helper during updates, confirm removal on consecutive checks, and wait for inference, hooks and owned workers before retiring it. Claim idle status before restoring configuration so new requests cannot enter that interval.
