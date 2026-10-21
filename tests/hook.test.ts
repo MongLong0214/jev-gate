@@ -918,12 +918,14 @@ describe('single executor (A19)', () => {
   });
 
   it('accepts a worker that changed nothing and had nothing to check', async () => {
-    const env = singleEnv();
+    const dir = join(tmp, 'trace-readonly-count');
+    const env = { ...singleEnv(), JEV_GATE_TRACE_DIR: dir };
     const fetchImpl = fakeJev({ execution: 'orchestrated' });
     await run(env, promptEvent(), fetchImpl);
     await run(env, preEvent('Agent', agentInput({ prompt: 'Do what the request asks.' })), fetchImpl);
     await run(env, workerPost('toolu_1', workerReply({ changed_files: [], checks: [] })), fetchImpl);
     expect(state(env).current.receipts[0]?.verdict).toBe('accept');
+    expect(readTraceRecords(dir).records.find(r => r['phase'] === 'post')).toMatchObject({ changed_files_count: 0, reported_checks: { pass: 0, fail: 0, not_run: 0 } });
   });
 
   it('does not complete the job when the one worker says it did not finish', async () => {

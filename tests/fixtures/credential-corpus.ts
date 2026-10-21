@@ -39,6 +39,16 @@ export const ASSIGNMENT_CONTEXTS = [
 
 // CLI operands establish the credential meaning even for short literals. Every syntax has a reference twin.
 export const CLI_CREDENTIAL_CORPUS = [
+  { tool: 'docker', label: '#295 global value', render: (value: string) => `docker --context production --config ./config login -u review -p ${value}` },
+  { tool: 'docker', label: '#295 global equals', render: (value: string) => `docker --context=production login -p ${value}` },
+  { tool: 'helm', label: '#295 global value', render: (value: string) => `helm --kube-context production -n review repo add review https://example.test --password ${value}` },
+  { tool: 'kubectl', label: '#295 global value', render: (value: string) => `kubectl --context production --token ${value} get pods` },
+  { tool: 'git', label: '#295 global value', render: (value: string) => `git -C ./review -c http.extraHeader=Authorization:\\ Basic\\ ${value} status` },
+  { tool: 'mysql', label: '#295 global value', render: (value: string) => `mysql --defaults-file ./config -p${value}` },
+  { tool: 'aws', label: '#295 global value', render: (value: string) => `aws --profile review configure set aws_secret_access_key ${value}` },
+  ...['\\\n', '\\\r\n'].map(newline => ({ tool: 'curl', label: '#295 continuation', render: (value: string) => `curl ${newline}  -u reviewer:${value} https://example.test` })),
+  ...['-sSu ', '-sSu', '-fsSLu ', '-sSU '].map(flag => ({ tool: 'curl', label: '#295 cluster ' + flag, render: (value: string) => `curl ${flag}reviewer:${value} https://example.test` })),
+
   { tool: 'curl', label: 'M1 -u quoted', value: 'synthetic-canary-123', render: (value: string) => `curl -u 'reviewer:${value}' https://example.test` },
   { tool: 'curl', label: 'M1 --user quoted', value: 'synthetic-canary-123', render: (value: string) => `curl --user 'reviewer:${value}' https://example.test` },
   ...['-u ', '-u', '--user ', '--user=', '--proxy-user ', '--proxy-user=', '-U ', '-U'].map(flag => ({
@@ -82,6 +92,8 @@ export const CLI_CREDENTIAL_CASES = CLI_CREDENTIAL_CORPUS.flatMap(row => [
 export const CLI_CREDENTIAL_NEGATIVES = [
   'curl -u "$USER:$PASS" https://x', 'curl -u user: https://x', 'curl -u "${CREDS}" https://x',
   'docker login --password-stdin', 'client --password-file ./pw.txt',
+  'docker --context production run -p 8080:80', 'helm --kube-context production list',
+  'curl -sS -- -u user:p7', 'curl -o resultu user:p7',
   'docker run -p 8080:80', 'ssh -p 2222 host', 'python -m http.server -p 8000', 'mkdir -p dir',
   'git log -p', 'npm run dev -- -p 3000', 'mysql -p', 'use curl -u with a token',
   'client -a p7 -k p7 -N p7 -P p7 -u user:p7 -p p7',

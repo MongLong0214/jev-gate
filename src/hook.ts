@@ -1343,6 +1343,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         attempt,
         verdict: finalVerdict,
         verdict_reason: reason,
+        changed_files_count: parsed?.ok ? parsed.value.changed_files.length : null,
         reported_checks: parsed?.ok
           ? {
             pass: parsed.value.checks.filter((check) => check.result === 'pass').length,
