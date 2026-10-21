@@ -107,10 +107,11 @@ describe('installed Codex archive', () => {
     } finally { child.kill(); }
   });
   it('runs the actual hook from a path with spaces and preserves execution on invalid input', () => {
-    const run = spawnSync(process.execPath, [join(installed, 'dist/hook.mjs')], { cwd: project, env: shellEnv, encoding: 'utf8', input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's' }) });
+    const command = JSON.parse(readFileSync(join(installed, 'hooks/hooks.json'), 'utf8')).hooks.SessionStart[0].hooks[0].command;
+    const run = spawnSync('/bin/sh', ['-c', command], { cwd: project, env: { ...shellEnv, PLUGIN_ROOT: installed }, encoding: 'utf8', input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's' }) });
     expect(run.status).toBe(0);
     expect(JSON.parse(run.stdout).hookSpecificOutput.additionalContext).toContain('native Codex plugin');
-    const invalid = spawnSync(process.execPath, [join(installed, 'dist/hook.mjs')], { cwd: project, env: shellEnv, encoding: 'utf8', input: 'invalid' });
+    const invalid = spawnSync('/bin/sh', ['-c', command], { cwd: project, env: { ...shellEnv, PLUGIN_ROOT: installed }, encoding: 'utf8', input: 'invalid' });
     expect(invalid).toMatchObject({ status: 0, stdout: '{}\n', stderr: '' });
   });
 

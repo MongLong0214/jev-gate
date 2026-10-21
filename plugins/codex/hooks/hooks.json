@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 3
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 5
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 5
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 5
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 5
           }
         ]
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 5
           }
         ]
@@ -83,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 5
           }
         ]
@@ -94,7 +94,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/dist/hook.mjs\"",
+            "command": "node --input-type=module -e 'import{existsSync as d,readFileSync as h,readdirSync as l}from\"node:fs\";import{basename as m,dirname as i,isAbsolute as f,join as n}from\"node:path\";import{pathToFileURL as w}from\"node:url\";async function y(){let t=process.env.PLUGIN_ROOT;if(!t||!f(t))throw new Error(\"missing plugin root\");let s=n(t,\"dist/hook.mjs\");if(!d(s)){let e=i(t);if(m(e)!==\"jev-gate\"||m(i(i(e)))!==\"cache\")throw new Error(\"not an installed cache\");let a=l(e,{withFileTypes:!0}).filter(o=>o.isDirectory()&&/^\\d+\\.\\d+\\.\\d+(?:-[\\w.-]+)?$/.test(o.name)).flatMap(o=>{let r=n(e,o.name);try{let c=JSON.parse(h(n(r,\".codex-plugin/plugin.json\"),\"utf8\"));return c.name===\"jev-gate\"&&c.version===o.name&&d(n(r,\"dist/hook.mjs\"))?[n(r,\"dist/hook.mjs\")]:[]}catch{return[]}});if(a.length!==1)throw new Error(\"no unambiguous installed hook\");s=a[0]}let{runCodexHook:p}=await import(w(s).href),u=await p({stdin:process.stdin,env:process.env});process.stdout.write(`${JSON.stringify(u)}\n`)}process.stdout.on(\"error\",()=>{});y().catch(()=>{process.stdout.write(`{}\n`)});'",
             "timeout": 3
           }
         ]

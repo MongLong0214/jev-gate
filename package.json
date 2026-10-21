@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.37",
+  "version": "0.8.38",
   "private": true,
   "license": "MIT",
   "description": "Jev policies for Claude Code and native Codex: task routing, observed contract checks, compaction and a live dashboard.",
