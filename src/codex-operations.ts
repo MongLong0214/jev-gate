@@ -13,12 +13,14 @@ const at = (r: Rec): string => typeof r['written_at'] === 'string' && /^\d{4}-\d
 const START_END: Record<string, string[]> = {
   UserPromptSubmit: ['Stop', 'Interrupt', 'SessionEnd'], PreToolUse: ['PostToolUse'],
   SubagentStart: ['SubagentStop'],
+  PreCompact: ['PostCompact'],
 };
 const TITLE: Record<string, string> = {
   SessionStart: 'Codex · 세션 시작', SessionEnd: 'Codex · 세션 종료', UserPromptSubmit: 'Codex · 턴 시작',
   PreToolUse: 'Codex · 도구 시작', PostToolUse: 'Codex · 도구 결과', SubagentStart: 'Codex · 에이전트 시작',
   SubagentStop: 'Codex · 에이전트 종료 이벤트',
   Stop: 'Codex · 턴 종료 이벤트', Interrupt: 'Codex · 사용자 중단',
+  PreCompact: 'Compact · 네이티브 압축 시작', PostCompact: 'Compact · 네이티브 압축 종료',
 };
 export const codexSpanKey = (r: Rec, event: string): string | null => {
   const session = token(r['session_id']);
@@ -63,7 +65,7 @@ export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number
       const terminal = key ? terminals.get(key) : undefined;
       return terminal ? [terminal] : [];
     }).sort((a, b) => at(a).localeCompare(at(b)));
-    if (candidates[0]) paired.set(row, candidates[0]);
+    if (candidates[0]) { paired.set(row, candidates[0]); if (event === 'PreCompact') { const key = codexSpanKey(row, 'PostCompact'); if (key) terminals.delete(key); } }
     if (START_END[event]) {
       const closing = (event === 'SubagentStart' ? ['SessionEnd'] : ['Stop', 'Interrupt', 'SessionEnd']).flatMap(end => {
         const key = codexSpanKey(row, end); const terminal = key ? terminals.get(key) : undefined;
@@ -71,7 +73,7 @@ export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number
       }).sort((a, b) => at(a).localeCompare(at(b)))[0];
       if (closing) ended.set(row, closing);
     }
-    if (['PostToolUse', 'SubagentStop', 'Stop', 'Interrupt', 'SessionEnd'].includes(event)) {
+    if (['PostToolUse', 'SubagentStop', 'Stop', 'Interrupt', 'SessionEnd', 'PostCompact'].includes(event)) {
       const key = codexSpanKey(row, event);
       if (key) terminals.set(key, row);
     }
@@ -122,8 +124,8 @@ const stepOf = (r: Rec, key: string, event: string, end: Rec | undefined, closin
   const measured = end ? Date.parse(at(end)) - Date.parse(at(r)) : undefined;
   return {
     id: hash(`${key}:${token(r['invocation_id']) ?? at(r)}:${event}`), at: at(r),
-    feature: 'workers',
-    lifecycle: true, ...(state === 'error' && token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
+    feature: event === 'PreCompact' || event === 'PostCompact' ? 'compact' : 'workers',
+    lifecycle: event !== 'PreCompact' && event !== 'PostCompact', ...(state === 'error' && token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
     state, lane: 'host', title: TITLE[event]!, summary: detail, ...(event === 'SubagentStop' && state === 'done' ? { outcome: 'host_ended' as const } : {}),
     details: [...(state === 'unconfirmed' ? ['호스트 훅이 모든 도구 경로의 종료를 보장하지 않습니다. 원래 호스트에서 해당 도구 결과를 확인하세요.'] : []), ...(token(r['tool_use_id']) ? [`call: ${hash(String(r['tool_use_id']))}`] : [])],
     ...(measured !== undefined && Number.isFinite(measured) && measured >= 0 ? { durationMs: measured } : {}),

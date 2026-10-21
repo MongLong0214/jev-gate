@@ -1,5 +1,5 @@
 // @ts-expect-error The maintenance CLI is an ESM script, exercised here without network requests.
-import { parseClaude, hostRelease, synchronizeClaude, parseCodex, verifyCodex, fetchSource, replaceFacts } from '../scripts/model-sync.mjs';
+import { parseClaude, hostRelease, synchronizeClaude, parseCodex, verifyCodex, verifyCodexCredits, fetchSource, replaceFacts } from '../scripts/model-sync.mjs';
 import { describe, expect, it } from 'vitest';
 import { MODEL_FACTS, type ModelFacts } from '../src/claude-models.js';
 import { normalizeCatalog, generalCodexModel } from '../src/codex/catalog.js';
@@ -35,6 +35,15 @@ const rawCodex = {
 };
 
 describe('official model freshness CI', () => {
+  it('rejects changed, missing and ambiguous native credit rates and changed cache-write billing', () => {
+    const billing = 'Codex credit billing has no separate cache-write charge.';
+    const table = '<tr><td>GPT-6.1 Sol</td><td>50 credits</td><td>2.5 credits</td><td>1,250 credits</td></tr>';
+    const rates = { 'gpt-6.1-sol': [50, 2.5, 1250] };
+    expect(() => verifyCodexCredits(billing + table, rates)).not.toThrow();
+    for (const text of [table, billing, billing + table + table, billing + table.replace('2.5 credits', '5 credits'), billing + table.replace('50 credits', 'unknown')]) {
+      expect(() => verifyCodexCredits(text, rates)).toThrow();
+    }
+  });
   it('keeps unconditional effort separate from thinking-dependent levels and the published default', () => {
     const models: ModelFacts[] = parseClaude(overview, effort);
     expect(models.find(m => m.family === 'haiku')).toMatchObject({ ids: ['claude-haiku-5-5', 'anthropic.claude-haiku-5-5'],

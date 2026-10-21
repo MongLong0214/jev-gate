@@ -11,6 +11,13 @@ import { CodexPolicy } from './policy.js';
 import { codexCallerWorkspace } from './workspace.js';
 import { obj, type Obj } from './source.js';
 import type { Env } from '../config.js';
+import type { CodexBilling } from './route-cost.js';
+import type { CompactReceipt } from './compact.js';
+import { normalizeUsage } from '../cost.js';
+
+/** Only the selected native transport establishes billing family; a custom endpoint's rates are unknown. */
+export const codexBilling = (configured: string | undefined, account: unknown): CodexBilling => configured ? 'unknown' :
+  typeof account === 'string' && account.length > 0 ? 'chatgpt' : account === undefined ? 'api' : 'unknown';
 
 /** Only the official host's discovery for the same authenticated workspace may redirect its credentials. */
 export const nativeWorkspaceUpstream = (result: unknown, accountId: string): { origin: string; override: string } | null => {
@@ -109,25 +116,29 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       let decoded = raw;
       if (req.headers['content-encoding'] === 'zstd') decoded = (createRequire(import.meta.url)('node:zlib') as { zstdDecompressSync: (b: Buffer, o: { maxOutputLength: number }) => Buffer }).zstdDecompressSync(raw, { maxOutputLength: 32 * 1024 * 1024 });
       const sessionId = policy?.requestSession(req.headers['x-codex-turn-metadata'], req.headers['session-id']) ?? null;
+      const configured = options.env['JEV_CODEX_UPSTREAM'];
+      const account = req.headers['chatgpt-account-id'];
       let payload = raw;
       let modified = false;
+      let compact: CompactReceipt | undefined;
       const nativeCompact = req.method === 'POST' && (route === '/responses/compact' || route === '/responses' && compactionRequest(req.headers['x-codex-turn-metadata']));
       if (req.method === 'POST' && (route === '/responses' || route === '/responses/compact')) {
         // Hook trust is the root's; a native child request is checked against the root it was sent for.
         const trusted = sessionId ?? policy?.requestSession(undefined, req.headers['session-id']);
         if ((!trusted || !policy?.hooksReady(trusted)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
         if (sessionId && policy) {
-          const parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
+          let parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
+          const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
           if (route === '/responses' && !nativeCompact) {
-            const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
-            const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator']);
-            payload = Buffer.from(JSON.stringify(selected.request)); modified = true;
+            const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator'], codexBilling(configured, account));
+            parsed = selected.request;
           }
+          const prepared = await policy.compactRequest(sessionId, parsed, cancelled.signal, nativeCompact ? 'native' : 'inference');
+          compact = prepared.receipt;
+          if (prepared.request !== parsed || !nativeCompact) { payload = Buffer.from(JSON.stringify(prepared.request)); modified = true; }
         }
       }
       // Authorization goes only to the fixed native OpenAI endpoints, or the explicit owner's compatible endpoint.
-      const configured = options.env['JEV_CODEX_UPSTREAM'];
-      const account = req.headers['chatgpt-account-id'];
       const routing = !configured && typeof account === 'string' ? nativeWorkspaceUpstream(await rpc!.request('account/read', { refreshToken: false }, 5000), account) : null;
       const base = new URL(configured ?? (account ? `${routing?.origin ?? 'https://chatgpt.com'}/backend-api/codex/` : 'https://api.openai.com/v1/'));
       if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname))) throw new Error('invalid upstream');
@@ -140,20 +151,40 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       }
       if (res.destroyed || req.destroyed && !req.complete) return;
       let submitted: ReturnType<CodexPolicy['observeRequest']>;
+      let compactTerminal = false;
       const upstream = (base.protocol === 'https:' ? httpsRequest : httpRequest)(base, { method: req.method, headers }, response => {
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
+        if (sessionId && compact && (nativeCompact || compact.applied)) {
+          const receipt = compact;
+          const observed = (value: Obj, failed = false) => {
+            if (compactTerminal) return; compactTerminal = true;
+            const r = obj(value['response']) ?? value;
+            policy?.recordCompact(sessionId, receipt, 'result', { status: response.statusCode, outcome: failed || r['status'] === 'failed' || r['status'] === 'incomplete' || r['error'] ? 'failed' : 'completed', usage: normalizeUsage('codex', obj(r['usage']) ?? {}), model: typeof r['model'] === 'string' ? r['model'] : null, total_token_saving: 'unmeasured' });
+          };
+          if (String(response.headers['content-type']).includes('text/event-stream')) observeResponseStream(response, observed, value => observed(value, true));
+          else {
+            const chunks: Buffer[] = []; let bytes = 0;
+            response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes <= 1024 * 1024) chunks.push(chunk); });
+            response.once('end', () => { if (bytes > 1024 * 1024) return; try { const value = obj(JSON.parse(Buffer.concat(chunks).toString('utf8'))); if (value && (response.statusCode ?? 502) === 200 && !value['error']) observed(value); } catch { /* Unknown response usage stays unknown. */ } });
+          }
+          response.once('close', () => { if (!compactTerminal && (!response.complete || (response.statusCode ?? 502) >= 400)) { compactTerminal = true; policy?.recordCompact(sessionId, receipt, 'result', { status: response.statusCode, outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); } });
+        }
         if (sessionId && (response.statusCode ?? 502) >= 400) policy?.observeRequestFailure(sessionId, submitted);
         if (!nativeCompact && sessionId && response.statusCode === 200 && req.method === 'POST' && route === '/responses') {
           observeResponseStream(response, value => policy?.observeUsage(sessionId, value, submitted));
         }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
-      upstream.on('error', () => { if (sessionId) policy?.observeRequestFailure(sessionId, submitted); if (!res.headersSent) res.writeHead(502); res.end(); });
+      upstream.on('error', () => { if (sessionId) {
+        policy?.observeRequestFailure(sessionId, submitted);
+        if (compact && (nativeCompact || compact.applied) && !compactTerminal) { compactTerminal = true; policy?.recordCompact(sessionId, compact, 'result', { outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); }
+      } if (!res.headersSent) res.writeHead(502); res.end(); });
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
       if (!nativeCompact && req.method === 'POST' && route === '/responses' && sessionId && policy) {
-        try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}); } catch { /* Observation does not block sending. */ }
+        try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}, codexBilling(configured, account)); } catch { /* Observation does not block sending. */ }
       }
+      if (sessionId && compact && (nativeCompact || compact.applied)) { const receipt = compact; upstream.once('finish', () => policy?.recordCompact(sessionId, receipt, 'submitted', { sent: true })); }
       upstream.end(payload);
     } catch { if (!res.headersSent) res.writeHead(502); res.end(); }
   });

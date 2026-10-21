@@ -363,6 +363,18 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
         budgetUsed: used ?? null, budget: num(last?.['budget']) });
   }
 
+  if (input.traces.codex) {
+    const rows = byHost.codex.filter(r => r['phase'] === 'codex_compact');
+    const selected = rows.filter(r => r['stage'] === 'selection_result');
+    const sent = rows.filter(r => r['stage'] === 'submitted' && r['applied'] === true);
+    const confirmed = rows.filter(r => r['stage'] === 'result' && r['applied'] === true && r['outcome'] === 'completed');
+    const failed = selected.filter(r => !['assessed', 'stale'].includes(String(r['reason']))).length + rows.filter(r => r['stage'] === 'result' && r['outcome'] === 'failed').length;
+    say(failed ? 'warn' : selected.length || sent.length ? 'ok' : 'info',
+      `compact: Codex Jev ${selected.length} assessed / ${sent.length} applied submissions / ${confirmed.length} completed responses; ${failed} failures; native hooks ${byHost.codex.filter(r => r['phase'] === 'codex_event' && r['event'] === 'PreCompact').length}; total token savings unmeasured`,
+      'Compare matched native-only tasks including Jev, retries and re-reads; removed characters are not total token savings.', 'compact',
+      { fired: selected.length, applied: sent.length, effect: null, regression: failed });
+  }
+
   // A session reads its provider when it starts, so one started before the current connection was written keeps the old
   // provider until restarted. That explains a silent session; it does not make it routed, so every prompted session counts.
   const owner = input.codexOwner, isEvent = (r: Rec, event: string): boolean => r['phase'] === 'codex_event' && r['event'] === event;

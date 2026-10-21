@@ -5,7 +5,7 @@ import * as zlib from 'node:zlib';
 import { obj, type Obj } from './source.js';
 
 /** A bounded observation branch; native response bytes and headers stay untouched. */
-export const observeResponseStream = (response: IncomingMessage, completed: (response: Obj) => void): void => {
+export const observeResponseStream = (response: IncomingMessage, completed: (response: Obj) => void, failed?: (response: Obj) => void): void => {
   const encoding = String(response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
   let inflate: Transform | undefined;
   if (encoding === 'gzip') inflate = zlib.createGunzip();
@@ -26,6 +26,8 @@ export const observeResponseStream = (response: IncomingMessage, completed: (res
         const event = obj(JSON.parse(data.join('\n')));
         if (event?.['type'] === 'response.completed') {
           const value = obj(event['response']); if (value) completed(value);
+        } else if (event?.['type'] === 'response.failed' || event?.['type'] === 'response.incomplete') {
+          const value = obj(event['response']); if (value) failed?.(value);
         }
       } catch { /* Unknown events and observer errors never affect native inference. */ }
     }

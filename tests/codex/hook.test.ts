@@ -162,17 +162,19 @@ describe('Codex lifecycle in the dashboard', () => {
     expect(view.requests).toBe(0);
     expect(view.latency.measured).toBe(0);
     expect(view.features.find(f => f.id === 'admission')?.capability?.mode).toBe('connect');
-    expect(view.features.find(f => f.id === 'compact')).toMatchObject({ state: 'unsupported', capability: { mode: 'unsupported' } });
+    expect(view.features.find(f => f.id === 'compact')).toMatchObject({ state: 'waiting', capability: { mode: 'connect' } });
     const ended = buildOperations([...records, row('SubagentStop', { agent_id: 'child', written_at: '2026-09-30T01:00:02Z', last_assistant_message: 'SECRET_FINAL' })], [], now, { trace: true });
     expect(ended.active).toBe(0);
     expect(JSON.stringify(ended)).not.toContain('SECRET_FINAL');
     expect(ended.feed.find(s => s.title.includes('종료 이벤트'))?.summary).toContain('수락 검사 없음');
   });
-  it('never joins different sessions to old completion events and shows no step for earlier compaction hook rows', () => {
+  it('never joins different sessions and records native compaction without inventing Jev requests', () => {
     const records = [row('PreToolUse', { tool_use_id: 'call' }), row('PostToolUse', { session_id: 'other', tool_use_id: 'call' }), row('PreCompact', { written_at: '2026-09-30T00:58:00Z' }), row('PostCompact', { written_at: '2026-09-30T00:58:01Z' }), row('PreCompact')];
     const view = buildOperations(records, [], now, { trace: true });
-    expect(view.feed.filter(s => s.state === 'active')).toHaveLength(1);
-    expect(view.feed.some(s => s.title.includes('압축'))).toBe(false);
+    expect(view.feed.filter(s => s.state === 'active')).toHaveLength(2);
+    expect(view.feed.filter(s => s.feature === 'compact')).toHaveLength(3);
+    expect(view.requests).toBe(0);
+    expect(view.latency.measured).toBe(0);
     const stale = buildOperations([row('PreToolUse', { tool_use_id: 'lost' })], [], new Date('2026-09-30T02:00:00Z'), { trace: true });
     expect(stale.feed[0]?.state).toBe('unconfirmed');
   });

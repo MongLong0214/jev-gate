@@ -352,6 +352,24 @@ it('shows no step for a forwarded native Compact request recorded by an earlier 
   expect(view.feed).toHaveLength(0); expect(view.runs).toHaveLength(0);
 });
 
+it('separates Codex Compact selection, reused applications and native responses without claiming token savings', () => {
+  const common = { phase: 'codex_compact', host: 'codex', session_id: 'c', prompt_id: 'p', written_at: at };
+  const records = [
+    { ...common, request_id: 'one', stage: 'selection_intent', selection_id: 'selection', attempted: true },
+    { ...common, request_id: 'one', stage: 'selection_result', selection_id: 'selection', reason: 'assessed', candidates: 5, selected: 3, duration_ms: 270, jev: { model: 'jev-1.14.0', usage: { input_tokens: 5300, output_tokens: 400 } } },
+    ...['one', 'two'].flatMap(request_id => [
+      { ...common, request_id, stage: 'submitted', selection_ids: ['selection'], path: 'inference', applied: true, removed_chars: 57000, sent: true },
+      { ...common, request_id, stage: 'result', selection_ids: ['selection'], path: 'inference', applied: true, removed_chars: 57000, outcome: 'completed', usage: null },
+    ]),
+  ];
+  const view = buildOperations(records, [], new Date(later), { trace: true, host: 'codex' });
+  expect(view.requests).toBe(1); expect(view.latency.measured).toBe(1);
+  expect(view.feed.filter(s => s.lane === 'jev' && !s.lifecycle)).toHaveLength(1);
+  expect(view.feed.filter(s => s.title === 'Compact · 실제 전송')).toHaveLength(2);
+  expect(view.feed.find(s => s.receipt)?.receipt).toMatchObject({ input: 5300, output: 400, model: 'jev-1.14.0' });
+  expect(view.feed.every(s => s.details.join(' ').includes('총 절감 미측정'))).toBe(true);
+});
+
 
 describe('actual model request lifecycle', () => {
   it('keeps a slow request active and matches response by session, turn, agent and loop index', () => {

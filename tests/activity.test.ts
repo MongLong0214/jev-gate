@@ -34,6 +34,20 @@ const write = (dir: string, name: string, body: unknown): void => {
   writeFileSync(join(dir, name), JSON.stringify(body));
 };
 
+it('counts a Codex Compact judgment once, including failed consumption, rather than counting reused submissions', () => {
+  const trace = make(), written_at = new Date().toISOString();
+  for (const [i, row] of [
+    { stage: 'selection_intent', selection_id: 'one', attempted: true },
+    { stage: 'selection_result', selection_id: 'one', attempted: true, reason: 'assessed' },
+    { stage: 'submitted', selection_ids: ['one'], applied: true },
+    { stage: 'submitted', selection_ids: ['one'], applied: true },
+    { stage: 'selection_result', selection_id: 'two', attempted: true, reason: 'timeout' },
+  ].entries()) write(trace, `${i}.json`, { phase: 'codex_compact', host: 'codex', session_id: 'c', prompt_id: 'p', ...row, written_at });
+  const result = loadActivity({ traceDir: trace, env: { HOME: make() } });
+  expect(result.jevCalls).toBe(2);
+  expect(result.operations.requests).toBe(1); // Only the recorded intent establishes a known dispatch identity.
+});
+
 it('omits retired feature records from the live board and operation counters', () => {
   const trace = make();
   for (const phase of ['interpretation_intent', 'interpretation_result', 'evidence_result', 'guard_result']) write(trace, phase + '.json', { phase, session_id: 's', request_id: 'retired', attempted: true, written_at: new Date().toISOString() });
@@ -64,7 +78,8 @@ it('returns doctor facts without its free-form messages, and keeps the latest ro
   const expected = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: now.getTime(), installed: null, recording: true, keyPresent: false, liveness: null, codexOwner: null })
     .filter(c => c.feature && c.metrics).map(({ feature, level, metrics }) => ({ feature, level, metrics }));
   expect(result.activity24h.claude.map(({ current: _current, ...c }) => c)).toEqual(expected);
-  expect(result.activity24h.claude.find(c => c.feature === 'router')?.current).toMatchObject({ receipt: { choice: 'sonnet · low' } });
+  const root = result.operations.feed.find(s => s.routing?.scope === 'root')!;
+  expect(result.activity24h.claude.find(c => c.feature === 'router')?.current).toMatchObject({ at: '2026-10-20T05:01:00Z', host: 'claude', runId: root.runId, receipt: { choice: 'sonnet · low' } });
   expect(JSON.stringify(result.activity24h)).not.toContain('private fixture prose');
   expect(JSON.stringify(result.activity24h)).not.toContain('message');
 });

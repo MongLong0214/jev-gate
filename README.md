@@ -13,7 +13,7 @@
 [![Codex](https://img.shields.io/badge/Codex-plugin-10A37F)](#codex)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-3FB950)](package.json)
 
-**Jev-assisted model routing, delegation for Claude Code and native Codex, plus context compaction for Claude Code.**
+**Jev-assisted model routing, delegation for Claude Code and native Codex, plus context compaction for Claude Code and Codex.**
 
 [Install](#install) · [Results](#results) · [How it works](#how-it-works) · [Dashboard](#read-the-live-dashboard) · [Data and privacy](#settings-and-data) · [Troubleshoot](#update-and-troubleshoot)
 
@@ -75,7 +75,7 @@ Jev Gate fixes the allocation, not the work. **Jev judges each turn; code applie
 
 1. **Gate** reads a new request and decides whether to answer directly or hand the whole request to one background worker.
 2. **Router** picks the model and effort for the main turn and for each eligible agent, from the candidates your host actually supports. Your explicit pins always win.
-3. **Compact** (Claude Code) replaces stale context with an extractive digest that keeps what the current task needs. Codex keeps its native compaction.
+3. **Compact** keeps task-relevant context. Claude Code uses an extractive digest; Codex selectively omits obsolete plaintext from older tool results before eligible model and native compaction requests, preserving the native returned context.
 4. **The dashboard** records each judgment, request and observed result, live.
 
 If a key is missing, a judgment is invalid or slow, or a host fact is unavailable, Jev Gate keeps the native call. It never upgrades low confidence into a more expensive tier.
@@ -112,7 +112,7 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | --- | --- | --- |
 | Gate | Chooses direct execution or one background worker. Code accepts only observed passing checks. | Eligible admission and allocation judgments |
 | Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
-| Compact | Claude Code only. Builds an extractive digest plus recent context. Jev prioritizes older successful results needed for the current task within the existing size budget. | One bounded candidate batch by default; timeout/invalid output keeps local selection |
+| Compact | Claude Code builds an extractive digest; Codex selects obsolete plaintext from older tool results, preserving native context and recent evidence. | Bounded judgments; missing context, timeout or invalid output preserves the native path |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
 Gate, Router, Compact, recording, and automatic dashboard opening default to **on**. Automatic Astra/Fable targets default to off; enable both hosts with `frontierEnabled: true` in `~/.config/jev-gate/config.json`; manually selecting a root model does not enable automatic restricted children. [Router options](mods/router/README.md).
@@ -153,7 +153,7 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
-A five-node circuit (Gate A, Gate B, workers, Router, Compact; the Codex filter hides Compact) hangs off a Jev rail. Values and call-log rows update as records arrive, independently of motion. Each Jev request sends a glowing signal to the rail and its result returns to the node, with brief wire, rail and card flashes. Bursts run concurrently, capped at 24 particles without delaying values; idle is calm. The rail ticks through the latest call, latency, calls per minute and rolling p50 of the last 16 measured calls. Each node's fixed-height lines and inspector show the same last-24-hour activity verdict and counts as doctor, including path/tier changes, worker verdicts, Compact restores and budget, and estimated Router net using observed cache TTLs, prefix growth and recorded Jev cost. Router also distinguishes the latest root model/effort from child calls, and selected settings from observed responses. Missing measurements stay unknown.
+A five-node circuit (Gate A, Gate B, workers, Router, Compact; available for both hosts) hangs off a Jev rail. Values and call-log rows update as records arrive, independently of motion. Each Jev request sends a glowing signal to the rail and its result returns to the node, with brief wire, rail and card flashes. Bursts run concurrently, capped at 24 particles without delaying values; idle is calm. The rail ticks through the latest call, latency, calls per minute and rolling p50 of the last 16 measured calls. Each node's fixed-height lines and inspector show the same last-24-hour activity verdict and counts as doctor, including path/tier changes, worker verdicts, Compact restores and budget, and estimated Router net using observed cache TTLs, prefix growth and recorded Jev cost. Router also distinguishes the latest root model/effort from child calls, and selected settings from observed responses. Missing measurements stay unknown.
 
 The node strips cover 60 seconds and **Jev traffic** covers two minutes. Trace watchers read changed filenames incrementally, with polling as a fallback; SSE patches carry changed steps. Pause and disconnected streams freeze the view. Reduced motion disables particles and flashes while values continue updating. All layouts fit without horizontal page scrolling.
 
@@ -176,7 +176,7 @@ The node strips cover 60 seconds and **Jev traffic** covers two minutes. Trace w
 
 Without a contract decision the worker card reads **No verdict**, including plain native Agent results. A refused worker contract is an error labelled **Contract not met**, with a closed reason and the check ids (`#n`) it concerns, never the raw reply. A later host end appears as its own **Host ended** row and does not mark the run done.
 
-**Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. The model card follows the selected timeline stage and names its record/time. A selection or submitted request alone cannot prove which model answered. Missing response effort stays unknown. Jev Compact runs on Claude Code only. Older records without request purpose remain unconfirmed.
+**Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. The model card follows the selected timeline stage and names its record/time. A selection or submitted request alone cannot prove which model answered. Missing response effort stays unknown. Codex Compact separately records Jev selection, actual submitted requests and observed responses; omitted characters are not a measured total-token saving. Older records without request purpose remain unconfirmed.
 
 Circuit lines show possible paths. Flashes and rail lights mark recorded events; the ambient sweep and flowing wires carry none. Response charts use measured Jev latency; motion is not a speed claim. Pause freezes the view; workers keep running. Reconnecting means the browser's event stream will retry. The latest 200 executions are listed; filters recompute displayed measurements and exclude earlier steps outside the range.
 
@@ -194,7 +194,11 @@ Preferences live under `~/.config/jev-gate` (`$XDG_CONFIG_HOME` supported). No p
 
 Configure Claude options under `/plugin` → jev-gate → configure. Plugin options belong in **user settings**; project `pluginConfigs` are ignored by the host. Optional Codex settings are documented in the [Codex README](plugins/codex/README.md). You do not need either settings file for ordinary use.
 
-Compact's Jev selection defaults to on with a 1,000ms deadline. Its Claude options are `compactJevEnabled` and `compactJevTimeoutMs`. Disable Jev selection to keep local Compact, or disable Compact entirely. [Compact options and fallback rules](mods/compact/README.md).
+Claude Compact's Jev selection defaults to on with a 1,000ms deadline. Its Claude options are `compactJevEnabled` and `compactJevTimeoutMs`. Disable Jev selection to keep local Compact, or disable Compact entirely. [Compact options and fallback rules](mods/compact/README.md).
+
+Codex Compact defaults to on with an 800ms Jev deadline. It retains instructions, user messages, opaque reasoning/compaction data, call/result links, the six latest tool results and detected failure evidence. Only high-confidence obsolete plaintext interiors are eligible; timeout, invalid judgments, missing context and internal failures keep the original request. Decisions are reused only for the same task/context and exact text. The native compaction trigger and returned context remain native. [Codex settings and limits](plugins/codex/README.md#jev-compact).
+
+Prompt caching reuses an unchanged rendered prefix; model, effort or compaction changes can prevent reuse after the changed point. Cache retention is finite. OAuth Codex credit billing has no separate cache-write charge; API-key requests use API pricing. Credit prices alone do not determine included subscription usage. Cache hits and cheaper models do not by themselves reduce total tokens. See the official [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching) and [Codex pricing](https://learn.chatgpt.com/docs/pricing).
 
 The key is stored in `~/.config/jev-gate/auth/credentials.json` (0700 directory/0600 file), shared by both hosts. Explicit environment/plugin keys take precedence. Saving validates format, not account validity or quota. TypeSafe billing is separate from Claude/Codex billing.
 
@@ -202,7 +206,7 @@ When enabled and eligible, these inputs can leave the machine:
 
 - **Gate:** one admission judgment uses the current request once; each eligible worker dispatch sends its task prompt. Earlier user turns are not retried or added to admission.
 - **Router:** the task text and routing/cache facts used for its judgment.
-- **Compact:** the current task and a bounded set of older successful-result excerpts. Sensitive candidates are filtered before sending. Mandatory preservation and final size limits remain local.
+- **Compact:** the current task and a bounded set of older tool-result text. Claude uses excerpts; Codex sends complete candidate chunks, with bounded tool-input context, and retains all unoffered text. Sensitive candidates are filtered before sending. Preservation and size limits remain local.
 
 The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. The dashboard is local.
 

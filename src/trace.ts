@@ -12,7 +12,7 @@ import { workerTraceData } from './worker-record.js';
  * Records carry their own join keys (session_id, caller, tool_use_id); filenames are never identities.
  * Refuses a symlinked trace directory. Never receives keys, headers or environment dumps: callers whitelist fields.
  * Stored traces from earlier revisions also carry `result_intent`, `result_result`, `scope_intent`, `scope_result`,
- * the withdrawn search filter's `context_intent`/`context_result` and the removed Codex Compact's `codex_compact`;
+ * the withdrawn search filter's `context_intent`/`context_result`;
  * nothing writes those any more, and readers of historical directories still have to handle them.
  */
 export type TracePhase =
@@ -27,6 +27,7 @@ export type TracePhase =
   | 'codex_router_response'
   | 'codex_route_applied'
   | 'codex_event'
+  | 'codex_compact'
   | 'admission_intent'
   | 'admission_result'
   | 'dispatch'

@@ -121,6 +121,7 @@ export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_h
   if (later) terms.push(times(count(v.prefix ?? 0), [v.target.read - v.baseline.read, v.target.read - v.baseline.read]).map(n => n * later / 1e6),
     times(v.outputRange ?? [0, Infinity], [outputDelta, outputDelta]).map(n => n * later / 1e6));
   const deltaUsd: [number, number] = [terms.reduce((s, t) => s + t[0]!, 0), terms.reduce((s, t) => s + t[1]!, 0)];
+  if (deltaUsd.some(Number.isNaN)) return unknown;
   const hold = deltaUsd[1] > 0;
   const unobserved = v.baselineCache === 'unknown' || v.targetCache === 'unknown' || v.prefix === null || !v.outputRange;
   return { hold, reason: !hold ? 'cost_allows' : deltaUsd[0] <= 0 && unobserved ? 'cost_unknown_hold' : 'cost_hold', deltaUsd, inputs: v };

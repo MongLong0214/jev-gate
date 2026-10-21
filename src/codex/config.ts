@@ -6,10 +6,12 @@ import type { ConfigV5, Tier } from '../types.js';
 import type { CodexModel } from './router.js';
 import { frontierRoutingEnabled } from '../frontier-config.js';
 import { codexSuccessor, generalCodexModel } from './catalog.js';
+import type { CodexCompactConfig } from './compact.js';
 
 export interface CodexPolicyConfig {
   gate: ConfigV5;
   router: { enabled: boolean; model: boolean; effort: boolean; allowAstra: boolean; minUpgradeConfidence: number; minDowngradeConfidence: number; timeoutMs: number };
+  compact: CodexCompactConfig;
 }
 export const resolveCodexConfigPath = (env: Env): string =>
   env['JEV_CODEX_CONFIG'] ?? join(env['XDG_CONFIG_HOME'] ?? join(env['HOME'] || homedir(), '.config'), 'jev-gate', 'codex.json');
@@ -30,7 +32,7 @@ export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = [], g
   const path = resolveCodexConfigPath(env);
   try { raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>; }
   catch (e) { if (env['JEV_CODEX_CONFIG'] || (e as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('invalid Codex policy config'); }
-  // A `compact` section from versions with Codex Compact is accepted and never read.
+  // Historical compact budgets are accepted for migration; the new selector has fixed bounded input.
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !['gate', 'router', 'compact'].includes(k))) throw new Error('invalid Codex policy config');
   const gateRaw = raw['gate'] ?? {};
   if (!gateRaw || typeof gateRaw !== 'object' || Array.isArray(gateRaw)) throw new Error('invalid Codex gate config');
@@ -51,7 +53,12 @@ export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = [], g
   const router = section('router', { enabled: true, model: true, effort: true, allowAstra: false, minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.6, timeoutMs: 800 }) as unknown as CodexPolicyConfig['router'];
   router.allowAstra = frontierRoutingEnabled(env, router.allowAstra);
   if (![router.minUpgradeConfidence, router.minDowngradeConfidence].every(n => Number.isFinite(n) && n > .5 && n <= 1) || !Number.isInteger(router.timeoutMs) || router.timeoutMs < 50 || router.timeoutMs > 3500) throw new Error('invalid Codex policy bounds');
-  return { gate: checked.config, router };
+  const oldCompact = raw['compact'];
+  if (oldCompact !== undefined && (!oldCompact || typeof oldCompact !== 'object' || Array.isArray(oldCompact))) throw new Error('invalid Codex compact config');
+  const compactRaw = (oldCompact ?? {}) as Record<string, unknown>;
+  const compact = { enabled: compactRaw['enabled'] ?? true, timeoutMs: compactRaw['timeoutMs'] ?? 800 };
+  if (typeof compact.enabled !== 'boolean' || typeof compact.timeoutMs !== 'number' || !Number.isInteger(compact.timeoutMs) || compact.timeoutMs < 50 || compact.timeoutMs > 3500) throw new Error('invalid Codex compact config');
+  return { gate: checked.config, router, compact: compact as CodexCompactConfig };
 };
 
 /** A Gate value that does not validate turns off only the Gate. Any other runtime failure preserves the owner's root and disables every new policy dispatch. Doctor still reports the loader error. */
@@ -61,6 +68,6 @@ export const runtimeCodexPolicy = (env: Env, catalog: readonly CodexModel[] = []
     const model = env['JEV_CODEX_MODEL'] ?? 'native-session-model';
     const checked = validateConfig({ version: 5, mode: 'off', models: { fast: model, standard: model, deep: model, frontier: model } });
     if (!checked.ok) throw new Error('native baseline unavailable');
-    return { gate: checked.config, router: { enabled: false, model: false, effort: false, allowAstra: false, minUpgradeConfidence: .8, minDowngradeConfidence: .6, timeoutMs: 800 } };
+    return { gate: checked.config, router: { enabled: false, model: false, effort: false, allowAstra: false, minUpgradeConfidence: .8, minDowngradeConfidence: .6, timeoutMs: 800 }, compact: { enabled: false, timeoutMs: 800 } };
   }
 };

@@ -13,10 +13,10 @@ export const CODEX_CAPABILITIES: Record<FeatureId, HostCapability> = {
   allocation: { mode: 'active', ko: '같은 Gate B 정책으로 전용 워커의 모델을 배정하고 실행 입력에 반영합니다.', en: 'Applies the shared Gate B policy to owned worker models and execution inputs.' },
   workers: { mode: 'active', ko: '실제 Codex 워커를 실행하고 관측된 검사 결과와 계약을 대조해 수락합니다.', en: 'Runs native Codex workers and verifies observed checks against their contracts.' },
   router: { mode: 'active', ko: '계정의 실제 모델·effort 목록과 Jev 확률로 턴 설정을 선택합니다. 전송한 설정과 응답이 확인한 모델·effort를 구분합니다.', en: 'Selects turn settings using the live account catalog and Jev probabilities. Submitted settings and response-confirmed model or effort are distinct.' },
-  compact: { mode: 'unsupported', ko: 'Codex에서는 Jev Compact를 쓰지 않습니다. Codex 자체 압축이 그대로 동작합니다.', en: 'Jev Compact does not run on Codex. Native Codex compaction runs unchanged.' },
+  compact: { mode: 'active', ko: 'Jev가 오래된 도구 텍스트를 선별합니다. 암호화 문맥·최근 결과·도구 연결을 보존하고 네이티브 압축과 실제 전송을 따로 관측합니다. 총 토큰 절감은 실측 전 미확인입니다.', en: 'Jev selects old tool text while preserving opaque context, recent results and tool topology. Native compaction and actual submissions are observed separately. Total token savings require measurement.' },
 };
 export const CODEX_PLUGIN_CAPABILITIES: Record<FeatureId, HostCapability> = Object.fromEntries(Object.entries(CODEX_CAPABILITIES).map(([id, capability]) => [id,
-  id === 'compact' ? capability : id === 'workers'
+  id === 'workers'
     ? { mode: 'observe', ko: '호스트 이벤트를 관측합니다. 자동 연결 후 새 네이티브 세션의 실제 정책 적용 기록을 기다립니다.', en: 'Observes host events. After automatic connection, a fresh native session records actual policy application.' }
     : { mode: 'connect', ko: '플러그인이 일반 Codex를 자동 연결합니다. 실제 정책 요청 기록이 들어오면 적용 상태를 표시합니다.', en: 'The plugin connects ordinary Codex automatically. Actual policy request records establish application.' },
 ])) as Record<FeatureId, HostCapability>;

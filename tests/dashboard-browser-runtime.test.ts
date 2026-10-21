@@ -47,7 +47,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     if(req.method==='POST'){res.writeHead(503);res.end('{}');return;}
     res.writeHead(200,{'content-type':'text/html'});res.end(DASHBOARD_PAGE.replace('/*JEV_VERSION*/null',JSON.stringify(VERSION)));
   });
-  const push = (runs: OperationRun[], extra: { credit?: { exhausted: boolean } } = {}) => {current={...snapshot(runs),...extra};for(const res of clients)res.write(`data: ${JSON.stringify(current)}\n\n`);};
+  const push = (runs: OperationRun[], extra: { credit?: { exhausted: boolean }; version?: typeof VERSION } = {}) => {current={...snapshot(runs),...extra};for(const res of clients)res.write(`data: ${JSON.stringify(current)}\n\n`);};
   const page = async (width=1440,height=900) => {const p=await browser.newPage({viewport:{width,height}});p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForSelector('#pipeline .node');return p;};
   const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
   beforeAll(async()=>{mkdirSync(output,{recursive:true});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
@@ -139,8 +139,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       await p.screenshot({path:join(output,`circuit-${width}-${theme}.png`),fullPage:true,animations:'disabled'});
       await p.locator('#pipeline').screenshot({path:join(output,`circuit-detail-${width}-${theme}.png`),animations:'disabled'});
       await p.locator('[data-host=codex]').click();await settle(p);const four=await inspect();
-      expect.soft(four.features).toEqual(['admission','allocation','workers','router']);expect.soft(four.fills).toBe(true);expect.soft(four.overflow).toBe(false);
-      expect.soft(four.sizes).toEqual(width>=1024?[4]:width===768?[2,2]:[1,1,1,1]);
+      expect.soft(four.features).toEqual(['admission','allocation','workers','router','compact']);expect.soft(four.fills).toBe(true);expect.soft(four.overflow).toBe(false);
+      expect.soft(four.sizes).toEqual(five.sizes);
       await p.close();
     }
     writeFileSync(join(output,'circuit-layouts.json'),JSON.stringify(layouts,null,2)+'\n');
@@ -251,8 +251,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
   });
 
-  it('draws no Compact card or inspector in the Codex view and keeps Claude Compact (#292)', async () => {
-    const codex=run('cx','codex',[call('cx-router','router',90)]);
+  it('keeps Compact visible in Codex and Claude views (#317)', async () => {
+    const codex=run('cx','codex',[call('cx-router','router',90),call('cx-compact','compact',81)]);
     for(const rows of [[run('cl','claude',[call('cl-compact','compact',80)]),codex],[codex]]){
       push(rows);
       const p=await page();await settle(p);
@@ -260,9 +260,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(await shown()).toBe(true);
       await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');expect(await p.locator('#pipeline svg.wires line').count()).toBe(5);
       await p.locator('[data-host="codex"]').click();await settle(p);
-      expect.soft(await shown()).toBe(false);expect.soft(await p.locator('#circuit-inspector').textContent()).not.toContain('Compact');
-      expect.soft(await p.locator('#runs [data-run="cx"]').count()).toBe(1);expect.soft(await p.locator('#run-count').textContent()).not.toMatch(/Compact|컴팩트/);
-      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(4);
+      expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#circuit-inspector').textContent()).toContain('Compact');
+      expect.soft(await p.locator('#runs [data-run="cx"]').count()).toBe(1);expect.soft(await p.locator('#run-count').textContent()).toContain('Compact');
+      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);
       await p.locator('[data-host="claude"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);
       await p.locator('[data-host="all"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);expect.soft(await p.locator('#runs .row').count()).toBe(rows.length);
       await p.close();
@@ -453,6 +453,19 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.close();
   });
 
+  it('keeps header and circuit geometry stable when the periodic version status changes',async()=>{
+    for(const width of [1440,768,390,320]){
+      const history=[run('version','claude',[call('version-call','router',60)])];push(history);const p=await page(width);await settle(p);
+      const geometry=()=>p.evaluate(()=>['header','#version-badge','#connection','#pause','#pipeline'].map(s=>{const b=document.querySelector(s)!.getBoundingClientRect();return [b.x,b.y,b.width,b.height]}));
+      const before=await geometry();
+      for(const [state,version] of [['update',{...VERSION,release:{latest:'0.8.99'}}],['mismatch',{...VERSION,installed:'0.8.99'}],['current',VERSION]] as const){
+        push(history,{version});await p.waitForFunction(s=>document.getElementById('version-badge')!.getAttribute('data-state')===s,state);expect(await geometry(),`${width}: ${state}`).toEqual(before);
+        expect(await p.locator('#version-badge').getAttribute('aria-label')).toContain('실행 중인 대시보드: 0.8.32');
+      }
+      await p.close();
+    }
+  });
+
   // Layout shifts are buffered from navigation, so the first frame before any data counts as much as the live updates after it.
   it('shifts nothing from the first frame through live calls, a new run on top, attention, credit, pinning and unpinning at five widths', async () => {
     const failures:string[]=[];
@@ -618,6 +631,39 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.close();
   });
 
+  it('keeps long status readable without an inner scrollbar or moving adjacent panels (#316)', async () => {
+    for (const width of [1440, 768, 390, 320]) {
+      const initial = call('status-call', 'router', 92, { summary: 'Recorded result' });
+      push([run('status-run', 'codex', [initial])]);
+      const p = await page(width); await p.emulateMedia({ reducedMotion: 'reduce' });
+      await p.locator('#pipeline .node[data-feature=router]').click(); await settle(p);
+      const geometry = () => p.evaluate(() => Object.fromEntries(['pipeline', 'circuit-inspector', 'runs'].map(id => {
+        const r = document.getElementById(id)!.getBoundingClientRect(); return [id, [r.x, r.y + (globalThis as unknown as {scrollY:number}).scrollY, r.width, r.height]];
+      })));
+      const before = await geometry();
+      const status = p.locator('#circuit-inspector .status-value');
+      await status.focus();
+      const note = 'Preserved complete status: ' + 'the original request remains active and response usage is unknown; '.repeat(28);
+      push([run('status-run', 'codex', [{ ...initial, summary: note }])]);
+      await p.waitForFunction(() => document.querySelector('.status-value')?.textContent?.includes('Preserved complete status:'));
+      await settle(p);
+      expect(await geometry()).toEqual(before);
+      expect(await status.textContent()).toContain(note.trim());
+      expect((await status.textContent())!.split('Preserved complete status:')).toHaveLength(2);
+      expect(await status.evaluate(e => ({ focused: e === document.activeElement, clipped: e.scrollHeight > e.clientHeight + 1, overflow: getComputedStyle(e).overflowY }))).toEqual({ focused: true, clipped: false, overflow: 'visible' });
+      const body = p.locator('#circuit-inspector .b');
+      await body.evaluate(e => { e.scrollTop = 140; });
+      const scroll = await body.evaluate(e => e.scrollTop);
+      push([run('status-run', 'codex', [{ ...initial, summary: note + ' Updated.' }])]);
+      await p.waitForFunction(() => document.querySelector('.status-value')?.textContent?.includes('Updated.'));
+      expect(await body.evaluate(e => e.scrollTop)).toBeCloseTo(scroll, 0);
+      expect(await geometry()).toEqual(before);
+      expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      await p.screenshot({ path: join(output, `status-${width}.png`), fullPage: true });
+      await p.close();
+    }
+  }, 30_000);
+
   // #261: the inspector showed one line, and '–' for Router and Compact, whose Jev call a host or local record follows.
   it('shows the stage Jev call facts in the inspector when a host record follows the call',async()=>{
     const c=call('ic','router',226,{at:ago(2000)},{choice:'opus · xhigh',model:'jev-1.14.0',input:3394,output:203,costUsd:0.000142548,confidence:0.91,threshold:0.6});
@@ -629,6 +675,29 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(text).toContain('opus · xhigh');
     expect(text).not.toMatch(/91%|60%/);
     expect(await problems(p)).toEqual([]);await p.close();
+  });
+
+  it('keeps 200-run history populated, anchored and focusable through live reorder and pointer presses (#313)',async()=>{
+    const history=Array.from({length:200},(_,i)=>run('history-'+i,'claude',[call('history-call-'+i,'router',60,{at:ago(200_000-i)})]));
+    push(history);const p=await browser.newPage({viewport:{width:1440,height:900}});
+    await p.addInitScript(()=>{const g=globalThis as unknown as {emptyHistory:number};g.emptyHistory=0;
+      new MutationObserver(()=>{for(const b of document.querySelectorAll('#runs button'))if(!b.textContent?.trim()||!b.getAttribute('aria-label'))g.emptyHistory++;}).observe(document,{childList:true,subtree:true});});
+    await p.goto(url);await p.waitForFunction(()=>document.querySelectorAll('#runs .row').length===200);
+    const focused=p.locator('#runs [data-run=history-100]');await focused.focus();
+    const anchor=await focused.evaluate(e=>({y:e.getBoundingClientRect().top,scroll:document.getElementById('runs')!.scrollTop}));
+    const reordered=[history[199]!,...history.slice(0,199)];push(reordered);
+    await p.waitForFunction(()=>document.querySelector('#runs button')?.getAttribute('data-run')==='history-199');
+    expect(await focused.evaluate(e=>e===document.activeElement)).toBe(true);
+    expect(await focused.evaluate(e=>e.getBoundingClientRect().top)).toBeCloseTo(anchor.y,0);
+    expect(await p.locator('#runs').evaluate(e=>e.scrollTop)).toBeGreaterThan(anchor.scroll);
+    const bounds=await focused.boundingBox();await p.mouse.move(bounds!.x+20,bounds!.y+20);await p.mouse.down();
+    const beforePress=await p.locator('#runs button').evaluateAll(es=>es.map(e=>e.getAttribute('data-run')));
+    push(history.slice().reverse());await wait(180);
+    expect(await p.locator('#runs button').evaluateAll(es=>es.map(e=>e.getAttribute('data-run')))).toEqual(beforePress);
+    await p.mouse.up();await p.waitForFunction(()=>document.querySelector('#runs button:nth-child(1)')?.getAttribute('data-run')==='history-199');await settle(p);
+    expect(await p.evaluate(()=>(globalThis as unknown as {emptyHistory:number}).emptyHistory)).toBe(0);
+    expect(await p.locator('#runs .row[aria-pressed=true]').getAttribute('data-run')).toBe('history-100');
+    await p.screenshot({path:join(output,'history-200-reorder.png')});await p.close();
   });
 
   it('never renders an empty run item and marks the selected run with a tint only',async()=>{

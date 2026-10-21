@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.39 — 2026-10-21 — OAuth routing and Codex Jev Compact
+
+- Separate OAuth Codex credit-rate comparisons from API cache-write estimates (#300). Permit an eligible cold Luna downgrade when even its uncached input/output rates do not exceed the best cached baseline rates. Preserve confidence, explicit pins, account catalog, context capacity and unknown-billing fallbacks. Do not infer included subscription allowance or token savings from credit prices.
+- Rebuild Codex Jev Compact around bounded relevance judgments of complete older plaintext chunks, shared exact-text decisions and actual submitted/observed receipts (#317). Preserve recent results, call topology, instructions, opaque native context, failures and native compaction settings; errors preserve the original request.
+- Restore Codex Compact in the five-stage dashboard, distinguish Jev judgments from reused applications, retain run provenance, focus and scroll during live reorder, and keep long status text readable without nested field scrolling (#313–316). Regenerate both README previews from the actual UI with synthetic data.
+- Follow the current OpenAI prompt caching and OAuth pricing documents: finite retention and prefix-sensitive reuse; no separate Codex credit cache-write charge. API billing differs.
+- A bounded synthetic OAuth comparison with two order-reversed pairs recovered every required parser fact in all four responses. Native-only consumed 35,468 tokens per cell; Compact consumed 18,893 plus 2,139 Jev tokens, a 40.7% reduction. This is not a general quality/savings result or proof of the requested 50% target. #300 and #317 retain their product-effect acceptance criteria.
+
 ## v0.8.38 — 2026-10-21 — Hooks survive native plugin upgrades
 
 - Describe unavailable native token usage in Codex `depth_unknown` notices instead of Claude transcript/headless behavior (#311). Gate A keeps the original turn; Router application is observed separately.

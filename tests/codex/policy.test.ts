@@ -44,8 +44,8 @@ describe('Codex ordered routing and recorded application', () => {
     const fromFile = runtimeCodexPolicy({ JEV_CODEX_CONFIG: old });
     expect(fromFile.gate.mode).toBe('off');
     expect(fromFile.router).toMatchObject({ enabled: true, model: true, effort: true });
-    // A leftover Codex Compact section is accepted and never read.
-    expect(fromFile).not.toHaveProperty('compact');
+    // Legacy budget keys are ignored; current selection defaults remain available.
+    expect(fromFile.compact).toEqual({ enabled: true, timeoutMs: 800 });
     const fromEnv = runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_GATE_MODE: 'lean' });
     expect(fromEnv.gate.mode).toBe('off');
     expect(fromEnv.router.enabled).toBe(true);
@@ -118,7 +118,7 @@ describe('Codex ordered routing and recorded application', () => {
     // No published price for either side: the switch's cost is unknown, so the model stays, with the effort it had (an unlisted model's levels are unknown).
     expect(await routeCodex({ model: 'outside-role-mapping', effort: 'high', task: 'task', session: 's', prompt: 'p', catalog: native, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl,
       trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({});
-    expect(rows.at(-1)).toMatchObject({ answers: { model: { choice: target } }, cost: { deltaUsd: null }, cost_reason: 'cost_unknown_hold', reasons: { model: 'cost_unknown_hold' } });
+    expect(rows.at(-1)).toMatchObject({ answers: { model: { choice: target } }, cost: { basis: 'unknown', actual_bill: 'unknown', hold: true }, cost_reason: 'cost_unknown_hold', reasons: { model: 'cost_unknown_hold' } });
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
   // Descriptions as this account's catalog lists them (~/.codex/models_cache.json, 2026-10-15).
