@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.41 — 2026-10-21 — Preserve active native connections
+
+- Distinguish a native plugin version replacement from removal (#322). Keep the serving helper during updates, confirm removal on consecutive checks, and wait for inference, hooks and owned workers before retiring it. Claim idle status before restoring configuration so new requests cannot enter that interval.
+- Handle upstream disconnects both before headers and during streamed responses. Fail only the affected request, retain the helper and let Codex own retries; do not replay inference or report a truncated stream as a clean completion.
+- Reproduce the previous active-update connection refusal and interrupted-stream hang with local scripted APIs. These repairs do not establish the cause of every historical disconnect or the outstanding total-token target in #300/#317.
+
 ## v0.8.40 — 2026-10-21 — Compact assessment overhead and host activity
 
 - Skip new Compact judgments whose best-case current-request reduction cannot repay their estimated request and typed-answer overhead (#321). Prefer the useful repeated prefix of a batch, retain exact verified decisions and expose the preserve reason. Estimates do not prove total-token savings or assume future reuse.

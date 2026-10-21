@@ -162,7 +162,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
       } finally { rpc.close(); native.kill('SIGTERM'); }
       writeFileSync(config, readFileSync(config, 'utf8') + '\n# Owner edit while connected\n');
       const removed = cli(['plugin', 'remove', 'jev-gate@jev-auto-fixture']); expect(removed.status, removed.stderr).toBe(0); installed = false;
-      const until = Date.now() + 10_000;
+      const until = Date.now() + 15_000;
       while (readFileSync(config, 'utf8').includes('/native/') && Date.now() < until) await new Promise<void>(resolve => setTimeout(resolve, 100));
       const restored = readFileSync(config, 'utf8');
       expect(restored).not.toContain('model_provider =');

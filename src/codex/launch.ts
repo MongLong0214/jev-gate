@@ -47,7 +47,7 @@ export interface CodexLaunchOptions {
   connection?: { token: string; port: number; ready?: () => boolean; restart?: () => void };
 }
 /** Official App Server plus local transport. Persistent automatic connection settings are owned by connection.ts. */
-export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ url: string; token: string; policy: CodexPolicy; rpc: CodexRpc; close: () => Promise<void> }> => {
+export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ url: string; token: string; policy: CodexPolicy; rpc: CodexRpc; retire: (beforeClose: () => Promise<void>) => Promise<boolean>; close: () => Promise<void> }> => {
   const token = options.connection?.token ?? randomBytes(32).toString('hex');
   let child: ChildProcessWithoutNullStreams | undefined;
   let rpc: CodexRpc | undefined; let policy: CodexPolicy | undefined; let client: WebSocket | undefined;
@@ -55,6 +55,10 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   const requests = new Set<ReturnType<typeof httpRequest>>();
   let active = 0;
   let restarting = false;
+  const claimIdle = (): boolean => {
+    if (restarting || active || policy?.hasActiveWorkers()) return false;
+    restarting = true; return true;
+  };
   const nativePath = (req: IncomingMessage): string | null => {
     const prefix = `/native/${token}`;
     if (equal(req.url?.slice(0, prefix.length), prefix) && req.url?.[prefix.length] === '/') return req.url.slice(prefix.length);
@@ -66,8 +70,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       if (options.connection && path === '/restart' && req.method === 'POST') {
         if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
         // An update must never terminate an inference or a worker between tool calls.
-        if (restarting || active || policy?.hasActiveWorkers()) { res.writeHead(409); res.end(); return; }
-        restarting = true;
+        if (!claimIdle()) { res.writeHead(409); res.end(); return; }
         res.writeHead(204); res.end(); setTimeout(() => options.connection?.restart?.(), 20); return;
       }
       if (options.connection && path === '/credentials' && req.method === 'POST') {
@@ -152,7 +155,23 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       if (res.destroyed || req.destroyed && !req.complete) return;
       let submitted: ReturnType<CodexPolicy['observeRequest']>;
       let compactTerminal = false;
+      let requestFailed = false;
+      const recordFailure = (): void => {
+        if (requestFailed) return; requestFailed = true;
+        if (sessionId) {
+          policy?.observeRequestFailure(sessionId, submitted);
+          if (compact && (nativeCompact || compact.applied) && !compactTerminal) { compactTerminal = true; policy?.recordCompact(sessionId, compact, 'result', { outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); }
+        }
+      };
+      const fail = (): void => {
+        if (res.destroyed) return; // A native cancellation is not an upstream failure.
+        recordFailure();
+        if (!res.headersSent) { res.writeHead(502); res.end(); }
+        else res.destroy(); // Never present a truncated SSE body as a clean completion.
+      };
       const upstream = (base.protocol === 'https:' ? httpsRequest : httpRequest)(base, { method: req.method, headers }, response => {
+        // ClientRequest errors do not handle an IncomingMessage reset after headers.
+        response.once('aborted', fail); response.once('error', fail);
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
         if (sessionId && compact && (nativeCompact || compact.applied)) {
@@ -170,23 +189,20 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           }
           response.once('close', () => { if (!compactTerminal && (!response.complete || (response.statusCode ?? 502) >= 400)) { compactTerminal = true; policy?.recordCompact(sessionId, receipt, 'result', { status: response.statusCode, outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); } });
         }
-        if (sessionId && (response.statusCode ?? 502) >= 400) policy?.observeRequestFailure(sessionId, submitted);
+        if ((response.statusCode ?? 502) >= 400) recordFailure();
         if (!nativeCompact && sessionId && response.statusCode === 200 && req.method === 'POST' && route === '/responses') {
           observeResponseStream(response, value => policy?.observeUsage(sessionId, value, submitted));
         }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
-      upstream.on('error', () => { if (sessionId) {
-        policy?.observeRequestFailure(sessionId, submitted);
-        if (compact && (nativeCompact || compact.applied) && !compactTerminal) { compactTerminal = true; policy?.recordCompact(sessionId, compact, 'result', { outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); }
-      } if (!res.headersSent) res.writeHead(502); res.end(); });
+      upstream.on('error', fail);
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
       if (!nativeCompact && req.method === 'POST' && route === '/responses' && sessionId && policy) {
         try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}, codexBilling(configured, account)); } catch { /* Observation does not block sending. */ }
       }
       if (sessionId && compact && (nativeCompact || compact.applied)) { const receipt = compact; upstream.once('finish', () => policy?.recordCompact(sessionId, receipt, 'submitted', { sent: true })); }
       upstream.end(payload);
-    } catch { if (!res.headersSent) res.writeHead(502); res.end(); }
+    } catch { if (!res.headersSent) { res.writeHead(502); res.end(); } else res.destroy(); }
   });
   const ws = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
   server.on('upgrade', (req, socket, head) => {
@@ -228,12 +244,18 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
     policy?.close(); rpc?.close(); client?.terminate(); for (const r of requests) r.destroy(); child?.kill('SIGTERM');
     await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); ws.close();
   })();
+  const retire = async (beforeClose: () => Promise<void>): Promise<boolean> => {
+    if (!claimIdle()) return false;
+    // Claim synchronously before restoring config so no new request can start in the gap.
+    try { await beforeClose(); await close(); return true; }
+    catch (error) { restarting = false; throw error; }
+  };
   try {
     if (options.connection) {
       await rpc.request('initialize', { clientInfo: { name: 'jev-gate-native-connection', version: '0.8.0' }, capabilities: { experimentalApi: true } });
       rpc.send({ method: 'initialized' }); await policy.initialize();
     }
-    return { url: `ws://127.0.0.1:${address.port}`, token, policy, rpc, close };
+    return { url: `ws://127.0.0.1:${address.port}`, token, policy, rpc, retire, close };
   } catch (error) { await close(); throw error; }
 };
 

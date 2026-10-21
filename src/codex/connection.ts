@@ -206,7 +206,7 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
   let closing = false;
   let ready = false;
   const close = async (): Promise<void> => { if (closing) return; closing = true; if (timer) clearInterval(timer); await session?.close(); rmSync(lock, { recursive: true, force: true }); };
-  const installedPlugins = async (): Promise<number> => {
+  const installedPlugins = async (sameVersion = true): Promise<number> => {
     const result = await session!.rpc.request('plugin/installed', {}, 5000);
     const user = await userConfig(session!.rpc);
     const plugins = obj(user.config['plugins']);
@@ -215,6 +215,9 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
       return plugin?.['name'] === 'jev-gate' && plugin['installed'] === true && plugin['enabled'] === true && setting?.['enabled'] !== false;
     });
     if (enabledPlugins.length !== 1) return 0;
+    // A running helper may serve the previous version until the newer MCP claims an idle restart.
+    // Version replacement is not an uninstall; startup still requires this exact installation.
+    if (!sameVersion) return 1;
     const plugin = enabledPlugins[0]!;
     const version = obj(JSON.parse(readFileSync(join(root, '.codex-plugin', 'plugin.json'), 'utf8')))?.['version'];
     return plugin['localVersion'] === null || plugin['localVersion'] === undefined || plugin['localVersion'] === version ? 1 : 0;
@@ -235,10 +238,16 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
     const stop = (): void => { void close(); };
     process.once('SIGTERM', stop); process.once('SIGINT', stop);
     let checking = false;
+    let absentSince: number | undefined;
     timer = setInterval(() => {
       if (checking || closing) return; checking = true;
       void (async () => {
-        if (!existsSync(join(root, '.codex-plugin', 'plugin.json')) || await installedPlugins() !== 1) { await restoreConnection(session!.rpc, env); await close(); }
+        if (existsSync(join(root, '.codex-plugin', 'plugin.json')) && await installedPlugins(false) === 1) { absentSince = undefined; return; }
+        // Native updates may briefly remove an entry. Confirm absence on a later poll,
+        // and retain active inference, hooks and owned workers even after real removal.
+        if (absentSince === undefined) { absentSince = Date.now(); return; }
+        if (Date.now() - absentSince < 5000) return;
+        if (await session!.retire(() => restoreConnection(session!.rpc, env))) await close();
       })().catch(() => undefined).finally(() => { checking = false; });
     }, 5000);
     await new Promise<void>(resolve => { session!.rpc.onClose = () => { void close().finally(resolve); }; });
