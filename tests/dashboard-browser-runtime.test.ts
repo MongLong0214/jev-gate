@@ -25,7 +25,7 @@ const receipt = (extra: Partial<JevReceipt> = {}): JevReceipt => ({ status: 200,
 const call = (id: string, feature: OperationStep['feature'], durationMs: number, extra: Partial<OperationStep> = {}, rc: Partial<JevReceipt> = {}): OperationStep => step(id, feature, { durationMs, receipt: receipt(rc), ...extra });
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution ${id}`, source: 'gate', mode: 'auto', firstAt: steps[0]?.at ?? ago(0), lastAt: steps.at(-1)?.at ?? ago(0), state: 'done', steps, ...extra });
 // As the dashboard server sends it: in the page and in every snapshot.
-const VERSION = { running: '0.8.31', installed: '0.8.31', release: { latest: '0.8.31' } };
+const VERSION = { running: '0.8.32', installed: '0.8.32', release: { latest: '0.8.32' } };
 function snapshot(runs: OperationRun[]) {
   const feed = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host ?? 'claude', runId: r.id, runTitle: r.title }))).sort((a,b) => b.at.localeCompare(a.at));
   const ids = ['admission','allocation','workers','router','compact'] as const;
@@ -100,7 +100,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         // The server puts the version in the page, so the badge has its text, and its width, without waiting for /api/version.
         expect(await p.locator('#version-badge').textContent()).toContain('99.0.0');
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.31');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.32');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
