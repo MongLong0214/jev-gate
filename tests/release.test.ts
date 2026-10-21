@@ -69,7 +69,7 @@ describe('scripts/release.mjs', () => {
     write('docs/advanced-usage.md', '# Advanced usage\n\nGate settings for a checkout.\n');
     write('hooks/hooks.json', '{}\n');
     write('hooks/register.ts', 'export {};\n');
-    for (const name of ['cost','provider-prices','provider-prices-data','route-cost','claude-cache','router-answers','router-selection','router-context','router-child-context','router-observation','router-secret','claude-models','claude-candidates','frontier-routing']) write(`src/${name}.ts`, 'export {};\n');
+    for (const name of ['cost','provider-prices','provider-prices-data','route-cost','claude-cache','claude-dispatch','router-answers','router-selection','router-context','router-child-context','router-observation','router-secret','claude-models','claude-candidates','frontier-routing']) write(`src/${name}.ts`, 'export {};\n');
     for (const a of AGENTS) write(`agents/${a}.md`, `# ${a}\n`);
     for (const f of ['README.md', 'AGENTS.md', '.env.example']) write(f, `${f}\n`);
     write('dist/hook.js', 'export {};\n');

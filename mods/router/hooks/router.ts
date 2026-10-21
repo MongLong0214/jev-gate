@@ -17,6 +17,7 @@ import { normalizeUsage, usageCost, observedTtl, ModelCache, type CacheObservati
 import { providerPrice } from '../../../src/provider-prices.ts';
 import { CACHE_REACH, costHold, routeCost, TURN_HORIZON } from '../../../src/route-cost.ts';
 import { claudeEffortCache, effortCacheHit, type ClaudeCacheCapability } from '../../../src/claude-cache.ts';
+import { parseDispatchMarker } from '../../../src/claude-dispatch.ts';
 
 /**
  * The Router's handlers over a structural engine. register.ts adapts the host's `$` to RouterEngine (the environment
@@ -1372,7 +1373,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const allowFable = await within(frontierFor(engine), live);
     const owned = e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt);
     if (owned) {
-      const token = /\[JEV_DISPATCH token=([a-f0-9-]{36})\]$/.exec(e.prompt)?.[1] ?? '';
+      const token = parseDispatchMarker(e.prompt, true) ?? '';
       // No child exists before next, so a refused or unanswered check releases this token's unstarted reservation once.
       // A failed release leaves the reservation protected; a wait already ended releases nothing.
       const release = async (model: string): Promise<string | undefined> => {

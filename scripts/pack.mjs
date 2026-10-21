@@ -57,7 +57,7 @@ const modSources = () =>
       .sort()
       .map((n) => `mods/${m}/hooks/${n}`),
   );
-const ROUTER_SHARED = ['cost', 'provider-prices', 'provider-prices-data', 'route-cost', 'claude-cache', 'router-answers', 'router-selection', 'router-context', 'router-child-context', 'router-observation', 'router-secret', 'claude-models', 'claude-candidates', 'frontier-routing'].map(n => `src/${n}.ts`);
+const ROUTER_SHARED = ['cost', 'provider-prices', 'provider-prices-data', 'route-cost', 'claude-cache', 'claude-dispatch', 'router-answers', 'router-selection', 'router-context', 'router-child-context', 'router-observation', 'router-secret', 'claude-models', 'claude-candidates', 'frontier-routing'].map(n => `src/${n}.ts`);
 const shared = () => ['hooks/register.ts', ...modSources(), ...ROUTER_SHARED, 'plugins/evidence/dist/server.mjs'];
 // Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo and results banner are the
 // README's images, each with its dark-theme variant. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.
