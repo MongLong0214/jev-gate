@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.36 — 2026-10-21 — Readable live execution circuit
+
+- Balance the five Claude stages and four Codex stages across responsive rows, with a shared Jev rail on wide screens (#302). Real responses trigger the signal, glow and pulse effects; idle data does not invent activity.
+- Keep persistent stage detail fields with reserved space, wrapping, selectable full values and keyboard/touch scrolling. Live updates preserve layout, focus and scroll positions. Show the original Jev decision even when a host observation follows it.
+- Restore light/dark README dashboard previews rendered from the current UI with synthetic sample data, and ship their assets in the install archive.
+- Repair the isolated native runtime test package to include its required license. Native history, lifecycle tools and hook-deadline verification use disposable homes and local scripted APIs.
+- No token reduction or cost improvement was measured for this release. Automatic Codex connection preserving the existing provider and user settings (#304) and the Router cost/total-token requirements (#300) remain separate work.
+
 ## v0.8.35 — 2026-10-21 — Native worker collection and tool access
 
 - Fix owned-worker result recovery against the native Codex API (#303). Workers now use native history because ephemeral threads reject includeTurns reads. Status still requires the exact thread and terminal turn; a collection error does not establish execution failure or acceptance. Worker conversations follow native local history retention and are archived after settlement.

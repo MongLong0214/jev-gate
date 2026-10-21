@@ -62,7 +62,7 @@ describe('scripts/release.mjs', () => {
       write(`mods/${m}/hooks/register.ts`, 'export default () => {};\n');
       write(`mods/${m}/README.md`, `# ${m}\n`);
     }
-    for (const name of ['jev-gate-logo.svg', 'jev-gate-logo-dark.svg', 'results.svg', 'results-dark.svg']) write(`assets/readme/${name}`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n');
+    for (const name of ['jev-gate-logo.svg', 'jev-gate-logo-dark.svg', 'results.svg', 'results-dark.svg', 'dashboard.svg', 'dashboard-dark.svg']) write(`assets/readme/${name}`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n');
     write('plugins/codex/README.md', '# Native Codex usage\n');
     write('LICENSE', 'MIT License\n');
     write('.claude-plugin/icon.png', 'PNG fixture\n');
