@@ -441,6 +441,22 @@ describe('activity: child_effect', () => {
 });
 
 describe('activity: compact', () => {
+  it('separates Codex assessment, applied submission and completed response facts', () => {
+    const records = [
+      rec('codex_compact', { stage: 'selection_result', reason: 'assessed' }),
+      rec('codex_compact', { stage: 'selection_result', reason: 'timeout' }),
+      rec('codex_compact', { stage: 'submitted', applied: true }),
+      rec('codex_compact', { stage: 'submitted', applied: true }),
+      rec('codex_compact', { stage: 'result', applied: true, outcome: 'completed' }),
+      rec('codex_compact', { stage: 'result', applied: false, outcome: 'completed' }),
+      rec('codex_compact', { stage: 'result', applied: true, outcome: 'failed' }),
+    ];
+    const c = check(run([], { traces: { codex: { records, unreadable: 0 } } }), 'compact');
+    expect(c.metrics).toMatchObject({ fired: 2, applied: 2, effect: null, regression: 2, codexAssessed: 1, codexSubmitted: 2, codexCompleted: 1 });
+    expect(c.message).toContain('1 assessed / 2 attempts');
+    expect(c.metrics).not.toHaveProperty('restored');
+  });
+
   it('reports Codex Compact as unmeasured before any selection', () => {
     const checks = run([], { traces: { codex: { records: [rec('codex_event', { host: 'codex', event: 'UserPromptSubmit' })], unreadable: 0 } } });
     expect(checks.find(c => c.message.startsWith('compact:'))).toMatchObject({level:'info',metrics:{fired:0,applied:0,effect:null}});
