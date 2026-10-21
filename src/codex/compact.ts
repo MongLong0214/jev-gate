@@ -11,11 +11,91 @@ export interface CompactState {
 }
 interface Part { item: number; block: number | null; start: number; end: number }
 interface Candidate { id: string; tool: string; input: string; inputExcerpt: boolean; text: string; parts: Part[] }
-export interface CompactReceipt { request_id: string; prompt_id: string; path: 'inference' | 'native'; applied: boolean; removed_chars: number; selection_ids: string[] }
+export interface CompactReceipt { request_id: string; prompt_id: string; path: 'inference' | 'native'; applied: boolean; removed_chars: number; selection_ids: string[]; exact_references?: number; exact_repetitions?: number }
 const hash = (v: string): string => createHash('sha256').update(v).digest('hex');
 const labels = ['keep', 'remove', 'unclear'] as const;
 const protectedText = /(?:Process exited with code [1-9]|"(?:exit_code|exitCode)"\s*:\s*(?:-[1-9]|[1-9])|\b(?:Traceback|Exception:|Error:|FAIL(?:ED)?\b|blockers|required_checks|is_error|interrupted|Script running with cell ID))/i;
 const marker = (n: number): string => `\n[Jev Compact: ${n} characters of older tool output omitted; call and recent context retained.]\n`;
+
+/** Linear-time whole-text repetition detection; the unit and count reconstruct every code unit.
+ * Keep short, whitespace-only, weak reductions and large buffers native. */
+const exactRepetition = (text: string): string => {
+  if (text.length < 4096 || text.length > 1_000_000) return text;
+  const prefix = new Uint32Array(text.length);
+  for (let i = 1; i < text.length; i++) {
+    let j = prefix[i - 1]!;
+    while (j && text[i] !== text[j]) j = prefix[j - 1]!;
+    if (text[i] === text[j]) j++;
+    prefix[i] = j;
+  }
+  const period = text.length - prefix[text.length - 1]!;
+  if (text.length % period || text.length / period < 3) return text;
+  const unit = text.slice(0, period), count = text.length / period;
+  if (unit.trim().length < 16 || /[\uDC00-\uDFFF]/.test(text[period] ?? '') || unit.repeat(count) !== text) return text;
+  const encoded = '[Jev Compact lossless repetition: original text = unit concatenated count times, with no added separators.]\n' + JSON.stringify({ count, unit });
+  return encoded.length * 4 < text.length ? encoded : text;
+};
+
+/** Reference only byte-identical complete plaintext results. The exact original (or its lossless
+ * repetition representation) remains in this request. No disk cache, cross-request reference,
+ * inferred equivalence or paid judgment is involved. */
+const exactReferences = (request: Obj): { request: Obj; anchors: Set<number>; removed: number; references: number; repetitions: number } => {
+  const unchanged = { request, anchors: new Set<number>(), removed: 0, references: 0, repetitions: 0 };
+  if (!Array.isArray(request['input'])) return unchanged;
+  const input = request['input'];
+  const calls = new Map<string, { name: string; text: string; type: string; at: number; count: number }>();
+  const counts = new Map<string, number>();
+  const results: number[] = [];
+  input.forEach((v, at) => {
+    const x = obj(v); if (!x || typeof x['call_id'] !== 'string') return;
+    if (['function_call', 'custom_tool_call'].includes(String(x['type']))) {
+      const text = x['type'] === 'function_call' ? x['arguments'] : x['input'];
+      if (typeof x['name'] === 'string' && typeof text === 'string') calls.set(x['call_id'], { name: x['name'], text, type: String(x['type']), at, count: (calls.get(x['call_id'])?.count ?? 0) + 1 });
+    } else if (['function_call_output', 'custom_tool_call_output'].includes(String(x['type']))) {
+      results.push(at); counts.set(x['call_id'], (counts.get(x['call_id']) ?? 0) + 1);
+    }
+  });
+  const cutoff = results[Math.max(0, results.length - 6)] ?? 0;
+  const retained = new Map<string, { item: number; call: string; encoded: string }>();
+  let next: unknown[] | undefined;
+  const anchors = new Set<number>(); let removed = 0, references = 0, examined = 0;
+  for (let at = 0; at < cutoff; at++) {
+    const x = obj(input[at]); if (!x) { retained.clear(); continue; }
+    // Do not carry a reference across a changed instruction/user window or opaque checkpoint.
+    if (!['function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output', 'reasoning'].includes(String(x['type'])) || ['user', 'system', 'developer'].includes(String(x['role']))) retained.clear();
+    if (!['function_call_output', 'custom_tool_call_output'].includes(String(x['type'])) || typeof x['call_id'] !== 'string') continue;
+    const call = calls.get(x['call_id']);
+    if (!call || call.count !== 1 || call.at >= at || x['type'] !== `${call.type}_output` || counts.get(x['call_id']) !== 1 || x['is_error'] === true || x['interrupted'] === true || call.name.length > 256 || call.text.length > 65536 || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(x['call_id'])) continue;
+    const output = x['output'];
+    const text = typeof output === 'string' ? output : Array.isArray(output) && output.length && output.every(b => obj(b)?.['type'] === 'input_text' && typeof obj(b)?.['text'] === 'string') ? output.map(b => String(obj(b)!['text'])).join('\n') : null;
+    if (!text || text.length < 2048) continue;
+    // Bound the added synchronous scan, hashing and repetition work. Unexamined evidence stays native.
+    examined += text.length + call.text.length;
+    if (examined > 2_000_000) break;
+    if (looksSecret(call.text) || looksSecret(text) || protectedText.test(text)) continue;
+    const encoded = JSON.stringify(output);
+    const key = hash(JSON.stringify([x['type'], call.name, call.text, output]));
+    const canonical = retained.get(key);
+    // Compare the actual encoding too; the hash is only a lookup, never equivalence proof.
+    if (!canonical || canonical.encoded !== encoded) { retained.set(key, { item: at, call: x['call_id'], encoded }); continue; }
+    const reference = `[Jev Compact: exact duplicate of retained call_id ${JSON.stringify(canonical.call)} output in this request; expand any lossless repetition.]`;
+    const replacement = typeof output === 'string' ? reference : (output as Obj[]).map((block, i) => ({ ...block, text: `${reference} Text block ${i}.` }));
+    const reduction = text.length - (typeof replacement === 'string' ? replacement.length : replacement.map(b => b.text).join('\n').length);
+    if (reduction <= 0) continue;
+    next ??= [...input]; next[at] = { ...x, output: replacement };
+    anchors.add(canonical.item); removed += reduction; references++;
+  }
+  let repetitions = 0;
+  // Encode a canonical repeated original once; every reference stays resolvable locally.
+  for (const at of anchors) {
+    const item = obj(next![at])!, output = item['output'];
+    const before = repetitions;
+    const encode = (text: string) => { const value = exactRepetition(text); if (value !== text) { removed += text.length - value.length; repetitions++; } return value; };
+    const encoded = typeof output === 'string' ? encode(output) : (output as Obj[]).map(b => ({ ...b, text: encode(String(b['text'])) }));
+    if (repetitions !== before) next![at] = { ...item, output: encoded };
+  }
+  return next ? { request: { ...request, input: next }, anchors, removed, references, repetitions } : unchanged;
+};
 
 /** Only old plaintext interiors are optional. Opaque items, call/result topology, media and recent results are never rewritten. */
 export const compactCandidates = (input: unknown): Candidate[] => {
@@ -72,21 +152,25 @@ export const prepareCodexCompact = async (args: {
   path: 'inference' | 'native'; signal: AbortSignal; current: () => boolean;
   trace?: TraceWriter; fetchImpl?: typeof fetch;
 }): Promise<{ request: Obj; receipt: CompactReceipt }> => {
-  const { request, state } = args;
+  const { request: original, state } = args;
   const receipt: CompactReceipt = { request_id: randomUUID(), prompt_id: args.prompt, path: args.path, applied: false, removed_chars: 0, selection_ids: [] };
   const write = (stage: string, data: Obj): void => { try { args.trace?.write('codex_compact', { host: 'codex', session_id: args.session, ...receipt, stage, ...data }); } catch { /* Observation never blocks native execution. */ } };
-  const skip = (reason: string) => { if (args.path === 'native' || reason === 'assessment_not_amortized') write('prepared', { reason, sent: false }); return { request, receipt }; };
+  const skip = (reason: string) => { if (args.path === 'native' || reason === 'assessment_not_amortized') write('prepared', { reason, sent: false }); return { request: original, receipt }; };
   if (args.env['JEV_CODEX_ENABLED'] === '0' || !args.config.enabled) return skip('disabled');
   if (args.signal.aborted || !args.current()) return skip('stale');
-  if (request['previous_response_id'] || !Array.isArray(request['input'])) return skip('incremental_context');
+  if (original['previous_response_id'] || !Array.isArray(original['input'])) return skip('incremental_context');
   if (!args.task.trim() || args.task.length > 16000 || looksSecret(args.task) || args.recentRequests.some(looksSecret)) return skip('task_unavailable');
   if (!args.env['TYPESAFE_API_KEY']) return skip('no_key');
-  const candidates = compactCandidates(request['input']);
-  if (!candidates.length) return skip('no_candidates');
   if (state.pending) await state.pending;
   if (args.signal.aborted || !args.current()) return skip('stale');
+  const exact = exactReferences(original);
+  const request = exact.request;
+  // An original referenced by another result must not be semantically omitted afterwards.
+  const candidates = compactCandidates(request['input']).map(c => ({ ...c, parts: c.parts.filter(p => !exact.anchors.has(p.item)) })).filter(c => c.parts.length);
+  if (!candidates.length && !exact.references) return skip('no_candidates');
   const unseen = candidates.filter(c => !state.decisions.has(c.id));
   let preserveReason = 'preserved';
+  let assessmentFailed = false;
   // Bound work per task/context and amortize choices across identical repeated native inputs.
   if (unseen.reduce((n, c) => n + c.text.length * c.parts.length, 0) >= 8192 && state.calls < 4 && state.decisions.size < 128) {
     const chosen: Candidate[] = [];
@@ -136,7 +220,7 @@ export const prepareCodexCompact = async (args: {
         }
         if (args.signal.aborted || !args.current()) reason = 'stale';
         if (reason === 'assessed') for (const [id, remove] of decisions) { state.decisions.set(id, remove); state.selections.set(id, selectionId); }
-        else if (reason !== 'stale') for (const c of chosen) state.decisions.set(c.id, false);
+        else { assessmentFailed = true; if (reason !== 'stale') for (const c of chosen) state.decisions.set(c.id, false); }
         write('selection_result', { selection_id: selectionId, attempted: true, reason, duration_ms: out.durationMs, candidates: chosen.length,
           selected: reason === 'assessed' ? [...decisions.values()].filter(Boolean).length : 0, jev: { model: out.ok ? out.response.model : out.model ?? null, usage: out.ok ? out.response.usage : out.usage ?? null }, applied: false });
       })().finally(() => { if (state.pending === pending) delete state.pending; });
@@ -144,13 +228,17 @@ export const prepareCodexCompact = async (args: {
     }
   }
   if (args.signal.aborted || !args.current()) return skip('stale');
+  if (assessmentFailed) return skip('assessment_failed');
   const replacements = new Map<string, Part[]>();
   for (const c of candidates) if (state.decisions.get(c.id)) for (const p of c.parts) {
     const selection = state.selections.get(c.id); if (selection && !receipt.selection_ids.includes(selection)) receipt.selection_ids.push(selection);
     const key = `${p.item}:${p.block}`; const parts = replacements.get(key) ?? []; parts.push(p); replacements.set(key, parts);
   }
-  if (!replacements.size) return skip(preserveReason);
-  const input = [...request['input']];
+  if (!replacements.size && !exact.references) return skip(preserveReason);
+  receipt.removed_chars = exact.removed;
+  if (exact.references) receipt.exact_references = exact.references;
+  if (exact.repetitions) receipt.exact_repetitions = exact.repetitions;
+  const input = [...request['input'] as unknown[]];
   for (const parts of replacements.values()) {
     const first = parts[0]!; const item = obj(input[first.item])!;
     const output = item['output'];
@@ -163,6 +251,6 @@ export const prepareCodexCompact = async (args: {
     else { const blocks = [...output as unknown[]]; blocks[first.block] = { ...obj(blocks[first.block])!, text: value }; input[first.item] = { ...item, output: blocks }; }
   }
   receipt.applied = receipt.removed_chars > 0;
-  write('prepared', { reason: receipt.applied ? 'selected_old_tool_text' : 'preserved', estimated_removed_tokens: null, total_token_saving: 'unmeasured' });
+  write('prepared', { reason: replacements.size ? 'selected_old_tool_text' : 'exact_duplicate_reference', estimated_removed_tokens: null, total_token_saving: 'unmeasured' });
   return { request: receipt.applied ? { ...request, input } : request, receipt };
 };

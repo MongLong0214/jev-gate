@@ -181,13 +181,18 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
             const r = obj(value['response']) ?? value;
             policy?.recordCompact(sessionId, receipt, 'result', { status: response.statusCode, outcome: failed || r['status'] === 'failed' || r['status'] === 'incomplete' || r['error'] ? 'failed' : 'completed', usage: normalizeUsage('codex', obj(r['usage']) ?? {}), model: typeof r['model'] === 'string' ? r['model'] : null, total_token_saving: 'unmeasured' });
           };
-          if (String(response.headers['content-type']).includes('text/event-stream')) observeResponseStream(response, observed, value => observed(value, true));
+          // Native /responses streams can omit Content-Type. Use the endpoint's contract,
+          // just as ordinary response accounting does, rather than parsing SSE as JSON.
+          const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
+          if (contentType.includes('text/event-stream') || route === '/responses' && !contentType.includes('application/json')) observeResponseStream(response, observed, value => observed(value, true));
           else {
             const chunks: Buffer[] = []; let bytes = 0;
             response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes <= 1024 * 1024) chunks.push(chunk); });
             response.once('end', () => { if (bytes > 1024 * 1024) return; try { const value = obj(JSON.parse(Buffer.concat(chunks).toString('utf8'))); if (value && (response.statusCode ?? 502) === 200 && !value['error']) observed(value); } catch { /* Unknown response usage stays unknown. */ } });
           }
-          response.once('close', () => { if (!compactTerminal && (!response.complete || (response.statusCode ?? 502) >= 400)) { compactTerminal = true; policy?.recordCompact(sessionId, receipt, 'result', { status: response.statusCode, outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); } });
+          // A native client can close after its terminal SSE event, while observation is
+          // still decompressing. Transport failures are handled by fail(); a close alone
+          // must not replace an eventual completed event with a fabricated failure.
         }
         if ((response.statusCode ?? 502) >= 400) recordFailure();
         if (!nativeCompact && sessionId && response.statusCode === 200 && req.method === 'POST' && route === '/responses') {

@@ -56,7 +56,7 @@ it('authenticates the built-in endpoint, preserves native auth, selects SSE befo
   } finally { finish?.(); await session.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
 });
 
-it('survives an upstream connection reset before headers or during SSE without replaying inference (#322)', async () => {
+it.each([false, true])('survives an upstream connection reset before headers or during SSE without replaying inference (native compact=%s)', async nativeCompact => {
   const root = mkdtempSync(join(tmpdir(), 'jev-reset-'));
   writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n');});\n`, { mode: 0o755 });
   writeFileSync(join(root, 'policy.json'), '{}');
@@ -73,12 +73,20 @@ it('survives an upstream connection reset before headers or during SSE without r
   const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1` }, connection: { token: 'a'.repeat(64), port: 0 } });
   const base = session.url.replace('ws:', 'http:'); const endpoint = `${base}/native/${session.token}/responses`;
   try {
-    const first = await fetch(endpoint, { method: 'POST', body: '{}' }); expect(first.status).toBe(502); await first.text();
-    const response = await fetch(endpoint, { method: 'POST', body: '{}' });
+    await session.policy.externalHook({ hook_event_name: 'SessionStart', session_id: 's', cwd: root, model: 'gpt-6.1-sol' });
+    await session.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 's', cwd: root, turn_id: 'p', prompt: 'Preserve the parser contract.' });
+    const compact = vi.spyOn(session.policy, 'recordCompact');
+    const headers = { 'session-id': 's', 'x-codex-turn-metadata': JSON.stringify({ session_id: 's', ...(nativeCompact ? { request_kind: 'compaction' } : {}) }) };
+    const first = await fetch(endpoint, { method: 'POST', body: '{}', headers }); expect(first.status).toBe(502); await first.text();
+    const response = await fetch(endpoint, { method: 'POST', body: '{}', headers });
     const failed = expect(response.text()).rejects.toThrow(); abort!(); await failed;
     expect(sent).toBe(2); // Native caller decides whether to retry; the gateway never replays.
     expect((await fetch(base + '/health', { headers: { authorization: `Bearer ${session.token}` } })).status).toBe(200);
-    expect(await (await fetch(endpoint, { method: 'POST', body: '{}' })).text()).toContain('response.completed');
+    expect(await (await fetch(endpoint, { method: 'POST', body: '{}', headers })).text()).toContain('response.completed');
     expect(sent).toBe(3);
+    if (nativeCompact) {
+      await vi.waitFor(() => expect(compact.mock.calls.filter(c => c[2] === 'result')).toHaveLength(3));
+      expect(compact.mock.calls.filter(c => c[2] === 'result').map(c => c[3].outcome)).toEqual(['failed', 'failed', 'completed']);
+    }
   } finally { abort?.(); await session.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
 });

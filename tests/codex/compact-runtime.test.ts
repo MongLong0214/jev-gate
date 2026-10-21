@@ -41,7 +41,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('native Codex Jev Compact 
       const id = String((started.thread as Obj).id);
       const items = Array.from({ length: 16 }, (_, i) => [
         { type: 'custom_tool_call', call_id: `fixture_${i}`, name: 'exec', input: i === 1 ? 'Read parser contract.' : 'Read completed obsolete color survey.' },
-        { type: 'custom_tool_call_output', call_id: `fixture_${i}`, output: [{ type: 'input_text', text: (i === 1 ? 'ALPHA-731; reject empty names; preserve unicode; parseName(value).\n' : 'Completed obsolete CSS color survey. blue green gray white beige navy violet.\n').repeat(120) }] },
+        { type: 'custom_tool_call_output', call_id: `fixture_${i}`, output: [{ type: 'input_text', text: (i === 1 ? 'ALPHA-731; reject empty names; preserve unicode; parseName(value).\n' : 'Completed obsolete CSS color survey. blue green gray white beige navy violet.\n').repeat(120) + (i === 0 || i === 2 ? '' : `Read occurrence ${i}.`) }] },
       ]).flat();
       await gateway.rpc.request('thread/inject_items', { threadId: id, items });
       // This fixture registers transport metadata explicitly; installed hook trust has a separate runtime suite.
@@ -52,6 +52,10 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('native Codex Jev Compact 
       await turn();
       const first = requests[0]!.body.input as Obj[];
       expect(first.some(i => i.type === 'custom_tool_call_output' && JSON.stringify(i).includes('Jev Compact:'))).toBe(true);
+      expect(JSON.stringify(first.find(i => i.call_id === 'fixture_2' && i.type === 'custom_tool_call_output'))).toContain('exact duplicate of retained call_id');
+      const canonical = (first.find(i => i.call_id === 'fixture_0' && i.type === 'custom_tool_call_output')!.output as Obj[])[0]!;
+      const encoded = JSON.parse(String(canonical.text).split('\n')[1]!) as { count: number; unit: string };
+      expect(encoded.unit.repeat(encoded.count)).toBe((items[1]!.output as Obj[])[0]!.text);
       expect(first.find(i => i.call_id === 'fixture_1' && i.type === 'custom_tool_call_output')).toMatchObject(items[3]!);
       for (const item of items.slice(-12)) expect(first.find(i => i.call_id === item.call_id && i.type === item.type)).toMatchObject(item);
       const before = requests.length; await gateway.rpc.request('thread/compact/start', { threadId: id });
