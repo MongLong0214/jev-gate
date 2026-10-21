@@ -77,6 +77,41 @@ describe('exact old tool result references', () => {
     expect((result.request.input as Obj[]).slice(-12)).toEqual((original.input as Obj[]).slice(-12));
   });
 
+  it('represents an old standalone repeated result without a paid assessment and preserves its exact count', async () => {
+    const original = request(), before = original.input as Obj[], unit = 'Required fact: threshold 38; 東京 e\u0301; delimiter retained.\r\n';
+    before[2]!.output = [{ type: 'input_text', text: unit.repeat(79), extra: 37 }];
+    for (let i = 4; i < before.length; i += 2) before[i]!.output = `Distinct recent receipt ${i}.`;
+    const snapshot = structuredClone(original), fetchImpl = vi.fn(), rows: Obj[] = [];
+    const state = newCompactState('p');
+    // A prior semantic decision cannot remove the exact representation or cause a new judgment.
+    for (const c of compactCandidates(original.input)) state.decisions.set(c.id, true);
+    const result = await run(original, { state, fetchImpl, trace: { write: (_phase: string, row: Obj) => rows.push(row) } });
+    expect(fetchImpl).not.toHaveBeenCalled(); expect(original).toEqual(snapshot);
+    expect(result.receipt).toMatchObject({ applied: true, exact_repetitions: 1, selection_ids: [] });
+    expect(result.receipt.exact_references).toBeUndefined();
+    const after = result.request.input as Obj[], block = (after[2]!.output as Obj[])[0]!;
+    const encoded = JSON.parse(String(block.text).split('\n')[1]!);
+    expect(encoded).toEqual({ count: 79, unit }); expect(encoded.unit.repeat(encoded.count)).toBe((before[2]!.output as Obj[])[0]!.text);
+    expect(block.extra).toBe(37); expect(after.slice(3)).toEqual(before.slice(3));
+    expect(rows).toContainEqual(expect.objectContaining({ reason: 'exact_repetition', total_token_saving: 'unmeasured' }));
+  });
+
+  it('does not extend repetition encoding into recent, orphan, failed, interrupted or mismatched results', async () => {
+    const unit = 'A complete result with exact occurrence-sensitive facts.\n';
+    for (const kind of ['recent', 'orphan', 'failed', 'interrupted', 'mismatched']) {
+      const original = request(), items = original.input as Obj[];
+      for (const item of items) if (item.type === 'function_call_output') item.output = 'Small distinct result.';
+      const at = kind === 'recent' ? items.length - 1 : 2;
+      items[at]!.output = unit.repeat(100);
+      if (kind === 'orphan') items[1]!.call_id = 'unlinked';
+      if (kind === 'failed') items[at]!.is_error = true;
+      if (kind === 'interrupted') items[at]!.interrupted = true;
+      if (kind === 'mismatched') items[1]!.type = 'custom_tool_call';
+      const result = await run(original, { fetchImpl: async () => Response.json({ invalid: true }) });
+      expect(result.request).toBe(original);
+    }
+  });
+
   it('never applies a cached semantic removal to the original needed by its exact references', async () => {
     const original = request(), state = newCompactState('p'), fetchImpl = vi.fn();
     for (const c of compactCandidates(original.input)) { state.decisions.set(c.id, true); state.selections.set(c.id, 'earlier-assessment'); }
