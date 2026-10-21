@@ -64,7 +64,7 @@ jobs:
             sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
           fi
       - name: Verify encrypted worker continuations with the current native Codex host
-        run: npm exec --yes --package=@openai/codex@latest -- env JEV_CODEX_E2E=1 node node_modules/vitest/vitest.mjs run tests/codex/connection-runtime.test.ts --maxWorkers=1
+        run: npm exec --yes --package=@openai/codex@latest -- env JEV_CODEX_E2E=1 node node_modules/vitest/vitest.mjs run tests/codex/connection-runtime.test.ts tests/codex/worker-history-runtime.test.ts --maxWorkers=1
       # doctor performs no inference and needs no key or login; it only reports missing ones.
       - run: node dist/cli.js doctor
       # main serves the marketplace: its jev-gate entry must pin the archive this tree builds.

@@ -37,6 +37,8 @@ If a session was open before installation, start a new native session after conn
 
 Active plugin clients restart a failed helper. Disabling/removing the plugin restores only settings that still match Jev’s installed values; owner edits are retained. No OS login service is installed. To start without automatic provider integration, use `JEV_CODEX_AUTO_CONNECT=0` before plugin startup. Existing native login and configured `openai_base_url` / `OPENAI_BASE_URL` are preserved in the forwarding path. `JEV_CODEX_UPSTREAM` is an explicit compatible endpoint override.
 
+Owned workers use native Codex history so status can recover the exact turn if its completion notification is missed. Their conversations follow Codex's local history retention and are archived after settlement; archiving does not delete them. A collection error preserves the worker reservation and prevents a duplicate managed dispatch, while ordinary tools remain subject to Codex's native permissions.
+
 The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available for explicit connection and diagnostics. It is optional; ordinary use does not require it.
 
 ## Feature behavior
