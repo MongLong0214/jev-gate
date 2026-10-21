@@ -39,6 +39,37 @@ const rows = (p: ReturnType<typeof page>) => p.get('runs').querySelectorAll('but
 const node = (p: ReturnType<typeof page>, id: string) => p.w.document.querySelector(`#pipeline .node[data-feature="${id}"]`)! as HTMLElement;
 const filled = (p: ReturnType<typeof page>) => [...p.get('rc').querySelectorAll('li button')];
 
+it('only attaches populated history rows and reuses their buttons when 200 runs reorder', async () => {
+  const p = page(), history = Array.from({ length: 200 }, (_, i) => run('history-' + i, 'claude', [step('s-' + i, 'router', 'host')]));
+  p.push(snapshot(history));
+  expect([...rows(p)].every(b => b.textContent?.trim() && b.getAttribute('aria-label'))).toBe(true);
+  await vi.waitFor(() => expect(rows(p)).toHaveLength(200));
+  const button = p.w.document.querySelector('[data-run="history-100"]')!;
+  button.dispatchEvent(new p.w.PointerEvent('pointerdown', { bubbles: true }));
+  const reordered = [history[100]!, ...history.filter((_, i) => i !== 100)];
+  p.push(snapshot(reordered));
+  expect(rows(p)[100]).toBe(button);
+  button.dispatchEvent(new p.w.PointerEvent('pointerup', { bubbles: true }));
+  await vi.waitFor(() => expect(rows(p)[0]).toBe(button));
+  expect([...rows(p)].every(b => b.textContent?.trim() && b.getAttribute('aria-label'))).toBe(true);
+});
+
+it('never borrows another execution or request receipt for the stage inspector', () => {
+  const p = page(), at = (n: number) => new Date(Date.now() - n).toISOString();
+  const rc = { status: 200, code: null, model: 'jev-1.14.0', input: 700, output: 22, costUsd: .0001, choice: 'sonnet · low', confidence: .9, threshold: null, direction: null };
+  const unrelated = step('other-call', 'router', 'jev', { at: at(2000), callId: 'other', durationMs: 177, receipt: rc });
+  const host = step('host', 'router', 'host', { at: at(0), callId: 'mine', model: { selected: 'opus', observed: 'opus', selectedEffort: 'high', observedEffort: 'high', status: 'confirmed' } });
+  for (const history of [[run('other', 'claude', [unrelated]), run('mine', 'claude', [host])], [run('mine', 'claude', [unrelated, host])]]) {
+    p.push(snapshot(history)); p.click('.node[data-feature=router]');
+    const fields = new Map([...p.get('circuit-inspector').querySelectorAll('dt')].map(dt => [dt.textContent, dt.nextElementSibling?.textContent]));
+    expect(fields.get('판정')).toBe('opus · high');
+    expect(fields.get('Jev 응답')).toBe('–'); expect(fields.get('토큰')).toBe('–');
+  }
+  p.push(snapshot([run('mine', 'claude', [{ ...unrelated, callId: 'mine' }, host])]));
+  expect(text(p, 'circuit-inspector')).toContain('177ms');
+  expect(text(p, 'circuit-inspector')).toContain('700 → 22');
+});
+
 it('keeps worker cards without a contract verdict honest in both languages', () => {
   const p = page();
   for (const outcome of [undefined, 'host_ended'] as const) {
@@ -54,7 +85,7 @@ it('renders doctor activity facts and unknown measurements in existing node line
   p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
   expect(node(p, 'router').querySelector('.ds')!.textContent).toContain('발화 9 · 적용 3 · 회귀 1');
   p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('효과 (루트 비용 추정) 미확인');
-  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('루트 · 선택 · sonnet · high');
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('최근 루트 (전체 실행) · 선택 · sonnet · high');
   p.click('#language'); expect(text(p, 'circuit-inspector')).toContain('effect (root cost estimate) unknown');
   p.click('[data-host=codex]'); expect(node(p, 'router').querySelector('.ds')!.textContent).toBe('24h untrackable');
 });
@@ -435,9 +466,9 @@ it('fills the first rows of a long list at once and the rest in later tasks, cou
   const p = page(), many = Array.from({ length: 45 }, (_, i) => run('run' + i, 'claude', [step('a' + i, 'admission', 'jev', { durationMs: 60 })]));
   p.push(snapshot(many));
   const shown = () => [...rows(p)].map(b => b.textContent);
-  expect(shown()).toHaveLength(45); expect(shown().filter(Boolean)).toHaveLength(20);
+  expect(shown()).toHaveLength(20); expect(shown().every(Boolean)).toBe(true);
   expect(p.w.document.querySelector('#state-filters em')).toBeNull(); expect(text(p, 'run-count')).toContain('45');
-  await vi.waitFor(() => expect(shown().every(Boolean)).toBe(true));
+  await vi.waitFor(() => expect(shown()).toHaveLength(45)); expect(shown().every(Boolean)).toBe(true);
 });
 
 it('draws every recent strip tick and updates a burst immediately alongside the live rate and rolling median', () => {

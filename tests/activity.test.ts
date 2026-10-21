@@ -64,7 +64,8 @@ it('returns doctor facts without its free-form messages, and keeps the latest ro
   const expected = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: now.getTime(), installed: null, recording: true, keyPresent: false, liveness: null, codexOwner: null })
     .filter(c => c.feature && c.metrics).map(({ feature, level, metrics }) => ({ feature, level, metrics }));
   expect(result.activity24h.claude.map(({ current: _current, ...c }) => c)).toEqual(expected);
-  expect(result.activity24h.claude.find(c => c.feature === 'router')?.current).toMatchObject({ receipt: { choice: 'sonnet · low' } });
+  const root = result.operations.feed.find(s => s.routing?.scope === 'root')!;
+  expect(result.activity24h.claude.find(c => c.feature === 'router')?.current).toMatchObject({ at: '2026-10-20T05:01:00Z', host: 'claude', runId: root.runId, receipt: { choice: 'sonnet · low' } });
   expect(JSON.stringify(result.activity24h)).not.toContain('private fixture prose');
   expect(JSON.stringify(result.activity24h)).not.toContain('message');
 });

@@ -133,7 +133,7 @@ function pipeline(ops,calls,pend){const root=$('pipeline'),built=!root.querySele
 const activityOf=id=>data?.activity24h?.[hostFilter]?.find(c=>c.feature===id);
 const activityLine=a=>{const m=a.metrics;return '24h '+({ok:label('정상','OK'),warn:label('주의','Warn'),fail:label('오류','Fail'),info:label('관측','Info')}[a.level]||a.level)+' · '+label('발화 ','fired ')+num(m.fired)+' · '+label('적용 ','applied ')+(m.applied==null?label('미확인','unknown'):num(m.applied))+' · '+label('회귀 ','regressions ')+num(m.regression)};
 const netText=a=>{const effect=a.metrics.effect,usd=n=>(n<0?'−':'+')+'$'+Math.abs(n).toFixed(2);return effect==null?label('미확인','unknown'):Array.isArray(effect)?effect.map(usd).join(' / '):usd(effect)};
-const currentRouter=a=>{const s=a?.current;return s?[label('루트','Root'),s.model?.observed?label('관측','observed'):label('선택','selected'),decisionText({...s,feature:'router'})].join(' · '):''};
+const currentRouter=a=>{const s=a?.current;return s?[label('최근 루트 (전체 실행)','Latest root (all runs)'),s.host==='codex'?'Codex':s.host==='claude'?'Claude':'',s.at?date(s.at):'',s.runId||'',s.model?.observed?label('관측','observed'):label('선택','selected'),decisionText({...s,feature:'router'})].filter(Boolean).join(' · '):''};
 function activityDetail(id,a){const m=a.metrics;if(id==='workers')return label('수락 ','accepted ')+num(m.accepted)+' · '+label('거절 ','rejected ')+num(m.rejected)+' · '+label('실행 실패 ','execution failures ')+num(m.failed)+' · '+label('대기 ','pending ')+num(m.pending)+' · '+label('취소 ','cancelled ')+num(m.cancelled);if(id==='compact')return label('복원 ','restored ')+num(m.restored)+' · '+label('예산 ','budget ')+(m.budgetUsed==null?label('미확인','unknown'):num(m.budgetUsed))+' / '+(m.budget==null?label('미확인','unknown'):num(m.budget));return (id==='admission'?label('경로 변경 ','path changes ')+num(m.applied)+' · ':id==='allocation'?label('등급 변경 ','tier changes ')+num(m.applied)+' · ':'')+label('효과 ','effect ')+(id==='router'?label('(루트 비용 추정) ','(root cost estimate) '):'')+netText(a)}
 function railStats(calls){const rail=$('pipeline').querySelector('.rail'),box=rail?.querySelector('.v');if(!box)return;const ref=frozenAt??Date.now(),recent=calls.filter(s=>ref-Date.parse(s.at)<60000),values=calls.slice(0,16).map(s=>s.durationMs).sort((a,b)=>a-b),latest=calls[0],text=[latest?tr(featureInfo[latest.feature][0])+' '+decisionText(latest)+' '+ms(latest.durationMs):label('응답 대기','Awaiting calls'),num(recent.length)+'/min','p50 '+(values.length?ms(values[Math.ceil(values.length*.5)-1]):'–')].join(' · ');put(box,text);box.title=text;rail.classList.toggle('busy',recent.length>=6)}
 // The inspector says in full what the card can only begin: why the decision was made, its effect, what followed in its run and,
@@ -157,13 +157,14 @@ function circuitInspector(ops,last){const root=$('circuit-inspector'),id=circuit
   const {body,tags,kv,go}=view;let rowIndex=0;
   if(tags.dataset.inspectorHost!==(run?.host||'')){tags.dataset.inspectorHost=run?.host||'';tags.replaceChildren();if(run?.host)tags.append(el('span','tag '+(run.host==='codex'?'cx':'cl'),run.host==='codex'?'Codex':'Claude'))}
   const row=(k,v,cls)=>{let d=view.rows[rowIndex++];if(!d){d=el('dd',cls||'');d.tabIndex=0;d.setAttribute('aria-label',k);kv.append(el('dt','',k),d);view.rows.push(d)}put(d,v);return d};
-  // The selected card shows the decision, its reason line, its confidence and age, and the decision basis panel holds the probability and
-  // threshold; the inspector adds what neither shows. #261: those facts come from the stage's newest Jev call, which a host
-  // or local record may follow (a Router root_result, a Compact pass). Every line is drawn, recorded or not.
-  let call=null;if(ops)for(const r of ops.runs)if(circuitMode==='live'||r.id===selectedRun)for(const s of r.steps)if(s.lane==='jev'&&s.feature===id&&!s.lifecycle&&!isHeld(r.id,s.id)&&!(call?.at>=s.at))call=s;
+  // #261 host followups may share a receipt, but only inside this run and its recorded request identity.
+  // Legacy records without either identity are usable only when there is exactly one preceding call.
+  const candidates=run?.steps.filter(s=>s.lane==='jev'&&s.feature===id&&!s.lifecycle&&!isHeld(run.id,s.id)&&s.at<=step.at)||[];
+  const matches=candidates.filter(s=>s===step||s.callId&&s.callId===step?.callId);
+  const call=matches.at(-1)||(candidates.length===1&&!step?.callId&&!candidates[0].callId?candidates[0]:null);
   const activity=activityOf(id),rc=call?.receipt,none='–',why=x?reasonOf(x,run):'',card=x?note(x,run).split(' · '):[],reason=why.split(' · ').filter(p=>p&&!card.includes(p)).join(' · ');
   row(label('실행','Run'),run?[tr(run.title),tr(state[run.state]),time(run.firstAt)].join(' · '):none);
-  row(label('판정','Decision'),x?(x.receipt?.choice||call?.receipt?.choice||decisionText(x)):none);
+  row(label('판정','Decision'),x?(x.receipt?.choice||(x.model||x.outcome?decisionText(x):call?.receipt?.choice||decisionText(x))):none);
   row(label('모델 · effort','Model · effort'),x?.model?[label('선택','Selected')+': '+[x.model.selected,x.model.selectedEffort].filter(Boolean).join(' · '),label('관측','Observed')+': '+[x.model.observed||label('미확인','Unknown'),x.model.observedEffort].filter(Boolean).join(' · ')].join(' / '):none);
   row(label('상태와 사유','Status and notes'),[last?.title,last?.summary,last?note(last,run):'',activity?activityDetail(id,activity):''].filter(Boolean).map(tr).join(' · ')||none,'w2');
   row(label('이유','Reason'),reason||none,'w2').title=reason;row(label('결과','Effect'),x&&effectOf(x,why)||none);

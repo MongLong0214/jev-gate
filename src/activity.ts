@@ -81,7 +81,7 @@ export interface ActivitySnapshot {
   events: ActivityEvent[];
   operations: OperationsView;
   /** Doctor is the sole authority; no prose or free-form trace fields leave these checks. */
-  activity24h: Record<Host | 'all', Array<Pick<ActivityCheck, 'feature' | 'level' | 'metrics'> & { current?: Pick<OperationStep, 'model' | 'receipt'> }>>;
+  activity24h: Record<Host | 'all', Array<Pick<ActivityCheck, 'feature' | 'level' | 'metrics'> & { current?: Pick<OperationStep, 'model' | 'receipt' | 'at'> & { host?: Host; runId: string } }>>;
   /** The turn on screen. An intent with no result yet is `working` until the result file appears. */
   live: LiveBoard;
   notes: string[];
@@ -589,9 +589,9 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     ...(host === 'codex' ? { host } : {}),
   });
   const recording = recordingStatus(opts.env).enabled, keyPresent = !!resolveApiKey(opts.env);
-  const currentRouter = (only?: Host): Pick<OperationStep, 'model' | 'receipt'> | undefined => {
+  const currentRouter = (only?: Host): NonNullable<ActivitySnapshot['activity24h']['all'][number]['current']> | undefined => {
     const step = operations.feed.find(s => s.feature === 'router' && s.routing?.scope === 'root' && (s.model || s.receipt?.choice) && (!only || s.host === only));
-    return step ? { ...(step.model ? { model: step.model } : {}), ...(step.receipt ? { receipt: step.receipt } : {}) } : undefined;
+    return step ? { at: step.at, ...(step.host ? { host: step.host } : {}), runId: step.runId, ...(step.model ? { model: step.model } : {}), ...(step.receipt ? { receipt: step.receipt } : {}) } : undefined;
   };
   const check = (only?: Host): ActivitySnapshot['activity24h']['all'] => activityChecks({ traces: only ? { [only]: traces[only] } : traces,
     now: now.getTime(), installed: null, recording, keyPresent, codexOwner: null, liveness: only === 'codex' ? null : liveness })

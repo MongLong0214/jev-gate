@@ -47,7 +47,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     if(req.method==='POST'){res.writeHead(503);res.end('{}');return;}
     res.writeHead(200,{'content-type':'text/html'});res.end(DASHBOARD_PAGE.replace('/*JEV_VERSION*/null',JSON.stringify(VERSION)));
   });
-  const push = (runs: OperationRun[], extra: { credit?: { exhausted: boolean } } = {}) => {current={...snapshot(runs),...extra};for(const res of clients)res.write(`data: ${JSON.stringify(current)}\n\n`);};
+  const push = (runs: OperationRun[], extra: { credit?: { exhausted: boolean }; version?: typeof VERSION } = {}) => {current={...snapshot(runs),...extra};for(const res of clients)res.write(`data: ${JSON.stringify(current)}\n\n`);};
   const page = async (width=1440,height=900) => {const p=await browser.newPage({viewport:{width,height}});p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForSelector('#pipeline .node');return p;};
   const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
   beforeAll(async()=>{mkdirSync(output,{recursive:true});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
@@ -453,6 +453,19 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.close();
   });
 
+  it('keeps header and circuit geometry stable when the periodic version status changes',async()=>{
+    for(const width of [1440,768,390,320]){
+      const history=[run('version','claude',[call('version-call','router',60)])];push(history);const p=await page(width);await settle(p);
+      const geometry=()=>p.evaluate(()=>['header','#version-badge','#connection','#pause','#pipeline'].map(s=>{const b=document.querySelector(s)!.getBoundingClientRect();return [b.x,b.y,b.width,b.height]}));
+      const before=await geometry();
+      for(const [state,version] of [['update',{...VERSION,release:{latest:'0.8.99'}}],['mismatch',{...VERSION,installed:'0.8.99'}],['current',VERSION]] as const){
+        push(history,{version});await p.waitForFunction(s=>document.getElementById('version-badge')!.getAttribute('data-state')===s,state);expect(await geometry(),`${width}: ${state}`).toEqual(before);
+        expect(await p.locator('#version-badge').getAttribute('aria-label')).toContain('실행 중인 대시보드: 0.8.32');
+      }
+      await p.close();
+    }
+  });
+
   // Layout shifts are buffered from navigation, so the first frame before any data counts as much as the live updates after it.
   it('shifts nothing from the first frame through live calls, a new run on top, attention, credit, pinning and unpinning at five widths', async () => {
     const failures:string[]=[];
@@ -629,6 +642,29 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(text).toContain('opus · xhigh');
     expect(text).not.toMatch(/91%|60%/);
     expect(await problems(p)).toEqual([]);await p.close();
+  });
+
+  it('keeps 200-run history populated, anchored and focusable through live reorder and pointer presses (#313)',async()=>{
+    const history=Array.from({length:200},(_,i)=>run('history-'+i,'claude',[call('history-call-'+i,'router',60,{at:ago(200_000-i)})]));
+    push(history);const p=await browser.newPage({viewport:{width:1440,height:900}});
+    await p.addInitScript(()=>{const g=globalThis as unknown as {emptyHistory:number};g.emptyHistory=0;
+      new MutationObserver(()=>{for(const b of document.querySelectorAll('#runs button'))if(!b.textContent?.trim()||!b.getAttribute('aria-label'))g.emptyHistory++;}).observe(document,{childList:true,subtree:true});});
+    await p.goto(url);await p.waitForFunction(()=>document.querySelectorAll('#runs .row').length===200);
+    const focused=p.locator('#runs [data-run=history-100]');await focused.focus();
+    const anchor=await focused.evaluate(e=>({y:e.getBoundingClientRect().top,scroll:document.getElementById('runs')!.scrollTop}));
+    const reordered=[history[199]!,...history.slice(0,199)];push(reordered);
+    await p.waitForFunction(()=>document.querySelector('#runs button')?.getAttribute('data-run')==='history-199');
+    expect(await focused.evaluate(e=>e===document.activeElement)).toBe(true);
+    expect(await focused.evaluate(e=>e.getBoundingClientRect().top)).toBeCloseTo(anchor.y,0);
+    expect(await p.locator('#runs').evaluate(e=>e.scrollTop)).toBeGreaterThan(anchor.scroll);
+    const bounds=await focused.boundingBox();await p.mouse.move(bounds!.x+20,bounds!.y+20);await p.mouse.down();
+    const beforePress=await p.locator('#runs button').evaluateAll(es=>es.map(e=>e.getAttribute('data-run')));
+    push(history.slice().reverse());await wait(180);
+    expect(await p.locator('#runs button').evaluateAll(es=>es.map(e=>e.getAttribute('data-run')))).toEqual(beforePress);
+    await p.mouse.up();await p.waitForFunction(()=>document.querySelector('#runs button:nth-child(1)')?.getAttribute('data-run')==='history-199');await settle(p);
+    expect(await p.evaluate(()=>(globalThis as unknown as {emptyHistory:number}).emptyHistory)).toBe(0);
+    expect(await p.locator('#runs .row[aria-pressed=true]').getAttribute('data-run')).toBe('history-100');
+    await p.screenshot({path:join(output,'history-200-reorder.png')});await p.close();
   });
 
   it('never renders an empty run item and marks the selected run with a tint only',async()=>{
