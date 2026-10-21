@@ -57,7 +57,7 @@ export const workerTraceData = (phase: string, body: Record<string, unknown>): R
     'basis', 'revision', 'reason', 'subscription_cost', 'branch', 'baseline', 'reservation_id', 'settlement_reason',
     'dispatch_failure', 'connection_failure', 'failure_stage', 'token', 'prompt_sha256', 'control_keys', 'coverage', 'event', 'routed_model']);
   const fields = new Set([...strings, 'version', 'loss_marker', 'caller', 'rev', 'attempt', 'pinned', 'matched', 'orphaned', 'owned',
-    'accepted', 'reported_checks', 'pass', 'fail', 'not_run', 'evidence_format_only', 'root_fallback', 'tool_input', 'tool_response',
+    'accepted', 'changed_files_count', 'reported_checks', 'pass', 'fail', 'not_run', 'evidence_format_only', 'root_fallback', 'tool_input', 'tool_response',
     'has_model', 'run_in_background', 'prompt_len', 'prompt_sha256', 'control_keys', 'accounting', 'cost', 'usd', 'input', 'output',
     'cache_read', 'cache_creation', 'read', 'write', 'write5m', 'write1h', 'thinking', 'provider_reported_cost', 'totalDurationMs', 'totalToolUseCount', 'totalTokens', 'usage',
     'input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'ephemeral_5m_input_tokens',

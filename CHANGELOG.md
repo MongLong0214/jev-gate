@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.33 — 2026-10-21 — Credential forms and faithful activity status
+
+- Screen CLI credentials after global options with values, across shell line continuations, and in supported short-flag clusters (#295). Literal credentials and environment/template references are tested as pairs; the Router uses the same screen.
+- Export the Router's highest activity severity to the dashboard, including model application, release and spawn coverage failures. Keep the cost subcheck's own result separate (#297).
+- Record a worker report's changed-file count. A read-only result with no checks is no longer an unchecked-change regression; older results without change/check metadata remain unknown (#298).
+- Count confirmed owned-worker execution failures in the 24-hour worker status on both hosts, once per execution. Keep contract rejections, cancellation, pre-execution failures and unconfirmed settlement distinct (#299).
+- No token reduction or cost improvement was measured for this release. Codex's initial model-switch cost policy (#300) still needs the replay evidence and limits specified in that issue; it is not resolved by these fixes.
+
 ## v0.8.32 — 2026-10-21 — Fewer features, each one traced
 
 - Remove features with no measured use (#288, #289, #292). Evidence (`jev_evidence`) had 0 Claude calls in 15,342 requests and 0 Jev judgments in Codex; the planner had 0 calls on either host and the root tool guard did nothing at defaults; Codex Compact never fired on this host. Their tools, skills, prompt text, trace kinds, dashboard cards and settings are gone. The MCP server keeps its name for onboarding and Codex `jev_agent`; `workerIsolation` (one worker in its own worktree) stays.

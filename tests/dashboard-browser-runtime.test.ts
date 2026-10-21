@@ -88,6 +88,39 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   const motion = (p: Page) => p.evaluate(() => (globalThis as unknown as {motion:Array<[string,number]>}).motion);
   const count = (log: Array<[string,number]>, kind: string) => log.filter(([k]) => k===kind).length;
 
+  it('shows doctor Router failures and worker execution failures from the actual snapshot API (#297-299)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-activity-'));
+    const env = { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: join(home, 'claude'), JEV_CODEX_TRACE_DIR: join(home, 'codex') };
+    for (const host of ['claude', 'codex'] as const) {
+      const dir = join(home, host); mkdirSync(dir, { recursive: true });
+      const base = { host, session_id: 'synthetic-activity', written_at: ago(1000) };
+      const records = [
+        { ...base, phase: 'dispatch', role: 'single_worker', tool_use_id: 'failed' },
+        { ...base, phase: 'failure', tool_use_id: 'failed', subagent_type: 'jev-gate:worker-fast', verdict_reason: 'worker_failed', not_executed: false },
+        { ...base, phase: 'background_terminal', tool_use_id: 'failed', status: 'failed' },
+        { ...base, phase: 'post', tool_use_id: 'readonly', subagent_type: 'jev-gate:worker-fast', verdict: 'accept', changed_files_count: 0, reported_checks: { pass: 0, fail: 0, not_run: 0 } },
+        host === 'claude' ? { ...base, phase: 'mod_router', event: 'root_result', requested: 'claude-sonnet-5-5', observed: 'claude-opus-5-5' }
+          : { ...base, phase: 'codex_router_response', selected_model: 'gpt-6-luna', observed_model: 'gpt-6.1-sol' },
+      ];
+      records.forEach((r, i) => writeFileSync(join(dir, i + '.json'), JSON.stringify(r)));
+    }
+    const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v0.8.32', draft: false, prerelease: false }))) as typeof fetch;
+    const local = await startDashboard(dashboardSources(env), 0, { releaseFetch });
+    const p = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    try {
+      await p.goto(local.url);
+      const response = await p.request.get(new URL('/api/snapshot', local.url).href);
+      expect(response.status()).toBe(200);
+      const data = await response.json();
+      for (const host of ['all', 'claude', 'codex']) {
+        expect(data.activity24h[host].find((c: { feature: string }) => c.feature === 'router')).toMatchObject({ level: 'fail' });
+        expect(data.activity24h[host].find((c: { feature: string }) => c.feature === 'workers')).toMatchObject({ level: 'warn', metrics: { failed: host === 'all' ? 2 : 1, accepted: host === 'all' ? 2 : 1 } });
+      }
+      await expect.poll(() => p.locator('#pipeline .node[data-feature=router] .ds').textContent()).toContain('24h 오류');
+      expect(await p.locator('#pipeline .node[data-feature=workers] .nt').textContent()).toContain('실행 실패 2');
+    } finally { await p.close(); await local.close(); rmSync(home, { recursive: true, force: true }); }
+  });
+
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
     const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v99.0.0', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v99.0.0' }))) as typeof fetch;

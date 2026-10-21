@@ -26,7 +26,7 @@ type Rec = Record<string, unknown>;
 /** Machine-readable facts from the same checks used by doctor and the dashboard. Absent measurements stay null. */
 export interface ActivityMetrics {
   fired: number; applied: number | null; regression: number; effect: number | [number, number] | null;
-  accepted?: number; rejected?: number; pending?: number; cancelled?: number;
+  accepted?: number; rejected?: number; pending?: number; cancelled?: number; failed?: number; checksUnknown?: number;
   restored?: number; budgetUsed?: number | null; budget?: number | null;
 }
 export interface ActivityCheck { level: DoctorLevel; message: string; action: string | null; feature?: 'admission' | 'allocation' | 'workers' | 'router' | 'compact'; metrics?: ActivityMetrics }
@@ -83,6 +83,8 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     if (keep) { if (time < previous) ordered = false; previous = time; }
     return keep;
   };
+  const recordHost = new WeakMap<Rec, string>();
+  for (const host of ['claude', 'codex'] as const) for (const r of input.traces[host]?.records ?? []) recordHost.set(r, host);
   const byHost = { claude: (input.traces.claude?.records ?? []).filter(inWindow), codex: (input.traces.codex?.records ?? []).filter(inWindow) };
   const rs = [...byHost.claude, ...byHost.codex];
   // Readers already order a single host; only mixed or unsorted input needs another timestamp sort.
@@ -133,20 +135,30 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     'Gate B calls Jev on every owned dispatch and changed no model, effort or tier; review the routing policy.', 'allocation', { fired: routes.length, applied: reallocated, effect: null, regression: routes.filter(r => errorOf(r)).length });
 
   const posts = phase('post'), owned = posts.filter(r => OWNED_AGENT_NAMES.includes(str(r['subagent_type']) ?? '') && str(r['verdict']));
-  const unchecked = owned.filter(r => r['verdict'] === 'accept' && Object.values(sub(r, 'reported_checks')).every(n => n === 0)).length;
+  const noChecks = (r: Rec): boolean => isRecord(r['reported_checks']) && ['pass', 'fail', 'not_run'].every(k => sub(r, 'reported_checks')[k] === 0);
+  const unchecked = owned.filter(r => r['verdict'] === 'accept' && (num(r['changed_files_count']) ?? 0) > 0 && noChecks(r)).length;
+  const checksUnknown = owned.filter(r => r['verdict'] === 'accept' && (num(r['changed_files_count']) === null || !isRecord(r['reported_checks']))).length;
   const rejected = owned.filter(r => r['verdict'] !== 'accept');
-  const workerKey = (r: Rec): string => [r['session_id'], r['tool_use_id'] ?? r['task_id']].join(':');
+  const workerKey = (r: Rec): string => JSON.stringify([recordHost.get(r) ?? r['host'], r['session_id'], r['prompt_id'], r['tool_use_id'] ?? r['task_id']]);
   const dispatched = phase('dispatch').filter(r => ['worker', 'single_worker'].includes(String(r['role'])));
   const workerEnds = [...posts, ...phase('failure').filter(r => r['release_unconfirmed'] !== true), ...phase('background_terminal')];
   const dispatchedKeys = new Set(dispatched.map(workerKey)), endedAt = new Map<string, number>();
   for (const r of workerEnds) endedAt.set(workerKey(r), Math.max(endedAt.get(workerKey(r)) ?? -Infinity, at(r)));
   const pending = dispatched.filter(r => (endedAt.get(workerKey(r)) ?? -Infinity) < at(r)).length;
-  const cancelled = new Set(workerEnds.filter(r => (OWNED_AGENT_NAMES.includes(str(r['subagent_type']) ?? '') || dispatchedKeys.has(workerKey(r))) &&
-    (r['verdict_reason'] === 'worker_cancelled' || ['cancelled', 'interrupted'].includes(String(r['failure_category'] ?? r['status'])))).map(workerKey)).size;
-  say(rejected.length || unchecked ? 'warn' : owned.length ? 'ok' : 'info',
-    `worker: ${owned.length} Gate worker results -- ${owned.length ? tally(owned.map(r => ['accept', 'incomplete', 'invalid', 'unknown', 'rework', 'replan'].includes(String(r['verdict'])) ? String(r['verdict']) : 'unknown')) : 'none'}${unchecked ? `; ${unchecked} accepted with no checks run` : ''}${rejected.length ? `; ${[...new Set(rejected.map(r => verdictReason(String(r['verdict']), r['verdict_reason'])?.[0] ?? 'no reason'))].map(v => `"${v}"`).join('; ')}` : ''}; ${posts.length - owned.length} native Agent calls (예약 외 호출, not worker acceptances)`,
+  const isOwnedEnd = (r: Rec): boolean => OWNED_AGENT_NAMES.includes(str(r['subagent_type']) ?? '') || dispatchedKeys.has(workerKey(r));
+  const isCancelled = (r: Rec): boolean => r['is_interrupt'] === true || r['verdict_reason'] === 'worker_cancelled' || ['cancelled', 'interrupted'].includes(String(r['failure_category'] ?? r['status']));
+  const cancelledKeys = new Set(workerEnds.filter(r => isOwnedEnd(r) && isCancelled(r)).map(workerKey));
+  const cancelled = cancelledKeys.size;
+  const failedKeys = new Set(workerEnds.filter(r => isOwnedEnd(r) && !isCancelled(r) && r['not_executed'] !== true && r['release_unconfirmed'] !== true &&
+    (r['phase'] === 'background_terminal' && r['status'] === 'failed' || r['phase'] === 'failure' &&
+      (r['not_executed'] === false || r['verdict_reason'] === 'worker_failed'))).map(workerKey));
+  const executionFailed = failedKeys.size;
+  const rejectedKeys = new Set(rejected.map(workerKey));
+  const failedOnly = [...failedKeys].filter(k => !rejectedKeys.has(k)).length;
+  say(rejected.length || unchecked || executionFailed ? 'warn' : owned.length ? 'ok' : 'info',
+    `worker: ${owned.length} Gate worker results -- ${owned.length ? tally(owned.map(r => ['accept', 'incomplete', 'invalid', 'unknown', 'rework', 'replan'].includes(String(r['verdict'])) ? String(r['verdict']) : 'unknown')) : 'none'}${unchecked ? `; ${unchecked} accepted with no checks run` : ''}${rejected.length ? `; ${[...new Set(rejected.map(r => verdictReason(String(r['verdict']), r['verdict_reason'])?.[0] ?? 'no reason'))].map(v => `"${v}"`).join('; ')}` : ''}; ${executionFailed} execution failures; ${checksUnknown} accepted results with unknown change/check metadata; ${posts.length - owned.length} native Agent calls (예약 외 호출, not worker acceptances)`,
     'Open the named workers in the dashboard; an unverified or unchecked result was not proven done.', 'workers',
-    { fired: dispatched.length + owned.filter(r => !dispatchedKeys.has(workerKey(r))).length, applied: owned.length - rejected.length, effect: null, regression: rejected.length + unchecked, accepted: owned.length - rejected.length, rejected: rejected.length, pending, cancelled });
+    { fired: dispatched.length + owned.filter(r => !dispatchedKeys.has(workerKey(r))).length, applied: owned.length - rejected.length, effect: null, regression: rejected.length + unchecked + failedOnly, failed: executionFailed, checksUnknown, accepted: owned.length - rejected.length, rejected: rejected.length, pending, cancelled });
 
   const terminals = phase('background_terminal'), failed = terminals.filter(r => r['status'] === 'failed').length;
   say(failed ? 'warn' : terminals.length ? 'ok' : 'info', `background: ${terminals.length} background workers ended${terminals.length ? ` (${tally(terminals.map(r => ['completed', 'failed', 'cancelled', 'interrupted'].includes(String(r['status'])) ? String(r['status']) : 'unknown'))}; reasons ${tally(terminals.map(r => verdictReason('', r['verdict_reason'])?.[0] ?? 'none'))})` : ''}`,
@@ -298,6 +310,13 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     const sent = [...router('child_route').filter(r => r['sent'] === true), ...phase('codex_router_result').filter(r => r['scope'] === 'child' && r['attempted'] === true).map(r => ({ ...r, from: { effort: r['baseline_effort'] }, patch: { effort: r['selected_effort'] } }))], moved = sent.filter(r => str(sub(r, 'patch')['effort']) && sub(r, 'patch')['effort'] !== sub(r, 'from')['effort']).length;
     say(sent.length >= 50 && moved / sent.length < 0.05 ? 'warn' : sent.length ? 'ok' : 'info', `child_effect: ${sent.length} child steps sent to Jev, ${moved} changed the effort (${rate(moved, sent.length)})`,
       'Each child step pays a Jev call and its latency for almost no change; review per-step child routing.');
+    const routerFeature = out.slice(firstRouter).find(c => c.feature === 'router')!;
+    const severity: Record<DoctorLevel, number> = { info: 0, ok: 1, warn: 2, fail: 3 };
+    const worst = out.slice(firstRouter).reduce((a, c) => severity[c.level] > severity[a.level] ? c : a, routerFeature);
+    // The cost check keeps its own verdict; only the feature summary combines the related checks.
+    delete routerFeature.feature;
+    out.push({ feature: 'router', metrics: routerFeature.metrics!, level: worst.level,
+      message: `router_activity: ${worst.message}`, action: worst.action });
     routerChecks.set(routerKey, { records: routerRecords, checks: out.slice(firstRouter) });
   }
 

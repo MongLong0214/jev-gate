@@ -153,14 +153,56 @@ describe('activity: gate_b', () => {
 });
 
 describe('activity: worker', () => {
-  const worker = (verdict: string, checks: Rec | null, reason: string | null = null): Rec => rec('post', { subagent_type: 'jev-gate:worker', verdict, verdict_reason: reason, reported_checks: checks });
+  const worker = (verdict: string, checks: Rec | null, reason: string | null = null): Rec => rec('post', { subagent_type: 'jev-gate:worker', verdict, verdict_reason: reason, reported_checks: checks, changed_files_count: 1 });
   it('warns about an incomplete result and an accept with no checks, and counts native calls apart', () => {
     const c = check(run([worker('accept', { pass: 0, fail: 0, not_run: 0 }), worker('incomplete', { pass: 2, fail: 0, not_run: 0 }, 'no passing run'), rec('post', { subagent_type: 'general-purpose' })]), 'worker');
     expect(c.level).toBe('warn');
-    expect(c.message).toMatch(/2 Gate worker results -- accept 1, incomplete 1; 1 accepted with no checks run; "worker_result_unknown"; 1 native Agent calls \(예약 외 호출/);
+    expect(c.message).toMatch(/2 Gate worker results -- accept 1, incomplete 1; 1 accepted with no checks run; "worker_result_unknown"; 0 execution failures; 0 accepted results with unknown change\/check metadata; 1 native Agent calls \(예약 외 호출/);
   });
 
   it('is ok when every result was accepted with checks', () => expect(level([worker('accept', { pass: 2, fail: 0, not_run: 0 })], 'worker')).toBe('ok'));
+});
+
+describe('worker activity regressions (#298, #299)', () => {
+  it.each(['claude', 'codex'] as const)('keeps zero-check read-only acceptance and historical unknowns separate on %s', host => {
+    const post = (id: string, extra: Rec): Rec => rec('post', { tool_use_id: id, subagent_type: 'jev-gate:worker', verdict: 'accept', ...extra });
+    const empty = { pass: 0, fail: 0, not_run: 0 };
+    for (const [extra, unknown] of [
+      [{ changed_files_count: 0, reported_checks: empty }, 0],
+      [{ reported_checks: empty }, 1],
+      [{ changed_files_count: 0 }, 1],
+      [{ changed_files_count: 1, reported_checks: { pass: 1, fail: 0, not_run: 0 } }, 0],
+    ] as const) {
+      const c = check(run([], { traces: { [host]: { records: [post('t', extra)], unreadable: 0 } } }), 'worker');
+      expect(c).toMatchObject({ level: 'ok', metrics: { accepted: 1, regression: 0, checksUnknown: unknown } });
+    }
+    const changed = check(run([post('t', { changed_files_count: 1, reported_checks: empty })]), 'worker');
+    expect(changed).toMatchObject({ level: 'warn', metrics: { regression: 1 } });
+    const rejected = check(run([post('t', { changed_files_count: 1, reported_checks: empty, verdict: 'incomplete', verdict_reason: 'worker_checks_missing' })]), 'worker');
+    expect(rejected.metrics).toMatchObject({ rejected: 1, regression: 1 });
+  });
+
+  it.each(['claude', 'codex'] as const)('counts foreground/background execution failure once, separately from rejection on %s', host => {
+    const base = { tool_use_id: 't', subagent_type: 'jev-gate:worker-fast' };
+    const dispatch = rec('dispatch', { ...base, role: 'single_worker' }, 20);
+    const failure = rec('failure', { ...base, verdict_reason: 'worker_failed', ...(host === 'codex' ? { failure_category: 'native_failed_turn', not_executed: false } : {}) });
+    const background = rec('background_terminal', { ...base, status: 'failed' });
+    for (const ends of [[failure], [background], [failure, background]]) {
+      const records = [dispatch, ...ends, rec('post', { tool_use_id: 'ok', subagent_type: 'jev-gate:worker', verdict: 'accept', changed_files_count: 0, reported_checks: { pass: 0, fail: 0, not_run: 0 } })];
+      const c = check(run([], { traces: { [host]: { records, unreadable: 0 } } }), 'worker');
+      expect(c).toMatchObject({ level: 'warn', metrics: { failed: 1, rejected: 0, regression: 1, accepted: 1, pending: 0 } });
+    }
+    const c = check(run([dispatch, failure, background, rec('post', { ...base, verdict: 'unknown', verdict_reason: 'worker_failed' })]), 'worker');
+    expect(c.metrics).toMatchObject({ failed: 1, rejected: 1, regression: 1 });
+  });
+
+  it('distinguishes interrupted, pre-execution and settlement-pending records', () => {
+    for (const extra of [{ is_interrupt: true }, { failure_category: 'interrupted' }, { not_executed: true, failure_category: 'preflight_conflict' }, { release_unconfirmed: true, error_first_line: 'settlement_pending' }]) {
+      const records = [rec('dispatch', { tool_use_id: 't', role: 'single_worker' }, 20), rec('failure', { tool_use_id: 't', verdict_reason: 'worker_failed', ...extra })];
+      const c = check(run(records), 'worker');
+      expect(c.metrics).toMatchObject({ failed: 0, regression: 0, pending: 'release_unconfirmed' in extra ? 1 : 0 });
+    }
+  });
 });
 
 describe('activity: background', () => {
@@ -193,6 +235,21 @@ describe('activity: router_released', () => {
   it('ignores a child step and an unpatched turn', () => {
     expect(level([router('root', { scope: 'root', turn: 't2', patch: {} }), router('prepared', { scope: 'root', turn: 't2', index: 1, routed: false })], 'router_released')).toBe('info');
     expect(level(turn(router('prepared', { scope: 'child', agent_id: 'a1', turn: 't1', index: 1, routed: false }, 8)), 'router_released')).toBe('ok');
+  });
+});
+
+describe('Router feature severity (#297)', () => {
+  const feature = (rows: Rec[]) => run(rows).find(c => c.feature === 'router')!;
+  it('retains model mismatch fail over unknown cost', () => {
+    expect(feature([router('root_result', { requested: 'claude-sonnet-5-5', observed: 'claude-opus-5-5' })]).level).toBe('fail');
+  });
+  it('retains abnormal release fail and counts its cause', () => {
+    const c = feature([router('root', { turn: 't', patch: { model: 'haiku' } }, 20), router('prepared', { turn: 't', index: 1, routed: false })]);
+    expect(c).toMatchObject({ level: 'fail', metrics: { regression: 1 } });
+  });
+  it('preserves spawn coverage warnings with otherwise normal cost', () => {
+    expect(feature([rec('post', { subagent_type: 'general-purpose' })]).level).toBe('warn');
+    expect(feature([router('root', { sent: false })]).level).toBe('info');
   });
 });
 

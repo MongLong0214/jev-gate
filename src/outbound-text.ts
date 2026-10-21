@@ -261,7 +261,21 @@ const cliPassword = (value: string, basic = false): boolean => {
   const colon = basic ? [...value.matchAll(new RegExp(TEMPLATE_VALUE + '|:', 'g'))].find(part => part[0] === ':')?.index ?? -1 : -1;
   return (!basic || colon >= 0) && Boolean(literalRemainder(basic ? value.slice(colon + 1) : value));
 };
-const literalCliCredential = (text: string): boolean => {
+// Options that consume a separate global operand must not be mistaken for subcommands.
+const CLI_GLOBAL_VALUES: Record<string, readonly string[]> = {
+  docker: ['--context', '-c', '--config', '--host', '-H', '--log-level', '-l', '--tlscacert', '--tlscert', '--tlskey'],
+  helm: ['--kube-context', '--kubeconfig', '--namespace', '-n', '--kube-apiserver', '--registry-config', '--repository-config', '--repository-cache'],
+  kubectl: ['--context', '--kubeconfig', '--namespace', '-n', '--server', '-s', '--cluster', '--user'],
+  git: ['-C', '--git-dir', '--work-tree', '--namespace', '--config-env'],
+  mysql: ['--defaults-file', '--defaults-extra-file', '--defaults-group-suffix'],
+  mariadb: ['--defaults-file', '--defaults-extra-file', '--defaults-group-suffix'],
+  az: ['--subscription', '--output', '-o', '--query'], aws: ['--profile', '--region', '--endpoint-url', '--output', '--query'],
+  npm: ['--prefix', '--userconfig', '--registry'],
+};
+// Only known no-operand flags may precede the final credential flag in a cluster.
+const CLI_CLUSTER_PREFIX: Record<string, string> = { curl: 'sSfLkIvq', zip: 'rqjv', 'ssh-keygen': 'q' };
+const literalCliCredential = (source: string): boolean => {
+  const text = source.replace(/\\\r?\n/g, '');
   const values = new RegExp(ASSIGNMENT_LITERAL);
   for (const match of text.matchAll(CLI_ENV)) {
     values.lastIndex = match.index! + match[0].length;
@@ -295,6 +309,7 @@ const literalCliCredential = (text: string): boolean => {
       }
       if (word === '--') { optionsEnded = true; continue; }
       if (optionsEnded) continue;
+      if ((CLI_GLOBAL_VALUES[tool] ?? []).includes(word)) { i++; continue; }
       if (prefix && !word.startsWith('-')) { scope += ' ' + word; prefix--; continue; }
       if (tool === 'htpasswd') {
         if (/^-[^-]*b/.test(word)) positional = 0;
@@ -309,6 +324,17 @@ const literalCliCredential = (text: string): boolean => {
         const header = /^http(?:\.[^=]+)?\.extraHeader=(.*)$/i.exec(words[++i] ?? '');
         if (header && literalAuthorization(header[1]!)) return true;
         continue;
+      }
+      const cluster = CLI_CLUSTER_PREFIX[tool];
+      if (cluster && /^-[^-]/.test(word)) {
+        let j = 1;
+        while (j < word.length && cluster.includes(word[j]!)) j++;
+        const flag = '-' + (word[j] ?? '');
+        if (j > 1 && (CLI_OPTIONS[scope] ?? []).includes(flag)) {
+          const value = word.slice(j + 1) || words[++i] || '';
+          if (cliPassword(value, tool === 'curl')) return true;
+          continue;
+        }
       }
       const attached = /^(?:mysql|mariadb|7z)$/.test(tool) ? /^-p(.+)$/.exec(word) : null;
       if (attached && cliPassword(attached[1]!)) return true;
