@@ -62,6 +62,7 @@ const shared = () => ['hooks/register.ts', ...modSources(), ...ROUTER_SHARED, 'p
 // Install paths the root README links (#95, #98). Not a link crawl: bench/ and HANDOFF stay out. The logo and results banner are the
 // README's images, each with its dark-theme variant. hero.svg, pilot.svg, and v4-flow.svg are not packed; the README no longer embeds them.
 const INSTALL_DOCS = [
+  'LICENSE',
   'CHANGELOG.md',
   'docs/advanced-usage.md',
   'docs/bench-ab.md',
@@ -79,9 +80,10 @@ const INSTALL_DOCS = [
 const hostsDist = profile === 'legacy';
 const entries =
   profile === 'codex'
-    ? CODEX_FILES.map((f) => [`plugins/codex/${f}`, f])
+    ? [...CODEX_FILES.map((f) => [`plugins/codex/${f}`, f]), ['LICENSE', 'LICENSE']]
     : profile === 'router'
     ? [
+        ['LICENSE', 'LICENSE'],
         [`${ROUTER}/.claude-plugin/plugin.json`, '.claude-plugin/plugin.json'],
         [`${ROUTER}/hooks/hooks.json`, 'hooks/hooks.json'],
         ...routerHooks()

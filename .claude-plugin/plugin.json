@@ -1,6 +1,7 @@
 {
   "name": "jev-gate",
   "version": "0.8.31",
+  "license": "MIT",
   "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor and the Jev effort and model router. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",

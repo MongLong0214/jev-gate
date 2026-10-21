@@ -32,6 +32,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   shellEnv.PATH = `${bin}:${shellEnv.PATH}`;
   cpSync(join(root, 'plugins/codex'), join(staged, 'plugins/codex'), { recursive: true, filter: p => !p.includes('/dist/') && !p.endsWith('/dist') });
   cpSync(join(root, 'package.json'), join(staged, 'package.json'));
+  cpSync(join(root, 'LICENSE'), join(staged, 'LICENSE'));
   const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(staged, 'plugins/codex/dist')], { encoding: 'utf8' });
   expect(built.status, built.stderr).toBe(0);
   const pack = spawnSync(process.execPath, [join(root, 'scripts/pack.mjs'), join(tmp, 'archives'), '--profile', 'codex', '--root', staged], { encoding: 'utf8' });
@@ -45,6 +46,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 
 describe('installed Codex archive', () => {
   it('B1: ships and executes the isolated worker snapshot helper', () => {
+    expect(existsSync(join(installed, 'LICENSE'))).toBe(true);
     const cwd = join(tmp, 'snapshot project'); mkdirSync(cwd);
     for (const args of [['init', '-q'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'fixture']]) {
       const run = spawnSync('git', args, { cwd, env: shellEnv, encoding: 'utf8' }); expect(run.status, run.stderr).toBe(0);
