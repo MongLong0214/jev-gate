@@ -96,7 +96,7 @@ export const pairValidFor = (c: RouteCandidate, edit: EffortEdit, current: strin
 
 /** The shared explicit-restriction and live-risk questions; a child decides only its next inference, a spawn a fresh worker. */
 const withControls = (questions: Record<string, Question>, scope: OfferArgs['scope']): Record<string, Question> => {
-  questions['control'] = { type: 'choice', instructions: `${CONTEXT} Classify the current outcome and ONLY explicit restrictions on the model and reasoning effort. Do not interpret "do not edit", "read-only", "preserve the API", native permissions, mandatory checks or lack of already-discovered debugging evidence as a model/effort pin. A past completed task's restriction does not pin the whole session.`, criteria: CONTROLS };
+  questions['control'] = { type: 'choice', instructions: `${CONTEXT} Classify the current outcome and ONLY explicit restrictions on the model and reasoning effort. Do not interpret "do not edit", "read-only", "preserve the API", native permissions, mandatory checks or lack of already-discovered debugging evidence as a model/effort pin. A past completed task's restriction does not pin the whole session. An instruction about which model another tool, program or agent should use (for example running a CLI with a named model) is not a lock on the current caller's model or effort.`, criteria: CONTROLS };
   questions['action_risk'] = { type: 'choice', instructions: `${CONTEXT} Does the requested work itself operate a live system, transfer money or make an irreversible change? Writing/testing code about these is ordinary.`, criteria: {
     ordinary: 'The requested work itself makes no live or irreversible change.', consequential: 'The requested work itself makes a consequential live or irreversible change.', unclear: 'The supplied task and context do not establish the risk.',
   } };
@@ -109,8 +109,6 @@ const withControls = (questions: Record<string, Question>, scope: OfferArgs['sco
   }
   if (scope === 'spawn') {
     for (const question of Object.values(questions)) question.instructions = question.instructions.replace('complete the ENTIRE requested outcome', 'complete this task reliably from the task text alone');
-    // A brief that runs `codex exec` with a named model read as explicit_lock .93 (2026-10-16 trace); 1 of 107 real briefs.
-    questions['control']!.instructions += ' An instruction about which model another tool, program or agent should use (for example running a CLI with a named model) is not a lock on this worker\'s model.';
   }
   return questions;
 };

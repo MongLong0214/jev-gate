@@ -3,9 +3,14 @@ import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createWorkerWorktree, hasWorktreeHead } from '../src/worktree.js';
+import { createWorkerWorktree } from '../src/worktree.js';
 
 describe('working snapshot isolation', () => {
+  it.each(['worker-fast', 'worker', 'worker-deep', 'worker-frontier'])('C2: generated %s instructions require the isolation commit and feed the Codex build', name => {
+    expect(readFileSync(join(process.cwd(), 'agents', `${name}.md`), 'utf8')).toContain('is that request for one commit');
+    expect(readFileSync(join(process.cwd(), 'scripts/build-codex.mjs'), 'utf8')).toContain("readFileSync(join(root, 'agents'");
+  });
+
   it('copies staged, unstaged, deleted and untracked inputs, preserves the root index and applies only worker changes', () => {
     const repo = mkdtempSync(join(tmpdir(), 'jev-snapshot-'));
     const git = (args: string[], cwd = repo, input?: string): string => {
@@ -14,13 +19,11 @@ describe('working snapshot isolation', () => {
     };
     try {
       git(['init']);
-      expect(hasWorktreeHead(repo, process.env)).toBe(false);
       writeFileSync(join(repo, '.gitignore'), 'ignored.txt\n');
       writeFileSync(join(repo, 'staged.txt'), 'original\n');
       writeFileSync(join(repo, 'edit.txt'), 'original\n');
       writeFileSync(join(repo, 'deleted.txt'), 'original\n');
       git(['add', '.']); git(['commit', '-m', 'base']);
-      expect(hasWorktreeHead(repo, process.env)).toBe(true);
       writeFileSync(join(repo, 'staged.txt'), 'staged\n'); git(['add', 'staged.txt']);
       writeFileSync(join(repo, 'staged.txt'), 'working after stage\n');
       writeFileSync(join(repo, 'edit.txt'), 'working\n');

@@ -4,6 +4,7 @@ import { COMPACT_OPTION_NAMES, resolveCompactConfig } from '../mods/compact/hook
 import { registerCompact } from '../mods/compact/hooks/register.ts';
 import { resolveConfig } from '../mods/router/hooks/config.ts';
 import { registerRouter, type ContextObserver } from '../mods/router/hooks/register.ts';
+import { createRecordingState } from '../mods/router/hooks/recording.ts';
 
 
 /**
@@ -57,9 +58,10 @@ export const register: Register = (on, options) => {
 
   const fallback = resolveConfig({ enabled: false, allowFable: false });
   const observer: ContextObserver = {};
-  if (router.ok) registerRouter(on, router.config, true, observer);
-  else if (fallback.ok) registerRouter(on, fallback.config, true, observer);
+  const recording = createRecordingState();
+  if (router.ok) registerRouter(on, router.config, true, observer, recording);
+  else if (fallback.ok) registerRouter(on, fallback.config, true, observer, recording);
   const compactFallback = resolveCompactConfig({ enabled: false });
-  if (compact.ok) registerCompact(on, compact.config, observer);
-  else if (compactFallback.ok) registerCompact(on, compactFallback.config, observer);
+  if (compact.ok) registerCompact(on, compact.config, observer, recording);
+  else if (compactFallback.ok) registerCompact(on, compactFallback.config, observer, recording);
 };

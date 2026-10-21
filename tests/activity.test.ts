@@ -8,6 +8,7 @@ import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { TraceDirectoryReader } from '../src/explain.js';
+import { activityChecks } from '../src/doctor-activity.js';
 import { memo } from '../src/memo.js';
 import { liveFrames } from './live-frames.js';
 
@@ -32,6 +33,41 @@ afterEach(() => {
 const write = (dir: string, name: string, body: unknown): void => {
   writeFileSync(join(dir, name), JSON.stringify(body));
 };
+
+it('omits retired feature records from the live board and operation counters', () => {
+  const trace = make();
+  for (const phase of ['interpretation_intent', 'interpretation_result', 'evidence_result', 'guard_result']) write(trace, phase + '.json', { phase, session_id: 's', request_id: 'retired', attempted: true, written_at: new Date().toISOString() });
+  const result = loadActivity({ traceDir: trace, env: { HOME: make() } });
+  expect(result.live.steps).toEqual([]);
+  expect(result.operations.feed).toEqual([]);
+  expect(result.operations.requests).toBe(0);
+});
+
+it.each(['claude', 'codex'])('B2: screens credential-shaped tokens in legacy %s failure dashboard data', host => {
+  const trace = make();
+  const synthetic = 'ghp_B2SYNTHETICDASHBOARDSENTINEL123456789';
+  write(trace, 'failure.json', { phase: 'failure', host, session_id: 'legacy-failure', error_first_line: synthetic, verdict_reason: synthetic, written_at: new Date().toISOString() });
+  const result = loadActivity({ traceDir: trace, env: { HOME: make() } });
+  expect(result.operations.feed).toHaveLength(1);
+  expect(JSON.stringify(result)).not.toContain(synthetic);
+});
+
+it('returns doctor facts without its free-form messages, and keeps the latest root model separate from a later child', () => {
+  const trace = make(), env = { HOME: make() }, now = new Date('2026-10-20T06:00:00Z');
+  const records = [
+    { phase: 'admission_result', session_id: 's', written_at: '2026-10-20T05:00:00Z', attempted: true, decision: { shape: 'orchestrated' }, private_text: 'private fixture prose' },
+    { phase: 'mod_router', event: 'root', session_id: 's', turn: 't', written_at: '2026-10-20T05:01:00Z', sent: true, duration_ms: 50, from: { model: 'opus', effort: 'high' }, patch: { model: 'sonnet', effort: 'low' }, reasons: { model: 'selected' } },
+    { phase: 'mod_router', event: 'child_route', session_id: 's', turn: 't', agent_id: 'child', written_at: '2026-10-20T05:02:00Z', sent: true, duration_ms: 45, from: { model: 'sonnet', effort: 'low' }, patch: { model: 'haiku', effort: 'low' } },
+  ];
+  records.forEach((r, i) => write(trace, `r${i}.json`, r));
+  const result = loadActivity({ traceDir: trace, env, now });
+  const expected = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: now.getTime(), installed: null, recording: true, keyPresent: false, liveness: null, codexOwner: null })
+    .filter(c => c.feature && c.metrics).map(({ feature, level, metrics }) => ({ feature, level, metrics }));
+  expect(result.activity24h.claude.map(({ current: _current, ...c }) => c)).toEqual(expected);
+  expect(result.activity24h.claude.find(c => c.feature === 'router')?.current).toMatchObject({ receipt: { choice: 'sonnet · low' } });
+  expect(JSON.stringify(result.activity24h)).not.toContain('private fixture prose');
+  expect(JSON.stringify(result.activity24h)).not.toContain('message');
+});
 
 describe('credit exhaustion', () => {
   const credit = (...rows: Array<[string, string, boolean]>) => {
@@ -106,12 +142,12 @@ describe('loadActivity', () => {
   });
   it('shows denied dispatches and worktree lifecycle as policy and local events', () => {
     const trace = make();
-    write(trace, 'deny.json', { phase: 'dispatch_denied', session_id: 's', reason: 'workers_active', written_at: '2026-10-07T05:27:20.000Z' });
+    write(trace, 'deny.json', { phase: 'dispatch_denied', session_id: 's', reason: 'task_active', written_at: '2026-10-07T05:27:20.000Z' });
     write(trace, 'start.json', { phase: 'worktree_start', session_id: 's', request_id: 'w', written_at: '2026-10-07T05:27:20.000Z' });
     write(trace, 'result.json', { phase: 'worktree_result', session_id: 's', request_id: 'w', ok: true, written_at: '2026-10-07T05:27:21.000Z' });
     const s = loadActivity({ traceDir: trace, env: { HOME: make() } });
     const steps = s.operations.runs.flatMap(r => r.steps);
-    expect(steps.find(t => t.title === 'Agent 호출 거절')).toMatchObject({ state: 'skipped', lane: 'policy', summary: '기존 워커 종료 대기 · 재계획 거절' });
+    expect(steps.find(t => t.title === 'Agent 호출 거절')).toMatchObject({ state: 'skipped', lane: 'policy', summary: '호출 거절 · task_active' });
     expect(steps.find(t => t.title === 'Worktree · 생성 시작')).toMatchObject({ state: 'done', lane: 'local' });
     expect(steps.find(t => t.title === 'Worktree · 생성 결과')).toMatchObject({ state: 'done', lane: 'local' });
   });
@@ -437,3 +473,12 @@ it('updates all viewers from shared directory notifications and reattaches after
     await server.close();
   }
 }, 10000);
+
+it.each([['worker_check_duplicate', '검사 중복 보고'], ['worker_check_failed', '보고된 검사 실패'], ['worker_check_not_run', '필수 검사 미실행'], ['worker_checks_missing', '변경 후 검사 보고 없음'], ['worker_checks_unverified', '검사 실행 확인 불가'], ['worker_no_result', '워커 결과 미반환 · 예약 해제'], ['worker_failed', '워커 실행 실패'], ['worker_cancelled', '사용자가 워커 취소'], ['admission_needs_context', '요청만으로 범위를 정할 수 없어 직접 처리합니다'], ['admission_context_unclear', '요청 문맥 불명확'], ['admission_context_low_confidence', '독립 요청 근거 부족'], ['route_not_fast', '빠른 등급 요건 불충족']])('shows Gate cleanup reason %s', (reason, _label) => {
+  const trace = make();
+  const phase = reason.startsWith('worker_') ? 'post' : reason === 'route_not_fast' ? 'pre_result' : 'admission_result';
+  write(trace, 'reason.json', { phase, written_at: '2026-09-29T06:00:00.000Z', session_id: 's1', verdict: 'incomplete', verdict_reason: reason,
+    role: 'worker', decision: { shape: 'direct', action: 'preserve', reason } });
+  const snap = loadActivity({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() }, now: new Date('2026-09-29T06:00:00.000Z') });
+  expect(snap.events[0]?.used).toContain(_label);
+});

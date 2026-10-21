@@ -16,14 +16,14 @@ describe('the marketplace', () => {
   it('is named jev-gate, so a plugin installs as <plugin>@jev-gate', () => {
     expect(marketplace.name).toBe('jev-gate');
     expect(marketplace.owner.name).toBeTruthy();
-    // v0.6.0: one plugin, so one install and one update; the Mods and the evidence server ship inside it.
+    // v0.6.0: one plugin, so one install and one update; the Mods and the MCP server ship inside it.
     expect(marketplace.plugins.map((p) => p.name)).toEqual(['jev-gate']);
   });
 
   it('leaves every version to plugin.json, and every plugin.json is at the package version', () => {
     // A version in both places is taken from plugin.json without warning; one place keeps the update signal honest.
     for (const p of marketplace.plugins) expect(p.version, p.name).toBeUndefined();
-    for (const rel of ['.claude-plugin/plugin.json', ...['mods/compact', 'mods/router', 'plugins/evidence'].map((d) => `${d}/.claude-plugin/plugin.json`)]) {
+    for (const rel of ['.claude-plugin/plugin.json', ...['mods/compact', 'mods/router'].map((d) => `${d}/.claude-plugin/plugin.json`)]) {
       expect((readJson(join(root, rel)) as { version: string }).version, rel).toBe(version);
     }
   });
@@ -45,7 +45,7 @@ describe('the marketplace', () => {
   it('loads a hooks module whose imports all resolve inside the files the archive carries', () => {
     // The archive holds hooks/ and mods/<mod>/hooks/*.ts (scripts/pack.mjs), so an import outside them breaks the installed copy.
     const specifier = /(?:^|\n)\s*(?:import|export)\b[^'"]*?\bfrom\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
-    const shipped = (rel: string) => /^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(rel) || /^(hooks|mods\/(compact|output|router)\/hooks)\/[a-z-]+\.ts$/.test(rel);
+    const shipped = (rel: string) => /^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|observation|secret)|claude-(?:models|candidates|dispatch))\.ts$/.test(rel) || /^(hooks|mods\/(compact|output|router)\/hooks)\/[a-z-]+\.ts$/.test(rel);
     const hooks = readJson(join(root, 'hooks', 'hooks.json')) as { modules: string[] };
     expect(hooks.modules).toEqual(['./register.ts']);
     const seen = new Set<string>();

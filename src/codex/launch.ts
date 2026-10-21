@@ -1,4 +1,3 @@
-import { createCompactSelector } from '../../mods/compact/hooks/selection.ts';
 import { observeResponseStream } from './response-stream.js';
 import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -9,11 +8,8 @@ import { resolve } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { CodexRpc } from './rpc.js';
 import { CodexPolicy } from './policy.js';
-import { obj } from './source.js';
-import { runtimeCodexPolicy } from './config.js';
-import { selectCodexCompact, isCodexCompactRequest, compactResponse } from './compact.js';
-import { codexTraceDir } from '../codex-paths.js';
-import { openTraceDir } from '../trace.js';
+import { codexCallerWorkspace } from './workspace.js';
+import { obj, type Obj } from './source.js';
 import type { Env } from '../config.js';
 
 /** Only the official host's discovery for the same authenticated workspace may redirect its credentials. */
@@ -26,6 +22,10 @@ export const nativeWorkspaceUpstream = (result: unknown, accountId: string): { o
   return { origin: origin.origin, override: String(routing['accountRoutingOverride']) };
 };
 
+/** The host's own label on its compaction request (`/responses` for local compaction). Router never rewrites it. */
+const compactionRequest = (metadata: unknown): boolean => {
+  try { return typeof metadata === 'string' && obj(JSON.parse(metadata))?.['request_kind'] === 'compaction'; } catch { return false; }
+};
 const equal = (a: unknown, b: string): boolean => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const body = async (request: IncomingMessage, max: number): Promise<Buffer> => {
   const chunks: Buffer[] = []; let size = 0;
@@ -37,15 +37,11 @@ export interface CodexLaunchOptions {
   bypassHookTrust?: boolean;
   nativeAuth?: boolean;
   profiles?: Record<string, string>;
-  connection?: { token: string; marker: string; port: number; ready?: () => boolean; restart?: () => void };
+  connection?: { token: string; port: number; ready?: () => boolean; restart?: () => void };
 }
 /** Official App Server plus local transport. Persistent automatic connection settings are owned by connection.ts. */
 export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ url: string; token: string; policy: CodexPolicy; rpc: CodexRpc; close: () => Promise<void> }> => {
   const token = options.connection?.token ?? randomBytes(32).toString('hex');
-  const marker = options.connection?.marker ?? `[jev-gate compact ${randomBytes(24).toString('hex')}] Produce a factual compaction summary of the preceding conversation.`;
-  const config = runtimeCodexPolicy(options.env);
-  const selectCompact = createCompactSelector(config.compact.jevTimeoutMs ?? 1000);
-  const trace = openTraceDir(codexTraceDir(options.env), options.env);
   let child: ChildProcessWithoutNullStreams | undefined;
   let rpc: CodexRpc | undefined; let policy: CodexPolicy | undefined; let client: WebSocket | undefined;
   const proxyHeaders = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'x-jev-gate-session']);
@@ -72,7 +68,8 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
         res.once('close', () => { if (!res.writableEnded && input) policy?.cancelCaller(input['meta']); });
-        const output = input && policy ? await policy.dispatch(input['arguments'], input['meta']) : 'Native connection unavailable. No worker was started.';
+        const handler = policy;
+        const output = input && handler ? await handler.dispatch(input['arguments'], input['meta']).catch((e: unknown) => handler.failedDispatch(codexCallerWorkspace(input['meta'])?.session, e)) : 'Native connection unavailable. No worker was started.';
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ output })); return;
       }
       if (req.url === '/hook' && req.method === 'POST') {
@@ -94,58 +91,18 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       const sessionId = policy?.requestSession(req.headers['x-codex-turn-metadata'], req.headers['session-id']) ?? null;
       let payload = raw;
       let modified = false;
-      const nativeCompact = req.method === 'POST' && (path === '/responses/compact' || path === '/responses' && isCodexCompactRequest(obj(JSON.parse(decoded.toString('utf8')))?.['input'], marker));
+      const nativeCompact = req.method === 'POST' && (path === '/responses/compact' || path === '/responses' && compactionRequest(req.headers['x-codex-turn-metadata']));
       if (req.method === 'POST' && (path === '/responses' || path === '/responses/compact')) {
         // Hook trust is the root's; a native child request is checked against the root it was sent for.
         const trusted = sessionId ?? policy?.requestSession(undefined, req.headers['session-id']);
         if ((!trusted || !policy?.hooksReady(trusted)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
         if (sessionId && policy) {
           const parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
-          if (path === '/responses' && !isCodexCompactRequest(parsed['input'], marker)) {
+          if (path === '/responses' && !nativeCompact) {
             const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
-            const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal);
-            if (selected.stop) { res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(compactResponse(selected.stop)); return; }
+            const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator']);
             payload = Buffer.from(JSON.stringify(selected.request)); modified = true;
           }
-        }
-      }
-      if (config.compact.enabled && req.method === 'POST' && path === '/responses') {
-        const parsed = obj(JSON.parse(decoded.toString('utf8')));
-        if (sessionId && policy?.canCompact(sessionId) && isCodexCompactRequest(parsed?.['input'], marker)) {
-          const session = sessionId;
-          const captured = policy.sessions.get(session);
-          const prompt = captured?.prompt, epoch = captured?.epoch, controller = captured?.controller;
-          const cancelled = new AbortController();
-          const abort = () => { if (!res.writableEnded) cancelled.abort(); };
-          res.once('close', abort);
-          const signal = controller ? AbortSignal.any([controller.signal, cancelled.signal]) : cancelled.signal;
-          let key: string | undefined;
-          try { key = config.compact.jevEnabled === false ? undefined : policy.compactKey(); } catch { /* local baseline */ }
-          const run = `${Date.now()}-${randomBytes(4).toString('hex')}`;
-          const { compact, selection } = await selectCodexCompact(parsed?.['input'], marker, config.compact.budgetChars, {
-            previousSummary: policy.previousCompact(session), key, select: selectCompact, signal,
-            transport: {
-              fetch: async (url, init) => { const reply = await (options.fetchImpl ?? fetch)(url, init); return { status: reply.status, text: await reply.text() }; },
-              sleep: (ms, signal) => new Promise((resolve, reject) => {
-                const done = () => { signal.removeEventListener('abort', stop); resolve(); };
-                const timer = setTimeout(done, ms);
-                const stop = () => { clearTimeout(timer); signal.removeEventListener('abort', stop); reject(new Error('aborted')); };
-                if (signal.aborted) stop(); else signal.addEventListener('abort', stop, { once: true });
-              }),
-            },
-          });
-          res.removeListener('close', abort);
-          const selectionFields = { host: 'codex', session_id: session, prompt_id: prompt, run_id: run, applied: false, summarizer_request: false,
-            jev_sent: selection?.sent ?? (compact.ok ? null : false), jev_ms: selection?.durationMs ?? null, usage: selection?.usage ?? null, candidates: selection?.candidates ?? null, available: selection?.available ?? null, dependencies: selection?.priorities.length ?? null, selection: config.compact.jevEnabled === false ? 'disabled' : selection?.reason ?? (compact.ok ? 'error' : 'not_eligible') };
-          if (cancelled.signal.aborted) { if (trace.ok) trace.writer.write('codex_compact', { ...selectionFields, stage: 'deferred', fallback: 'aborted' }); return; }
-          const current = policy.sessions.get(session);
-          const fresh = current === captured && current?.prompt === prompt && current?.epoch === epoch && current?.controller === controller && !signal.aborted;
-          if (compact.ok && fresh && policy.canCompact(session)) {
-            if (trace.ok) trace.writer.write('codex_compact', { ...selectionFields, stage: 'selected', before_bytes: compact.before, after_bytes: compact.after });
-            policy.selectedCompact(session, compact.summary, run, compact.before, compact.after);
-            res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.end(compactResponse(compact.summary)); return;
-          }
-          if (trace.ok) trace.writer.write('codex_compact', { ...selectionFields, stage: 'deferred', fallback: !fresh ? signal.aborted ? 'aborted' : 'superseded' : compact.ok ? 'not_allowed' : compact.reason });
         }
       }
       // Authorization goes only to the fixed native OpenAI endpoints, or the explicit owner's compatible endpoint.
@@ -174,11 +131,6 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
       upstream.on('error', () => { if (sessionId) policy?.observeRequestFailure(sessionId, submitted); if (!res.headersSent) res.writeHead(502); res.end(); });
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
-      if (nativeCompact && sessionId && trace.ok) {
-        const request = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
-        trace.writer.write('codex_compact', { host: 'codex', session_id: sessionId, run_id: randomBytes(12).toString('hex'), stage: 'native_submitted', applied: false,
-          summarizer_request: true, submitted_model: request['model'] ?? null, submitted_effort: obj(request['reasoning'])?.['effort'] ?? null });
-      }
       if (!nativeCompact && req.method === 'POST' && path === '/responses' && sessionId && policy) {
         try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}); } catch { /* Observation does not block sending. */ }
       }
@@ -195,7 +147,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   const base = `http://127.0.0.1:${address.port}`;
   const provider = ['-c', 'model_provider="jev-gate-native"', '-c', 'model_providers.jev-gate-native.name="Jev Gate / native Codex"', '-c', `model_providers.jev-gate-native.base_url="${base}"`,
     '-c', 'model_providers.jev-gate-native.wire_api="responses"', '-c', `model_providers.jev-gate-native.requires_openai_auth=${options.nativeAuth !== false}`, '-c', 'model_providers.jev-gate-native.supports_websockets=false',
-    '-c', 'model_providers.jev-gate-native.env_http_headers={"x-jev-gate-session"="JEV_CODEX_BRIDGE_TOKEN"}', ...(config.compact.enabled ? ['-c', `compact_prompt=${JSON.stringify(marker)}`] : [])];
+    '-c', 'model_providers.jev-gate-native.env_http_headers={"x-jev-gate-session"="JEV_CODEX_BRIDGE_TOKEN"}'];
   child = spawn('codex', [...(options.bypassHookTrust ? ['--dangerously-bypass-hook-trust'] : []), 'app-server', '--stdio', ...(options.serverArgs ?? []), ...provider], { cwd: options.cwd,
     env: { ...options.env, JEV_CODEX_BRIDGE_URL: base, JEV_CODEX_BRIDGE_TOKEN: token }, stdio: ['pipe', 'pipe', 'pipe'] });
   rpc = new CodexRpc(child.stdout, child.stdin);

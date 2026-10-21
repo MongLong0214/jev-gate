@@ -2,20 +2,22 @@ import { createHash } from 'node:crypto';
 import type { OperationRun, OperationStep } from './operations.js';
 import { operationState } from './operation-state.js';
 import { memo } from './memo.js';
+import { looksSecret } from './outbound-text.js';
 
 type Rec = Record<string, unknown>;
-const safeToken = memo((v: string): string | null => /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !/(sk-|jv_live_)/i.test(v) ? v : null);
+// Metadata identifiers reject even truncated/embedded sk- fragments. Prose screening keeps prefix mentions and task-id usable.
+const safeToken = memo((v: string): string | null => /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null);
 const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 const hash = memo((v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 12));
 const at = (r: Rec): string => typeof r['written_at'] === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(r['written_at']) ? r['written_at'] : '';
 const START_END: Record<string, string[]> = {
   UserPromptSubmit: ['Stop', 'Interrupt', 'SessionEnd'], PreToolUse: ['PostToolUse'],
-  SubagentStart: ['SubagentStop'], PreCompact: ['PostCompact'],
+  SubagentStart: ['SubagentStop'],
 };
 const TITLE: Record<string, string> = {
   SessionStart: 'Codex · 세션 시작', SessionEnd: 'Codex · 세션 종료', UserPromptSubmit: 'Codex · 턴 시작',
   PreToolUse: 'Codex · 도구 시작', PostToolUse: 'Codex · 도구 결과', SubagentStart: 'Codex · 에이전트 시작',
-  SubagentStop: 'Codex · 에이전트 종료 이벤트', PreCompact: 'Codex · 압축 시작', PostCompact: 'Codex · 압축 종료',
+  SubagentStop: 'Codex · 에이전트 종료 이벤트',
   Stop: 'Codex · 턴 종료 이벤트', Interrupt: 'Codex · 사용자 중단',
 };
 export const codexSpanKey = (r: Rec, event: string): string | null => {
@@ -69,7 +71,7 @@ export const codexOperations = (records: Rec[], now: Date, flipsAt?: (at: number
       }).sort((a, b) => at(a).localeCompare(at(b)))[0];
       if (closing) ended.set(row, closing);
     }
-    if (['PostToolUse', 'SubagentStop', 'PostCompact', 'Stop', 'Interrupt', 'SessionEnd'].includes(event)) {
+    if (['PostToolUse', 'SubagentStop', 'Stop', 'Interrupt', 'SessionEnd'].includes(event)) {
       const key = codexSpanKey(row, event);
       if (key) terminals.set(key, row);
     }
@@ -116,12 +118,11 @@ const stepOf = (r: Rec, key: string, event: string, end: Rec | undefined, closin
     : state === 'unconfirmed' ? closing ? '턴 또는 세션 종료 · 이 호출의 결과 이벤트는 미관측' : '결과 이벤트 미관측 · 실행 성공·실패를 판단할 수 없음'
     : tool === 'spawn_agent' && event === 'PostToolUse' ? '에이전트 생성 응답 · 작업 완료 여부는 별도 관측'
     : event === 'SubagentStop' ? '종료 훅 관측 · Jev 계약 수락 검사 없음'
-    : event === 'PreCompact' || event === 'PostCompact' ? r['managed'] === true ? 'Codex 압축 절차 · digest 설치는 별도 적용 기록에서 확인' : 'Codex 기본 압축 · 연결 세션에서 digest 적용 가능'
     : [tool, token(r['agent_type']), token(r['model'])].filter(Boolean).join(' · ') || 'Codex 호스트 이벤트';
   const measured = end ? Date.parse(at(end)) - Date.parse(at(r)) : undefined;
   return {
     id: hash(`${key}:${token(r['invocation_id']) ?? at(r)}:${event}`), at: at(r),
-    feature: event.includes('Compact') ? 'compact' : 'workers',
+    feature: 'workers',
     lifecycle: true, ...(state === 'error' && token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
     state, lane: 'host', title: TITLE[event]!, summary: detail, ...(event === 'SubagentStop' && state === 'done' ? { outcome: 'host_ended' as const } : {}),
     details: [...(state === 'unconfirmed' ? ['호스트 훅이 모든 도구 경로의 종료를 보장하지 않습니다. 원래 호스트에서 해당 도구 결과를 확인하세요.'] : []), ...(token(r['tool_use_id']) ? [`call: ${hash(String(r['tool_use_id']))}`] : [])],

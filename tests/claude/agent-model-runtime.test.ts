@@ -77,12 +77,12 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     // environment here can race the host's settings reload and miss Gate's dispatch ownership.
     const backgroundDisabled = scenario.admission ? '0' : '1';
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: backgroundDisabled } }));
-    const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0, admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
+    const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 0 }));
     const trace = join(temp, 'trace'); const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([n]) => !/^(CLAUDE_|ANTHROPIC_|TYPESAFE_|JEV_|XDG_)/.test(n)));
     Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_MODE: 'auto', JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', JEV_GATE_TRACE_DIR: trace, TYPESAFE_API_KEY: 'fake-local-jev-key', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: backgroundDisabled });
     saveApiKey(env, 'fake-local-jev-key');
     if (scenario.scope === 'root') env.JEV_GATE_MODE = 'off';
-    if (scenario.adhoc) { delete env.JEV_GATE_EXPERIMENT_ADMISSION; writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 999999, workerIsolation: 'none', maxParallelWorkers: 1 })); }
+    if (scenario.adhoc) { delete env.JEV_GATE_EXPERIMENT_ADMISSION; writeFileSync(cfg, JSON.stringify({ version: 5, mode: 'auto', delegationDepthFloor: 999999 })); }
     if (scenario.admission) { delete env.JEV_GATE_EXPERIMENT_ADMISSION; mkdirSync(join(temp, 'src')); writeFileSync(join(temp, 'src/lookup.ts'), 'export function parseRecord() {}\nparseRecord();\n'); }
     if (scenario.documentation) writeFileSync(join(temp, 'PR.md'), 'Obsolete PR description\n');
     // Fable authorization must propagate from the native plugin option, not a fixture-only env override.
@@ -91,7 +91,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     const documentCheck = `node -e 'const fs=require("node:fs");if(!fs.readFileSync("src/lookup.ts","utf8").includes("export function parseRecord")||fs.readFileSync("PR.md","utf8")!=="Documents parseRecord in src/lookup.ts; no API behavior changes.\\n")throw new Error("description mismatch");console.log("PR description verified")'`;
     const answer = (res: ServerResponse, model: string, text: string, tool?: unknown) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' }); const event = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
-      event('message_start', { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
+      event('message_start', { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1 } } } });
       event('content_block_start', { type: 'content_block_start', index: 0, content_block: tool ? { type: 'tool_use', id: 'fixture_dispatch', name: scenario.scope === 'root' || typeof (tool as Record<string, unknown>).command === 'string' ? 'Bash' : 'Agent', input: {} } : { type: 'text', text: '' } });
       event('content_block_delta', { type: 'content_block_delta', index: 0, delta: tool ? { type: 'input_json_delta', partial_json: JSON.stringify(tool) } : { type: 'text_delta', text } });
       event('content_block_stop', { type: 'content_block_stop', index: 0 }); event('message_delta', { type: 'message_delta', delta: { stop_reason: tool ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }); event('message_stop', { type: 'message_stop' }); res.end();
@@ -155,6 +155,14 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       const diagnostic = JSON.stringify({ output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort, messageEfforts: ((r as any).messages ?? []).map((m: any) => ({ role: m.role, effort: m.effort, metadata: m.metadata, extra: Object.keys(m).filter(k => !['role','content'].includes(k)) })) })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result' || r.phase === 'admission_result' || r.phase.startsWith('background_')) });
       expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.childSteps ? 3 : scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.documentation ? 3 : scenario.sequence ? scenario.sequence.length * 2 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
       for (const [i, request] of workerRequests.entries()) { const expected = scenario.childSteps?.[i - 1] ?? scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe('cost' in expected && String(expected.cost).endsWith('_hold') ? 'claude-opus-5-5' : expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
+      const observedResults = traces.filter(r => r.phase === 'mod_router' && ['root_result', 'child_result'].includes(r.event));
+      expect(observedResults.length, diagnostic).toBeGreaterThan(0);
+      for (const row of observedResults) {
+        expect(row.observed_effort, diagnostic).not.toBe('unknown');
+        expect(row.effort_evidence, diagnostic).toBe('transcript_api_request');
+        expect(row.accounting, diagnostic).toMatchObject({ write: 1, write5m: 0, write1h: 1, coverage: 'complete' });
+        if (row.event === 'root_result') expect(row.cost.usd, diagnostic).toBeTypeOf('number');
+      }
       if (scenario.admission) {
         expect(admissions, diagnostic).toHaveLength(1);
         if (scenario.documentation) {
@@ -177,7 +185,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       if (scenario.adhoc) {
         const post = traces.find(r => r.phase === 'post' && r.verdict === 'accept');
         expect(post, diagnostic).toBeDefined();
-        expect(post.root_fallback, diagnostic).toBe(false); expect(post.plan_complete, diagnostic).toBe(false);
+        expect(post.root_fallback, diagnostic).toBe(false);
         const job = readJob(env, post.session_id);
         expect(job.ok && job.value?.current.shape, diagnostic).toBe('direct');
         expect(job.ok && job.value?.current.active, diagnostic).toEqual({});

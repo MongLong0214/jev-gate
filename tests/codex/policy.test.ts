@@ -10,7 +10,6 @@ import { codexSuccessor } from '../../src/codex/catalog.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import { readJob } from '../../src/job.js';
-import { extractCodexCompact, compactResponse } from '../../src/codex/compact.js';
 import { nativeLaunchOptions, nativeWorkspaceUpstream } from '../../src/codex/launch.js';
 import { buildOperations } from '../../src/operations.js';
 const tmp = mkdtempSync(join(tmpdir(), 'jev-codex-policy-'));
@@ -30,27 +29,30 @@ describe('Codex ordered routing and recorded application', () => {
     const models = { fast: 'account-fast', standard: 'account-workhorse', deep: 'account-workhorse', frontier: 'account-frontier' };
     expect(catalogTierModels('account-workhorse', available)).toEqual(models);
     const p = loadCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_MODEL: 'account-workhorse' }, available);
-    expect(p.gate).toMatchObject({ models, maxParallelWorkers: 16, workerIsolation: 'worktree', guardAllowTools: ['*'], delegationDepthFloor: 0, planInterpretation: true });
-    expect(p.router.model).toBe(true); expect(p.compact.manual).toBe(true);
-    const serial = join(tmp, 'serial-policy.json'); writeFileSync(serial, JSON.stringify({ gate: { maxParallelWorkers: 1, guardAllowTools: [] } }));
-    expect(loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate.workerIsolation).toBe('none');
+    expect(p.gate).toMatchObject({ models, delegationDepthFloor: 0 });
+    expect(p.gate).not.toHaveProperty('maxParallelWorkers');
+    expect(p.router.model).toBe(true);
+    const serial = join(tmp, 'serial-policy.json'); writeFileSync(serial, JSON.stringify({ gate: { maxParallelWorkers: 1, guardAllowTools: [], workerIsolation: 'worktree' } }));
+    // #289: a deployed file that still sets the removed keys loads, and they are dropped unread.
+    const old = loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate;
+    expect(old).not.toHaveProperty('guardAllowTools'); expect(old.workerIsolation).toBe('worktree');
     const override = join(tmp, 'explicit-models.json'); writeFileSync(override, JSON.stringify({ gate: { models: { fast: 'owner-model' } } }));
     expect(loadCodexPolicy({ JEV_CODEX_CONFIG: override, JEV_CODEX_MODEL: 'account-workhorse' }, available).gate.models).toEqual({ ...models, fast: 'owner-model' });
   });
-  it('turns off only the Gate for a mode it no longer knows, from the policy file or JEV_GATE_MODE, and keeps Router and Compact', () => {
+  it('turns off only the Gate for a mode it no longer knows, from the policy file or JEV_GATE_MODE, and keeps the Router', () => {
     const old = join(tmp, 'old-mode-policy.json'); writeFileSync(old, JSON.stringify({ gate: { mode: 'lean' }, router: { allowAstra: true }, compact: { budgetChars: 9000 } }));
     const fromFile = runtimeCodexPolicy({ JEV_CODEX_CONFIG: old });
     expect(fromFile.gate.mode).toBe('off');
     expect(fromFile.router).toMatchObject({ enabled: true, model: true, effort: true });
-    expect(fromFile.compact).toMatchObject({ enabled: true, manual: true, budgetChars: 9000 });
+    // A leftover Codex Compact section is accepted and never read.
+    expect(fromFile).not.toHaveProperty('compact');
     const fromEnv = runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_GATE_MODE: 'lean' });
     expect(fromEnv.gate.mode).toBe('off');
     expect(fromEnv.router.enabled).toBe(true);
-    expect(fromEnv.compact.enabled).toBe(true);
     // Doctor still reports the value, and a different invalid section still disables every dispatch.
     expect(() => loadCodexPolicy({ JEV_CODEX_CONFIG: old })).toThrow('invalid Codex gate config');
     const broken = join(tmp, 'broken-section.json'); writeFileSync(broken, JSON.stringify({ router: { enabled: 'yes' } }));
-    expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: broken })).toMatchObject({ gate: { mode: 'off' }, router: { enabled: false }, compact: { enabled: false } });
+    expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: broken })).toMatchObject({ gate: { mode: 'off' }, router: { enabled: false } });
     // JEV_CODEX_OUTPUT belonged to the removed Codex Output fold; nothing reads it.
     expect(runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_OUTPUT: 'off' })).toEqual(runtimeCodexPolicy({ JEV_CODEX_CONFIG: join(tmp, 'policy.json') }));
   });
@@ -185,6 +187,11 @@ describe('Codex ordered routing and recorded application', () => {
     expect((await superseded('gpt-5.6-luna', 'key_missing', { effort: 'ultra', catalog: account.map(m => m.model === 'gpt-5.6-luna' ? { ...m, supportedReasoningEfforts: levels() } : m) })).patch).toEqual({});
     expect((await superseded('gpt-5.6-terra', 'key_missing')).patch).toEqual({});
     expect((await superseded('gpt-6-sol', 'key_missing', { modelPinned: true })).patch).toEqual({});
+    // A pinned model is kept exactly, superseded or not; a run pinning both is never assessed.
+    const pinned = await superseded('gpt-6-sol', 'complex', { modelPinned: true, effortPinned: true });
+    expect(pinned.patch).toEqual({}); expect(pinned.fetchImpl).not.toHaveBeenCalled();
+    expect(pinned.rows).toEqual([expect.objectContaining({ phase: 'codex_router_skipped', reason: 'pinned' })]);
+    expect(pinned.rows[0]).not.toHaveProperty('superseded_baseline');
   });
 });
 describe('native workspace authentication routing', () => {
@@ -202,33 +209,6 @@ describe('native check evidence', () => {
     const observation = codexObservation([{ id: 'c1', type: 'commandExecution', command: "/bin/zsh -c 'vitest run'", status: 'failed', exitCode: 1 }, { id: 'w', type: 'fileChange', status: 'inProgress' }, { id: 'c2', type: 'commandExecution', command: "/bin/zsh -c 'vitest run; true'", status: 'completed', exitCode: 0 }], false, commands);
     expect(observation).toMatchObject({ truncated: true, openWrite: true, lastWrite: 1, runs: [{ command: 'vitest run', status: 'failed' }, { command: "/bin/zsh -c 'vitest run; true'", status: 'passed' }] });
   });
-});
-describe('native compaction contract', () => {
-  it('shows a digest waiting for installation and closes only on the native installed record', () => {
-    const selected = { host: 'codex', phase: 'codex_compact', session_id: 's', run_id: 'c', stage: 'selected', applied: false, written_at: '2026-09-30T01:00:00Z' };
-    const now = new Date('2026-09-30T01:00:01Z');
-    const open = buildOperations([selected], [], now, { trace: true, host: 'codex' });
-    expect(open.runs.find(r => r.source === 'compact')).toMatchObject({ state: 'active', title: expect.stringContaining('Compact') });
-    const installed = { ...selected, stage: 'installed', applied: true, written_at: '2026-09-30T01:00:01Z' };
-    expect(buildOperations([selected, installed], [], now, { trace: true, host: 'codex' }).runs.find(r => r.source === 'compact')?.state).toBe('done');
-  });
-  const message = (role: string, text: string) => ({ type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
-  const input = [message('user', 'Preserve this exact constraint.'), message('assistant', 'irrelevant narrative '.repeat(4000)), message('user', 'New question'), message('assistant', 'new reply'), message('user', 'compact-marker')];
-  it('preserves user constraints in a valid native response with complete usage fields', () => {
-    const compact = extractCodexCompact(input, 'compact-marker', 40000); expect(compact.ok).toBe(true);
-    if (!compact.ok) return;
-    expect(compact.summary).toContain('Preserve this exact constraint.');
-    expect(compact.after).toBeLessThan(compact.before / 2);
-    expect(extractCodexCompact([{ type: 'additional_tools', role: 'developer', tools: [{ type: 'function', name: 'jev_agent' }] }, ...input], 'compact-marker', 40000)).toMatchObject({ ok: true, summary: compact.summary });
-    const events = compactResponse(compact.summary).split('\n').filter(l => l.startsWith('data: ')).map(l => JSON.parse(l.slice(6)));
-    expect(events.at(-1).response.usage).toMatchObject({ input_tokens: 0, output_tokens: 0, total_tokens: 0 });
-  });
-  it.each([
-    [[...input.slice(0, -1), message('user', 'normal prompt')], 'not_compact'],
-    [[{ type: 'reasoning', encrypted_content: 'opaque' }, ...input], 'opaque_context'],
-    [[{ type: 'function_call', call_id: 'pending', name: 'tool', arguments: '{}' }, ...input], 'pending_call'],
-    [[{ type: 'message', role: 'user', content: [{ type: 'input_image', image_url: 'image' }] }, ...input], 'media_or_role'],
-  ])('preserves native compaction for an unsafe extraction (%#)', (source, reason) => expect(extractCodexCompact(source, 'compact-marker', 40000)).toEqual({ ok: false, reason }));
 });
 describe('native transport authority', () => {
   it('confirms Ultra only from an official host setting and preserves selected versus wire facts', async () => {
@@ -277,7 +257,7 @@ describe('native transport authority', () => {
     const job = readJob({ JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') }, 'cancelled');
     expect(job.ok && job.value?.current.shape).toBe('direct'); rpc.close();
   });
-  it('reclassifies a native follow-up with only observed earlier human requests and carries them into dispatch', async () => {
+  it('keeps a native needs_context follow-up direct after one call without carrying earlier requests', async () => {
     const rpc = new CodexRpc(new PassThrough(), new PassThrough()); const seen: string[] = [];
     const env = { JEV_CODEX_CONFIG: join(tmp, 'policy.json'), JEV_CODEX_TRACE_DIR: join(tmp, 'followup'), JEV_GATE_STATE_DIR: join(tmp, 'followup-state'), TYPESAFE_API_KEY: 'fixture-key' };
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
@@ -296,10 +276,11 @@ describe('native transport authority', () => {
     session.prompt='first';
     await policy.nativeHook({hook_event_name:'UserPromptSubmit',session_id:'followup',prompt:'Implement the download validation and run its full checks.'});
     session.prompt='second';
-    await policy.nativeHook({hook_event_name:'UserPromptSubmit',session_id:'followup',prompt:'Run it now.'});
-    expect(seen.at(-1)).toContain('Implement the download validation');
+    expect(await policy.nativeHook({hook_event_name:'UserPromptSubmit',session_id:'followup',prompt:'Run it now.'})).toEqual({});
+    expect(seen).toEqual(['Implement the download validation and run its full checks.', 'Run it now.']);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
     const job = readJob({JEV_GATE_STATE_DIR:join(env.JEV_GATE_STATE_DIR,'codex')},'followup');
-    expect(job.ok && job.value?.current.request).toContain('Current request:\nRun it now.');
+    expect(job.ok && job.value?.current).toMatchObject({ shape: 'direct', request: null });
     rpc.close();
   });
   it('separates colliding client, internal and approval ids, preserving approval payload exactly', async () => {

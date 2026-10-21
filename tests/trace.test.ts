@@ -1,17 +1,50 @@
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { openTraceDir, pruneTraceDir } from '../src/trace.js';
+import { setRecording } from '../src/recording.js';
+import { rowOf, type CellResult } from '../src/bench/ab.js';
+
+// Out of file descriptors: every open fails, as in a host that ran out of them mid-cell.
+const exhausted = vi.hoisted(() => ({ on: false, markers: false, write: false }));
+vi.mock('node:fs', async (original) => {
+  const fs = await original<typeof import('node:fs')>();
+  return { ...fs, openSync: (...args: Parameters<typeof fs.openSync>) => {
+    if (exhausted.on) throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+    return fs.openSync(...args);
+  }, mkdirSync: (...args: Parameters<typeof fs.mkdirSync>) => {
+    if (exhausted.markers) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    return fs.mkdirSync(...args);
+  }, writeSync: (...args: unknown[]) => {
+    if (exhausted.write) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+    return Reflect.apply(fs.writeSync, fs, args);
+  } };
+});
 
 const tmp = mkdtempSync(join(tmpdir(), 'jev-trace-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 describe('openTraceDir', () => {
+  it('C4: stores only worker metadata and closed reasons, preserving numeric accounting without tool or failure prose', () => {
+    const dir = join(tmp, 'worker-projection'), canary = 'sessionid=canary123';
+    const opened = openTraceDir(dir, { HOME: tmp });
+    if (!opened.ok) throw new Error(opened.error);
+    opened.writer.write('post', { host: 'claude', session_id: 's', verdict: 'invalid', verdict_reason: `check curl --cookie ${canary}: bad result`,
+      checks: [{ check_id: canary, note: canary }], failure_description: canary,
+      tool_response: { status: 'completed', content: canary, resolvedModel: canary, accounting: { input: 2, output: 3, coverage: 'partial' } },
+      verification: { transcript: 'read', contradicted: [canary], unobserved: [], stale: [] } });
+    opened.writer.write('failure', { error_first_line: canary, failure_category: canary, message: canary });
+    const records = readdirSync(dir).map(name => JSON.parse(readFileSync(join(dir, name), 'utf8')));
+    expect(JSON.stringify(records)).not.toContain(canary);
+    expect(records.find(row => row.phase === 'post')).toMatchObject({ verdict_reason: 'invalid_reply', tool_response: { accounting: { input: 2, output: 3, coverage: 'partial' } } });
+    expect(records.find(row => row.phase === 'failure')).toMatchObject({ error_first_line: 'worker_failed', failure_category: 'worker_failed' });
+  });
+
   it('creates a private directory and writes private, atomic, randomly named phase files with join keys inside', () => {
     const dir = join(tmp, 'a', 'b');
-    const opened = openTraceDir(dir);
+    const opened = openTraceDir(dir, { HOME: tmp });
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     if (process.platform !== 'win32') expect(statSync(dir).mode & 0o777).toBe(0o700);
@@ -29,6 +62,9 @@ describe('openTraceDir', () => {
       expect(typeof body['invocation_id']).toBe('string');
       expect(f).toContain(String(body['invocation_id']));
     }
+    opened.writer.finish?.({ session_id: 's' });
+    const receipt = readdirSync(dir).find(name => name.startsWith('recording_complete-'))!;
+    expect(JSON.parse(readFileSync(join(dir, receipt), 'utf8'))).toMatchObject({ complete: true, attempted: 2, written: 2 });
   });
 
   it('refuses a symlinked trace directory', () => {
@@ -38,6 +74,47 @@ describe('openTraceDir', () => {
     symlinkSync(real, link);
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
     expect(openTraceDir(link)).toMatchObject({ ok: false, error: 'trace directory is a symlink' });
+  });
+
+  it('marks a record lost before its file exists, so a reader that needs every record sees the loss', () => {
+    const dir = join(tmp, 'emfile');
+    const opened = openTraceDir(dir, { HOME: tmp });
+    if (!opened.ok) throw new Error(opened.error);
+    exhausted.on = true;
+    try { expect(opened.writer.write('admission_intent', { session_id: 's' })).toEqual({ ok: false, error: 'EMFILE' }); }
+    finally { exhausted.on = false; }
+    const [marker, ...rest] = readdirSync(dir);
+    expect(rest).toEqual([]);
+    expect(marker).toMatch(/^\.admission_intent-[0-9a-f-]{36}\.failed$/);
+    expect(statSync(join(dir, marker!)).isDirectory()).toBe(true);
+    const cell = { cond: 'B', sid: 's', trace_complete: true, recording_version: 1, prime: {}, harness: {} } as CellResult;
+    expect(rowOf(cell, null, null, dir)).toMatchObject({ jev_requests: 0, jev_cost: null });
+    // A record that was written says its recorder marks such losses.
+    expect(opened.writer.write('admission_result', { session_id: 's' }).ok).toBe(true);
+    const record = readdirSync(dir).find(name => name.endsWith('.json'))!;
+    expect(JSON.parse(readFileSync(join(dir, record), 'utf8'))).toMatchObject({ loss_marker: true });
+    opened.writer.finish?.({ session_id: 's' });
+    const receipt = readdirSync(dir).find(name => name.startsWith('recording_complete-'))!;
+    expect(JSON.parse(readFileSync(join(dir, receipt), 'utf8'))).toMatchObject({ complete: false, attempted: 2, written: 1 });
+  });
+
+  it('retains settings-read, append and marker failures after I/O recovers', () => {
+    for (const kind of ['settings', 'write', 'both']) {
+      const dir = join(tmp, kind), env = { HOME: join(tmp, `home-${kind}`) };
+      if (kind === 'settings') setRecording(env, true);
+      const opened = openTraceDir(dir, env);
+      if (!opened.ok) throw new Error(opened.error);
+      exhausted.on = kind !== 'write'; exhausted.write = kind === 'write'; exhausted.markers = kind === 'both';
+      try { expect(opened.writer.write('admission_intent', { session_id: 's' }).ok).toBe(false); }
+      finally { exhausted.on = false; exhausted.write = false; exhausted.markers = false; }
+      if (kind === 'both') expect(readdirSync(dir)).toEqual([]);
+      opened.writer.finish?.({ session_id: 's' });
+      const name = readdirSync(dir).find(file => file.startsWith('recording_complete-'))!;
+      expect(JSON.parse(readFileSync(join(dir, name), 'utf8'))).toMatchObject({ complete: false, attempted: 1, written: 0 });
+    }
+    exhausted.markers = true;
+    try { expect(openTraceDir(join(tmp, 'init'), { HOME: tmp })).toMatchObject({ ok: false, error: 'EACCES' }); }
+    finally { exhausted.markers = false; }
   });
 
   it('reports write failures instead of throwing', () => {
@@ -61,12 +138,14 @@ describe('pruneTraceDir', () => {
     return path;
   };
 
-  it('deletes only its own records older than 3 days and leaves everything else, including symlink targets', async () => {
+  it('deletes only its own records older than 48 hours and leaves everything else, including symlink targets', async () => {
     const dir = join(tmp, 'prune'); mkdirSync(dir);
     const outside = join(tmp, 'prune-outside'); mkdirSync(outside);
     const target = file(outside, `post-${uuid}.json`, 30);
-    file(dir, `mod_router-${uuid}.json`, 4);
-    file(dir, `.pre_intent-${uuid}.tmp`, 4);
+    file(dir, `mod_router-${uuid}.json`, 2 + 1 / DAY);
+    file(dir, `.pre_intent-${uuid}.tmp`, 2 + 1 / DAY);
+    file(dir, `connection_failed-${'a'.repeat(32)}.seen`, 2 + 1 / DAY);
+    file(dir, `connection_failed-${'b'.repeat(32)}.seen`, 2);
     file(dir, `codex_event-${uuid.replace('0f', '1f')}.json`, 2);
     file(dir, 'notes.json', 30);
     file(dir, `post-${uuid}.json.bak`, 30);
@@ -75,17 +154,27 @@ describe('pruneTraceDir', () => {
     mkdirSync(join(dir, `stop-${uuid}.json`));
     symlinkSync(target, join(dir, `failure-${uuid}.json`));
 
-    expect(await pruneTraceDir(dir, now)).toBe(2);
-    expect(readdirSync(dir).sort()).toEqual(['.retention', `codex_event-${uuid.replace('0f', '1f')}.json`, `failure-${uuid}.json`, `post-${uuid}.json.bak`, 'notes.json', `stop-${uuid}.json`, 'sub'].sort());
+    expect(await pruneTraceDir(dir, now)).toBe(3);
+    expect(readdirSync(dir).sort()).toEqual(['.retention', `codex_event-${uuid.replace('0f', '1f')}.json`, `connection_failed-${'b'.repeat(32)}.seen`, `failure-${uuid}.json`, `post-${uuid}.json.bak`, 'notes.json', `stop-${uuid}.json`, 'sub'].sort());
     expect(lstatSync(join(dir, `failure-${uuid}.json`)).isSymbolicLink()).toBe(true);
     expect(readFileSync(target, 'utf8')).toBe('{}');
     expect(readFileSync(nested, 'utf8')).toBe('{}');
   });
 
+  it('deletes old loss markers, the writer\'s empty directory and the Mods\' file', async () => {
+    const dir = join(tmp, 'prune-markers'); mkdirSync(dir);
+    const at = (now - (2 * DAY + 1)) / 1000;
+    mkdirSync(join(dir, `.pre_intent-${uuid}.failed`)); utimesSync(join(dir, `.pre_intent-${uuid}.failed`), at, at);
+    file(dir, `.mod_router-${uuid}.failed`, 2 + 1 / DAY);
+    file(dir, `.mod_compact-${uuid}.failed`, 1);
+    expect(await pruneTraceDir(dir, now)).toBe(2);
+    expect(readdirSync(dir).sort()).toEqual([`.mod_compact-${uuid}.failed`, '.retention']);
+  });
+
   it('runs at most once a day per directory', async () => {
     const dir = join(tmp, 'prune-throttle'); mkdirSync(dir);
     expect(await pruneTraceDir(dir, now)).toBe(0);
-    file(dir, `post-${uuid}.json`, 10);
+    file(dir, `post-${uuid}.json`, 20);
     expect(await pruneTraceDir(dir, now + DAY / 2)).toBe(0);
     expect(readdirSync(dir)).toContain(`post-${uuid}.json`);
     expect(await pruneTraceDir(dir, now + DAY + 1)).toBe(1);

@@ -25,10 +25,10 @@ const receipt = (extra: Partial<JevReceipt> = {}): JevReceipt => ({ status: 200,
 const call = (id: string, feature: OperationStep['feature'], durationMs: number, extra: Partial<OperationStep> = {}, rc: Partial<JevReceipt> = {}): OperationStep => step(id, feature, { durationMs, receipt: receipt(rc), ...extra });
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution ${id}`, source: 'gate', mode: 'auto', firstAt: steps[0]?.at ?? ago(0), lastAt: steps.at(-1)?.at ?? ago(0), state: 'done', steps, ...extra });
 // As the dashboard server sends it: in the page and in every snapshot.
-const VERSION = { running: '0.8.31', installed: '0.8.31', release: { latest: '0.8.31' } };
+const VERSION = { running: '0.8.32', installed: '0.8.32', release: { latest: '0.8.32' } };
 function snapshot(runs: OperationRun[]) {
   const feed = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host ?? 'claude', runId: r.id, runTitle: r.title }))).sort((a,b) => b.at.localeCompare(a.at));
-  const ids = ['admission','allocation','planning','workers','guard','router','compact','evidence'] as const;
+  const ids = ['admission','allocation','workers','router','compact'] as const;
   const measured = feed.filter(s => s.lane==='jev' && s.durationMs!==undefined), values = measured.map(s => s.durationMs!).sort((a,b) => a-b), pct = (p: number) => values.length ? values[Math.ceil(values.length*p)-1]! : null;
   const today: Record<string, { calls: number; input: number; costUsd: number; unpriced: number }> = {};
   for (const s of measured) { const t = today[s.host] ??= { calls:0, input:0, costUsd:0, unpriced:0 }; t.calls++; t.input += s.receipt?.input ?? 0; if (s.receipt?.costUsd != null) t.costUsd += s.receipt.costUsd; else t.unpriced++; }
@@ -54,7 +54,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const local='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';browser=await chromium.launch({headless:true,...(process.env['JEV_CHROMIUM_PATH']?{executablePath:process.env['JEV_CHROMIUM_PATH']}:existsSync(local)?{executablePath:local}:{} )});});
   afterAll(async()=>{const closed=new Promise<void>(r=>server.close(()=>r()));for(const res of clients)res.end();server.closeAllConnections();try{await browser?.close();}finally{await closed;}expect(errors).toEqual([]);}, 30_000);
   const settle = (p: Page) => p.evaluate(()=>new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
-  // Every user-reported layout defect in one pass: page overflow, text wrapping about one character per line, per-minute rate text,
+  // Every user-reported layout defect in one pass: page overflow, text wrapping about one character per line,
   // accent bars on selected items, empty run items, and nodes or wires that overlap, clip or leave the viewport.
   const problems = (p: Page) => p.evaluate(() => {
     const out: string[] = [];if(document.documentElement.scrollWidth>innerWidth)out.push('document overflow');
@@ -63,10 +63,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     for(const e of document.querySelectorAll('body *'))for(const pseudo of [undefined,'::before','::after']){const s=style(e,pseudo);if(s.boxShadow.includes('inset'))out.push('inset shadow on '+e.className);if(parseFloat(s.borderLeftWidth)>0&&s.borderLeftColor===accent&&s.borderRightColor!==accent)out.push('accent left border on '+e.className);}
     const walk=document.createTreeWalker(document.body,4);for(let n=walk.nextNode();n;n=walk.nextNode()){const text=(n.textContent||'').replace(/\s/g,'');if(text.length<2)continue;const range=document.createRange();range.selectNodeContents(n);
       const lines=new Set([...(range as unknown as {getClientRects():Array<{top:number;width:number}>}).getClientRects()].filter(r=>r.width>0).map(r=>Math.round(r.top))).size;if(lines>1&&lines>=text.length/2)out.push('character wrap: '+text);}
-    if(/\/분|최근 1분|분당|처리량|\/min|per minute|throughput/i.test((document.body as unknown as {innerText:string}).innerText))out.push('rate text');
     for(const li of document.querySelectorAll('#runs li'))if(!li.textContent?.trim()||li.classList.contains('empty')&&li.querySelector('.sel'))out.push('empty run item');
     for(const b of document.querySelectorAll('#runs .row'))if(!b.querySelector('.nm b')?.textContent?.trim())out.push('run row without a title');
-    const nodes=[...document.querySelectorAll('#pipeline .node')].map(e=>e.getBoundingClientRect());if(nodes.length!==8)out.push('node count '+nodes.length);
+    const nodes=[...document.querySelectorAll('#pipeline .node')].map(e=>e.getBoundingClientRect());if(nodes.length!==5)out.push('node count '+nodes.length);
     nodes.forEach((a,i)=>{if(a.width<120)out.push('narrow node');if(a.left<0||a.right>innerWidth+1)out.push('offscreen node');for(const b of nodes.slice(i+1))if(a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top)out.push('overlapping nodes');});
     for(const e of document.querySelectorAll('#pipeline .node :is(.t,.dec)')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1)out.push('clipped node text: '+e.textContent);}
     for(const l of document.querySelectorAll('#pipeline svg.wires line')){const r=l.getBoundingClientRect();if(!r.height)continue;if(nodes.some(n=>r.left>n.left+1&&r.left<n.right-1&&r.top<n.bottom-1&&r.bottom>n.top+1))out.push('wire crosses a node');}
@@ -101,7 +100,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         // The server puts the version in the page, so the badge has its text, and its width, without waiting for /api/version.
         expect(await p.locator('#version-badge').textContent()).toContain('99.0.0');
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.31');
+        expect(await p.locator('#version-badge').textContent()).toContain('0.8.32');
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
@@ -141,6 +140,24 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
   });
 
+  it('draws no Compact card or inspector in the Codex view and keeps Claude Compact (#292)', async () => {
+    const codex=run('cx','codex',[call('cx-router','router',90)]);
+    for(const rows of [[run('cl','claude',[call('cl-compact','compact',80)]),codex],[codex]]){
+      push(rows);
+      const p=await page();await settle(p);
+      const card=p.locator('[data-feature="compact"]'),shown=async()=>card.evaluate(n=>getComputedStyle(n).display!=='none');
+      expect(await shown()).toBe(true);
+      await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');expect(await p.locator('#pipeline svg.wires line').count()).toBe(5);
+      await p.locator('[data-host="codex"]').click();await settle(p);
+      expect.soft(await shown()).toBe(false);expect.soft(await p.locator('#circuit-inspector').textContent()).not.toContain('Compact');
+      expect.soft(await p.locator('#runs [data-run="cx"]').count()).toBe(1);expect.soft(await p.locator('#run-count').textContent()).not.toMatch(/Compact|컴팩트/);
+      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(4);
+      await p.locator('[data-host="claude"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);
+      await p.locator('[data-host="all"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);expect.soft(await p.locator('#runs .row').count()).toBe(rows.length);
+      await p.close();
+    }
+  });
+
   it('counts running executions from runs rather than the recent feed and scopes them by host', async () => {
     push([run('old-active','codex',[step('old-tool','workers',{lifecycle:true,lane:'host',state:'active',startedAt:ago(0)})],{state:'active'}),run('new','claude',[call('new-output','compact',80)])]);
     current.operations.feed=current.operations.feed.filter(event=>event.id!=='old-tool');
@@ -171,12 +188,11 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-223-')), claude = join(home, 'claude-traces'), codex = join(home, 'codex-traces');
     mkdirSync(claude); mkdirSync(codex);
     const write = (dir: string, name: string, value: object) => writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
-    const evidence = (request_id: string, session_id: string, written_at: string, extra: object) => ({ phase: 'evidence_result', host: 'codex', session_id, request_id, written_at, backend: 'local', items: 0, remote_calls: 0, cache_hits: 0, duration_ms: 0, coverage: { read_files: 0, candidates: 0, unjudged_on_page: 0 }, ...extra });
-    const jev = (parent: string, session_id: string, written_at: string, code: string, status: number) => ({ phase: 'evidence_jev_result', host: 'codex', session_id, request_id: `${parent}:1`, parent_request_id: parent, written_at, attempted: true, candidates: 3, http: { status, code, duration_ms: 140 } });
+    const jev = (request_id: string, session_id: string, written_at: string, code: string, status: number) => ({ phase: 'admission_result', host: 'codex', session_id, request_id, written_at, attempted: true, http: { status, code, duration_ms: 140 } });
     const router = (turn: string, session_id: string, written_at: string, confirmation: string, observed: string | null) => ({ phase: 'claude_router', host: 'claude', session_id, event: 'root_result', turn, written_at, requested: 'claude-opus-5-5', observed, confirmation });
-    // The reported case: yesterday's Codex invalid-input refusal followed by successful Evidence, beside a current outage and a model check.
-    write(codex, 'ev-old', evidence('ev-old', 'codex-old-session', ago(26 * 3_600_000), { status: 'unavailable', is_error: true, reason_codes: ['invalid_input'] }));
-    write(codex, 'ev-ok', evidence('ev-ok', 'codex-new-session', ago(3_600_000), { status: 'ok', is_error: false, items: 3, remote_calls: 1, reason_codes: [] }));
+    // Yesterday's Codex network failure followed by a successful call, beside a current outage and a model check.
+    write(codex, 'jev-old', jev('j-old', 'codex-old-session', ago(26 * 3_600_000), 'network', 0));
+    write(codex, 'jev-ok', jev('j-ok', 'codex-new-session', ago(3_600_000), 'ok', 200));
     write(codex, 'jev-1', jev('j1', 'codex-session-a', ago(1_800_000), 'http_401', 401));
     write(codex, 'jev-2', jev('j2', 'codex-session-b', ago(300_000), 'http_401', 401));
     write(claude, 'rt-mismatch', router('t1', 'claude-session-1', ago(7_200_000), 'mismatch', 'claude-sonnet-5'));
@@ -203,17 +219,17 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const p = await page();await p.goto(local.url);await p.waitForFunction(() => document.querySelectorAll('#runs .row').length === 6);
       let s = await agree(p);
       expect(await p.locator('#k-att').textContent()).toBe('3');
-      const diag = await p.locator('#k-diag').textContent();expect(diag).toContain('Jev 판정 오류 2건');expect(diag).toContain('실제 응답 모델 불일치 1건');expect(diag).not.toContain('Evidence');
+      const diag = await p.locator('#k-diag').textContent();expect(diag).toContain('Jev 판정 오류 2건');expect(diag).toContain('실제 응답 모델 불일치 1건');
       await p.locator('[data-host=codex]').click();await agree(p, 'codex');await p.locator('[data-host=claude]').click();await agree(p, 'claude');await p.locator('[data-host=all]').click();
-      const outage = runOf(s, 'http_401', 'unknown'), refused = runOf(s, 'invalid_input', 'request_only');
+      const outage = runOf(s, 'http_401', 'unknown'), settled = runOf(s, 'network', 'later_ok');
       await p.locator('[data-state=attention]').click();await p.locator(`#runs [data-run="${outage}"]`).click();
       const detail = () => p.locator('#trace .sd:not([hidden])').textContent();
       for (const fact of ['원인http_401', '현재 영향현재 영향 미확인', '호스트Codex', '세션codex-session-b', '마지막 관측']) expect(await detail()).toContain(fact);
       expect(await problems(p)).toEqual([]);
       await p.locator('.stats').screenshot({ path: join(output, '223-1440-dark-ko-top.png') });await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-current.png') });
-      await p.locator('[data-state=past_error]').click();await p.locator(`#runs [data-run="${refused}"]`).click();
+      await p.locator('[data-state=past_error]').click();await p.locator(`#runs [data-run="${settled}"]`).click();
       // The open row already shows the state, so the detail does not repeat it.
-      for (const fact of ['원인invalid_input · 요청 인자·범위 오류', '현재 영향이 요청만 실패 · 서비스 장애 아님', '세션codex-old-session']) expect(await detail()).toContain(fact);
+      for (const fact of ['원인network', '현재 영향이후 같은 작업 정상 기록', '세션codex-old-session']) expect(await detail()).toContain(fact);
       expect(await detail()).not.toContain('상태오류');expect(await p.locator('#trace [aria-expanded="true"] .sx-r').textContent()).toBe('오류');
       await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-past.png') });
       // A later success of the same Jev call on the same host arrives on the open stream; both outage records become past errors.
@@ -221,7 +237,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       write(codex, 'jev-3', jev('j3', 'codex-session-c', ago(0), 'ok', 200));
       await p.waitForFunction(() => document.getElementById('k-att')?.textContent === '1');
       s = await agree(p);
-      expect(s.operations.runs.find(r => r.id === outage)).toMatchObject({ state: 'past_error', steps: [{ cause: 'http_401', impact: { now: 'later_ok' } }] });
+      expect(s.operations.runs.find(r => r.id === outage)).toMatchObject({ state: 'past_error', steps: [{ cause: 'http_401', impact: { now: 'later_ok' } }, { lane: 'policy' }] });
       expect(await p.locator('#k-diag').textContent()).toBe('실제 응답 모델 불일치 1건');
       await p.locator('[data-state=past_error]').click();expect(await p.locator('#runs .row').count()).toBe(3);await p.locator(`#runs [data-run="${outage}"]`).click();
       expect(await detail()).toContain('현재 영향이후 같은 작업 정상 기록');expect(await detail()).not.toContain('상태오류');expect(await p.locator('#trace [aria-expanded="true"] .sx-r').textContent()).toBe('오류');
@@ -231,7 +247,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       await phone.waitForFunction(() => document.querySelectorAll('#runs .row').length === 7);await agree(phone);expect(await problems(phone)).toEqual([]);
       await phone.locator('.stats').screenshot({ path: join(output, '223-390-top.png') });
       await phone.locator('[data-state=attention]').click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-current.png') });
-      await phone.locator('[data-state=past_error]').click();await phone.locator(`#runs [data-run="${refused}"]`).click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-past.png') });
+      await phone.locator('[data-state=past_error]').click();await phone.locator(`#runs [data-run="${settled}"]`).click();await phone.locator('#run-detail').screenshot({ path: join(output, '223-390-detail-past.png') });
       await phone.close();
     } finally { await local.close(); rmSync(home, { recursive: true, force: true }); }
   }, 60_000);
@@ -319,7 +335,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const after=await heights();expect(after.rows).toEqual(before.rows);expect(after.panel).toBe(before.panel);expect(after.below).toBe(before.below);
     await p.locator('#rc li:nth-child(2) button').click();expect(await p.locator('#rc li:nth-child(2) button').getAttribute('aria-pressed')).toBe('true');
     expect(await p.locator('#basis-meta').textContent()).toContain('고정한 호출');expect(await p.locator('#follow').isVisible()).toBe(true);
-    calls.push(call('late','evidence',77));push([run('rc','claude',calls,{title:'호출 기록 실행'})]);
+    calls.push(call('late','allocation',77));push([run('rc','claude',calls,{title:'호출 기록 실행'})]);
     await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='77ms',undefined,{timeout:8000});
     expect(await p.locator('#rc [aria-pressed=true]').getAttribute('data-call')).toBe('more7');expect(await heights()).toEqual(before);
     await p.locator('#follow').click();expect(await p.locator('#rc [aria-pressed=true]').count()).toBe(0);expect(await p.locator('#basis-meta').textContent()).toContain('최신 호출을 따라갑니다');
@@ -330,7 +346,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('shifts nothing from the first frame through live calls, a new run on top, attention, credit, pinning and unpinning at five widths', async () => {
     const failures:string[]=[];
     for(const width of [1440,1024,768,390,320]){
-      const a=[call('s0','admission',63,{at:ago(9000),executionPath:'direct'},{choice:'direct'}),call('s1','router',91,{at:ago(7000)},{choice:'sonnet · medium',threshold:0.6}),step('s2','guard',{lane:'policy',summary:'허용',at:ago(6000)})];
+      const a=[call('s0','admission',63,{at:ago(9000),executionPath:'direct'},{choice:'direct'}),call('s1','router',91,{at:ago(7000)},{choice:'sonnet · medium',threshold:0.6}),step('s2','workers',{lane:'policy',summary:'허용',at:ago(6000)})];
       const runs=[run('a','claude',a,{title:'Claude 실행',state:'active'}),run('b','codex',[call('b0','compact',220,{at:ago(20000)})],{title:'Codex 실행'})];push(runs);
       const p=await browser.newPage({viewport:{width,height:900}});p.on('pageerror',e=>errors.push(e.message));
       await p.addInitScript(()=>{type Shift={value:number;hadRecentInput:boolean;sources:Array<{node:{nodeName:string;id?:string;className?:unknown}|null}>};
@@ -342,7 +358,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         if(i===3)runs.unshift(run('n','claude',[call('n0','admission',55,{},{choice:'orchestrated'})],{title:'새 실행 '+'x'.repeat(30),state:'active'}));
         else if(i===6)runs[2]!.state='attention';
         else if(i%3===2)a.push(step('w'+i,'workers',{state:'active',lane:'host'}));
-        else a.push(call('c'+i,(['router','compact','evidence'] as const)[i%3]!,40+i*37,{},{choice:i%3===0?'haiku · low':null,confidence:0.5+i/50,threshold:0.6}));
+        else a.push(call('c'+i,(['router','compact','allocation'] as const)[i%3]!,40+i*37,{},{choice:i%3===0?'haiku · low':null,confidence:0.5+i/50,threshold:0.6}));
         runs.find(r=>r.steps===a)!.lastAt=ago(0);push(runs.slice().sort((x,y)=>y.lastAt.localeCompare(x.lastAt)),i>=7?{credit:{exhausted:true}}:{});
         if(i===4)await p.click('#rc li:nth-child(3) button');
         if(i===8)await p.click('#follow');
@@ -357,7 +373,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   },120_000);
 
   it('reports the Jev panel from recorded calls, colours failures and estimates cost from list prices', async () => {
-    const calls=[call('j1','router',120,{at:ago(4000)},{choice:'sonnet · high'}),call('j2','admission',80,{at:ago(3000)},{model:'unknown-model',costUsd:null}),call('j3','evidence',300,{state:'error',at:ago(2000)},{status:402,code:'payment_required',model:null,input:null,output:null,costUsd:null,confidence:null}),call('j4','compact',90,{},{status:429,code:'rate_limited'})];
+    const calls=[call('j1','router',120,{at:ago(4000)},{choice:'sonnet · high'}),call('j2','admission',80,{at:ago(3000)},{model:'unknown-model',costUsd:null}),call('j3','allocation',300,{state:'error',at:ago(2000)},{status:402,code:'payment_required',model:null,input:null,output:null,costUsd:null,confidence:null}),call('j4','compact',90,{},{status:429,code:'rate_limited'})];
     push([run('j','claude',calls)],{credit:{exhausted:true}});
     for(const width of [1440,768,320]){
       const p=await page(width);await settle(p);
@@ -369,10 +385,10 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     push([run('j','claude',[call('u','router',70,{},{model:null,costUsd:null})])]);const p=await page();await settle(p);expect(await p.locator('#j-cost').textContent()).toBe('–');await p.close();
   });
 
-  it('renders empty and long mixed-host data in 28 viewport/theme/language states without overflow, overlap, character wrapping, rate text or accent bars',async()=>{
+  it('renders empty and long mixed-host data in 28 viewport/theme/language states without overflow, overlap, character wrapping or accent bars',async()=>{
     const long='long '.repeat(60);
     push([run('c','claude',[call('a','admission',63,{executionPath:'direct'}),call('b','allocation',88,{},{choice:'claude-sonnet-5'}),step('w','workers',{lane:'host',summary:long,model:{selected:'claude-opus-5-5',observed:'claude-sonnet-5',status:'mismatch',selectedEffort:null,observedEffort:null}}),call('r','router',91,{},{choice:'sonnet · medium',threshold:0.6,direction:'downgrade'})],{title:'Claude '+long,state:'active'}),
-      run('x','codex',[call('xr','router',140,{},{choice:'gpt-6.1-sol · minimal'}),step('g','guard',{lane:'policy',summary:'허용'}),call('e','evidence',70,{summary:'<img src=x onerror="alert(1)">'},{status:402,code:'payment_required',costUsd:null}),call('k','compact',220)],{title:'Codex '+long,state:'attention'}),
+      run('x','codex',[call('xr','router',140,{},{choice:'gpt-6.1-sol · minimal'}),step('g','workers',{lane:'policy',summary:'허용'}),call('e','allocation',70,{summary:'<img src=x onerror="alert(1)">'},{status:402,code:'payment_required',costUsd:null}),call('k','compact',220)],{title:'Codex '+long,state:'attention'}),
       run('u','claude',[call('ur','router',80)],{title:'Router 실행',state:'unconfirmed'})]);
     const failures:string[]=[];
     for(const [width,height] of [[1920,1080],[1440,900],[1280,800],[1024,768],[768,1024],[390,844],[320,740]] as const){
@@ -385,7 +401,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(await p.locator('img').count()).toBe(0);await p.close();
     }
     expect(failures).toEqual([]);
-    push([]);const p=await page();expect(await p.locator('#pipeline .node').count()).toBe(8);expect(await p.locator('.trip').count()).toBe(0);expect(await p.locator('#circuit-inspector .kv dd').first().textContent()).toBe('–');
+    push([]);const p=await page();expect(await p.locator('#pipeline .node').count()).toBe(5);expect(await p.locator('.trip').count()).toBe(0);expect(await p.locator('#circuit-inspector .kv dd').first().textContent()).toBe('–');
     expect(await p.locator('#runs li').allTextContents()).toEqual(['조건에 맞는 실행이 없습니다.']);expect(await p.locator('#rc li').count()).toBe(14);expect(await problems(p)).toEqual([]);await p.close();
   },180_000);
 
@@ -406,23 +422,49 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
   });
 
-  it('plays one round trip per recorded Jev call, staggers a frame across its interval and gives other records a flash and a tick only', async () => {
+  it('shows burst values immediately, plays concurrent round trips and flashes other records without particles', async () => {
     const steps=[call('rt0','admission',60)];push([run('rt','claude',steps,{state:'active'})]);const p=await page();await settle(p);await record(p);
     const comm=await p.locator('#comm i').count();await wait(1000);
-    steps.push(call('rt1','router',90,{at:ago(600)},{choice:'haiku · low'}),step('pol','guard',{lane:'policy',at:ago(450),summary:'허용'}),call('rt2','compact',110,{at:ago(300)}),call('rt3','evidence',70));push([run('rt','claude',steps,{state:'active'})]);
-    await p.waitForSelector('.trip',{state:'attached'});push([run('rt','claude',steps,{state:'active'}),run('other','codex',[step('o','planning',{lane:'host'})])]);
-    await vi.waitFor(async()=>expect(count(await motion(p),'row')).toBe(3),{timeout:8000});await settle(p);const log=await motion(p);
+    steps.push(call('rt1','router',90,{at:ago(600)},{choice:'haiku · low'}),step('pol','workers',{lane:'policy',at:ago(450),summary:'허용'}),call('rt2','compact',110,{at:ago(300)}),call('rt3','allocation',70));push([run('rt','claude',steps,{state:'active'})]);
+    await p.waitForSelector('.trip',{state:'attached'});push([run('rt','claude',steps,{state:'active'}),run('other','codex',[step('o','admission',{lane:'host'})])]);
+    await p.waitForFunction(()=>!document.querySelector('.trip'));await settle(p);const log=await motion(p);
     expect(count(log,'trip')).toBe(6);expect(count(log,'ping')).toBe(3);expect(log.filter(([k])=>k.startsWith('lat:')).map(([k])=>k)).toEqual(['lat:90ms','lat:110ms','lat:70ms']);
-    expect(log.filter(([k])=>k.startsWith('zap:')&&k!=='zap:run').map(([k])=>k).sort()).toEqual(['zap:compact','zap:evidence','zap:guard','zap:planning','zap:router']);
-    const pings=log.filter(([k])=>k==='ping').map(([,t])=>t);expect(pings[2]!-pings[0]!).toBeGreaterThan(300);
-    for(const feature of ['router','compact','evidence']){const at=(k:string)=>log.find(([x])=>x===k)![1];expect(at('zap:'+feature)).toBeGreaterThan(pings[0]!);}
+    expect([...new Set(log.filter(([k])=>k.startsWith('zap:')&&k!=='zap:run').map(([k])=>k))].sort()).toEqual(['zap:admission','zap:allocation','zap:compact','zap:router','zap:workers']);
+    const pings=log.filter(([k])=>k==='ping').map(([,t])=>t);expect(pings[2]!-pings[0]!).toBeLessThan(150);
+    for(const feature of ['router','compact','allocation']){const at=(k:string)=>log.find(([x])=>x===k)![1];expect(at('zap:'+feature)).toBeLessThan(pings[0]!);}
     expect(log.findIndex(([k])=>k==='trip')).toBeLessThan(log.findIndex(([k])=>k==='ping'));
-    expect(await p.locator('#comm i').count()).toBe(comm+3);expect(await p.locator('#pipeline .node[data-feature=guard] .strip i').count()).toBe(1);
-    expect(await p.locator('#rc li:first-child .rcr > span:nth-child(2)').textContent()).toBe('Evidence');expect(await p.locator('#runs [data-run=rt] .jc .n').textContent()).toBe('4');
-    expect(await p.locator('#runs [data-run=rt] .md .rec em').last().textContent()).toBe('Evidence');
+    expect(await p.locator('#comm i').count()).toBe(comm+3);expect(await p.locator('#pipeline .node[data-feature=workers] .strip i').count()).toBe(1);
+    expect(await p.locator('#rc li:first-child .rcr > span:nth-child(2)').textContent()).toBe('Gate B');expect(await p.locator('#runs [data-run=rt] .jc .n').textContent()).toBe('4');
+    expect(await p.locator('#runs [data-run=rt] .md .rec em').last().textContent()).toBe('Gate B');
     // A returning dot keeps its response time in view for a moment after it lands, then leaves.
     await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(await p.locator('#rc li:first-child .rcr > span:nth-child(5)').textContent()).toBe('70ms');
     await p.locator('#pipeline').screenshot({path:join(output,'circuit-after-trips.png')});await p.close();
+  });
+
+  it('returns a slow response on its original wire without a second outbound trip', async () => {
+    push([run('slow','claude',[])]);const p=await page();await settle(p);await record(p);
+    const request=step('slow-request','router',{callId:'slow-call',state:'active'});
+    push([run('slow','claude',[request])]);
+    await p.waitForFunction(()=>!!document.querySelector('.trip'));
+    await wait(650);expect(await p.locator('.trip').count()).toBe(0);
+    const result=call('slow-result','router',650,{callId:'slow-call'},{choice:'sonnet · high'});
+    push([run('slow','claude',[{...request,state:'done'},result])]);
+    await p.waitForFunction(()=>document.querySelector('#pipeline [data-feature=router] .dec b')?.textContent?.includes('sonnet'));
+    await wait(250);const log=await motion(p);expect(count(log,'trip')).toBe(2);expect(count(log,'ping')).toBe(1);await p.close();
+  });
+
+  it('caps a same-node burst at 24 particles while the newest decision and counters update immediately', async () => {
+    push([run('cap','claude',[])]);const p=await page();await settle(p);await record(p);
+    const steps=Array.from({length:40},(_,i)=>call('cap-'+i,'router',100+i,{at:ago(40-i)},{choice:i===39?'opus · high':'haiku · low'}));
+    push([run('cap','claude',steps)]);
+    await p.waitForFunction(()=>document.querySelector('#pipeline [data-feature=router] .dec b')?.textContent?.includes('opus'));
+    expect(await p.locator('.trip').count()).toBeLessThanOrEqual(24);
+    expect(await p.locator('.rail .v').textContent()).toContain('40/min');
+    expect(await p.locator('#runs [data-run=cap] .jc .n').textContent()).toBe('40');
+    await p.waitForSelector('.trip',{state:'attached'});await p.waitForFunction(()=>!document.querySelector('.trip'));
+    const log=await motion(p);expect(count(log,'trip')).toBe(48);expect(count(log,'ping')).toBe(40);
+    // Saturated calls skip motion rather than waiting for a playback slot.
+    await wait(450);expect(count(await motion(p),'trip')).toBe(48);await p.close();
   });
 
   it('stops motion and freezes values on pause, disconnection and reduced motion without inventing traffic', async () => {
@@ -434,7 +476,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     steps.push(call('m1','router',95,{},{choice:'haiku · low'}));push([run('m','claude',steps,{state:'active'})]);await wait(2200);
     expect(await motion(p)).toEqual([]);expect([await ago0.textContent(),await p.locator('#k-last').textContent()]).toEqual(frozen);
     expect(await p.locator('#rc li:first-child .rcr > span:nth-child(5)').textContent()).toBe('50ms');
-    await p.locator('#pause').click();await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='95ms');await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(count(await motion(p),'ping')).toBe(1);expect(count(await motion(p),'lat:95ms')).toBe(1);
+    await p.locator('#pause').click();await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='95ms');await p.waitForSelector('.trip',{state:'attached'});await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(count(await motion(p),'ping')).toBe(1);expect(count(await motion(p),'lat:95ms')).toBe(1);
     for(const client of clients)client.end();clients.clear();
     await p.waitForFunction(()=>document.getElementById('connection')!.classList.contains('warn'));expect(await p.locator('body').getAttribute('class')).toContain('still');
     const offline=await ago0.textContent();await wait(1200);expect(await ago0.textContent()).toBe(offline);
@@ -461,7 +503,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect((await motion(p)).slice(trips).filter(([k])=>k==='trip'||k==='ping')).toEqual([]);
     await p.locator('#runs [data-run=c]').focus();push([run('c','claude',[a,call('fb','allocation',70)]),run('x','codex',[r])]);await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=allocation] .dec b')?.textContent!=='–');
     expect(await p.locator('#runs [data-run=c]').evaluate(e=>e===document.activeElement)).toBe(true);
-    await p.locator('[data-circuit-mode=live]').click();await node('evidence').click();await p.locator('#circuit-inspector button[data-inspect-feature]').click();expect(await p.locator('#search').evaluate(e=>e===document.activeElement)).toBe(true);
+    await p.locator('[data-circuit-mode=live]').click();await node('compact').click();await p.locator('#circuit-inspector button[data-inspect-feature]').click();expect(await p.locator('#search').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.close();
   });
 
@@ -512,7 +554,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   it('separates errors, missing results and interruption; failed settings writes retain the saved state',async()=>{
     push([run('c','claude',[step('m','workers',{lane:'host',state:'error',summary:'actual model mismatch',model:{selected:'opus',observed:'sonnet',status:'mismatch',selectedEffort:null,observedEffort:null}})],{state:'attention'}),run('x','codex',[step('u','router',{state:'unconfirmed'})],{state:'unconfirmed'}),run('stop','codex',[step('stop','compact',{state:'interrupted'})],{state:'interrupted'})]);const p=await page();
     expect(await p.locator('#pipeline .node[data-feature=workers]').getAttribute('class')).toContain('err');expect(await p.locator('#k-diag').textContent()).toContain('실제 응답 모델 불일치 1건');
-    await p.locator('#pipeline .node[data-feature=workers]').click();expect(await p.locator('#pipeline .node[data-feature=workers] .dec b').textContent()).toBe('오류');expect(await p.locator('#circuit-inspector .kv').textContent()).not.toContain('오류');expect(await p.locator('#runs .row').count()).toBe(1);await p.locator('#pipeline .node[data-feature=workers]').click();
+    await p.locator('#pipeline .node[data-feature=workers]').click();expect(await p.locator('#pipeline .node[data-feature=workers] .dec b').textContent()).toBe('판정 없음');expect(await p.locator('#circuit-inspector .kv').textContent()).not.toContain('오류');expect(await p.locator('#runs .row').count()).toBe(1);await p.locator('#pipeline .node[data-feature=workers]').click();
     await p.locator('[data-state=unconfirmed]').click();expect(await p.locator('#runs .row').count()).toBe(1);expect(await p.locator('#runs .row[aria-pressed=true] .c-st').textContent()).toBe('결과 미관측');
     await p.locator('[data-state=all]').click();await p.locator('#runs [data-run=stop]').click();expect(await p.locator('#runs .row[aria-pressed=true] .c-st').textContent()).toBe('사용자 중단');
     await p.locator('#recording').click();await p.waitForFunction(()=>document.getElementById('notice')!.textContent!.includes('저장하지 못했습니다'));expect(await p.locator('#recording').getAttribute('aria-checked')).toBe('true');
@@ -524,7 +566,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const steps=[call('p0','router',58,{},{choice:'sonnet · high'})];push([run('phone','codex',steps,{state:'active'})]);const p=await page(390,844);await settle(p);await record(p);
     expect(await p.locator('#pipeline svg.wires').evaluate(e=>getComputedStyle(e).display)).toBe('none');
     steps.push(call('p1','router',43,{},{choice:'haiku · low'}));push([run('phone','codex',steps,{state:'active'})]);
-    await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='43ms');await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=router] .dec b')?.textContent==='haikulow');expect(count(await motion(p),'ping')).toBe(1);
+    await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='43ms');await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=router] .dec b')?.textContent==='haikulow');await p.waitForSelector('.trip',{state:'attached'});await p.waitForFunction(()=>!document.querySelector('.trip'));expect(count(await motion(p),'ping')).toBe(1);
     await p.locator('#pipeline .node[data-feature=router]').click();expect(await p.locator('#circuit-inspector').evaluate(e=>e.getBoundingClientRect().top)).toBeLessThan(100);
     await p.screenshot({path:join(output,'mobile-stage-inspection.png')});
     await p.locator('#pipeline .node[data-feature=allocation]').focus();await p.keyboard.press('Enter');expect(await p.locator('#pipeline .node[data-feature=allocation]').getAttribute('aria-pressed')).toBe('true');

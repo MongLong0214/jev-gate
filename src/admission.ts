@@ -1,7 +1,7 @@
 import { FACT_TRUE } from './allocation.js';
 import type { JevRequest } from './jev.js';
 import { topChoices, validateChoice, validateScore } from './jev.js';
-import type { AdmissionAnswer, AdmittedShape, ChoiceAnswer, ConfigV5, ExecutionShape, PreserveReason } from './types.js';
+import type { AdmissionAnswer, ChoiceAnswer, ConfigV5, ExecutionShape, PreserveReason } from './types.js';
 import { ADMISSION_ANSWERS } from './types.js';
 import type { PriceFacts } from './cost.js';
 
@@ -21,8 +21,7 @@ export const EXECUTION_QUESTION = {
 
 export const AVAILABLE_EXECUTION = {
   direct: 'Continue in the current native main model, settings and conversation.',
-  orchestrated:
-    'single: the whole request goes to one worker, without mandatory planning or decomposition. hierarchy: a read-only planner produces a plan executed by workers.',
+  orchestrated: 'single: the whole request goes to one worker, without mandatory planning or decomposition.',
 };
 
 export interface AdmissionState {
@@ -37,15 +36,7 @@ export const buildAdmissionRequest = (prompt: string, config: ConfigV5): Admissi
   model: config.jevModel,
   state: {
     request: prompt,
-    available_execution: {
-      ...AVAILABLE_EXECUTION,
-      orchestrated:
-        config.admittedShape === 'hierarchy'
-          ? 'hierarchy: a read-only planner produces a plan executed by workers.'
-          : config.admittedShape === 'single' || config.maxParallelWorkers === 1
-            ? 'single: the whole request goes to one worker, without mandatory planning or decomposition.'
-            : AVAILABLE_EXECUTION.orchestrated,
-    },
+    available_execution: AVAILABLE_EXECUTION,
   },
   questions: { execution: EXECUTION_QUESTION },
 });
@@ -103,8 +94,8 @@ export const explicitlyForbidsDelegation = (request: string): boolean =>
  * 2026-09-28 (owner review of real use): `answer_only` was a veto that had nothing to do with cost. A question can
  * take 26 tool calls to answer, and at depth those calls are the expensive part; answered correctly, the veto kept
  * exactly that work in the deep session. It is replaced by `tool_calls`, which asks for the term the saving is made
- * of. `external_tools` and `plan_only` are no longer asked: workers inherit connected tools from the host,
- * and `guardAllowMcp` applies only to the root guard.
+ * of. `external_tools` and `plan_only` are no longer asked: workers inherit connected tools from the host.
+ * #289: `parallel_outcomes` and `size` chose between one worker and a planner; with the planner gone they are not asked.
  */
 export const ADMISSION_FACT_QUESTIONS = {
   bounded_tool_work: {
@@ -119,20 +110,6 @@ export const ADMISSION_FACT_QUESTIONS = {
   forbids_delegation: requestFact(
     'The request says this work must not be handed to a subagent, assistant or other worker. Restrictions on how to do the work, or on what not to change, are not this.',
   ),
-  parallel_outcomes: requestFact(
-    'The request explicitly names separate outcomes it wants produced independently of one another, rather than one outcome.',
-  ),
-  size: {
-    type: 'score' as const,
-    instructions: `${REQUEST_FACT_GUARD}\n\nHow much work does this request imply?`,
-    criteria: [
-      'A reply with no change to anything.',
-      'One small edit in one place.',
-      'A change across a few files, or one bounded feature.',
-      'Several distinct pieces of work that fit together.',
-      'A project: many pieces, over more than one sitting.',
-    ],
-  },
   /**
    * The cost term. Each tool call the root makes is one more API turn, and each turn re-reads the whole session from
    * cache: over 631 real prompts typed at 50K+ depth, cache read per root turn was 1.00-1.05 x the depth and tool calls
@@ -173,10 +150,7 @@ export const buildAtomicAdmissionRequest = (prompt: string, config: ConfigV5): A
     forbids_delegation: ADMISSION_FACT_QUESTIONS.forbids_delegation,
     task_context: TASK_CONTEXT_QUESTION,
     tool_calls: ADMISSION_FACT_QUESTIONS.tool_calls,
-    ...(config.admittedShape !== 'hierarchy' ? { bounded_tool_work: ADMISSION_FACT_QUESTIONS.bounded_tool_work } : {}),
-    ...(config.admittedShape === 'auto' && config.maxParallelWorkers > 1
-      ? { parallel_outcomes: ADMISSION_FACT_QUESTIONS.parallel_outcomes, size: ADMISSION_FACT_QUESTIONS.size }
-      : {}),
+    bounded_tool_work: ADMISSION_FACT_QUESTIONS.bounded_tool_work,
   },
 });
 
@@ -187,19 +161,7 @@ const noulValue = (v: unknown): number | null => {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
 };
 
-/**
- * A score is a read-off on the criteria list the question shipped, so the only numbers that mean anything are indices
- * into it. An unbounded read made `size: 999` admit past a floor it never satisfied, which is an answer this gate
- * cannot read being treated as evidence for orchestrating -- the opposite of what the composition rule says.
- */
-export const SIZE_MAX_SCORE = ADMISSION_FACT_QUESTIONS.size.criteria.length - 1;
 export const TOOL_CALLS_MAX_SCORE = ADMISSION_FACT_QUESTIONS.tool_calls.criteria.length - 1;
-
-const scoreValue = (v: unknown, max: number): number | null => {
-  if (typeof v !== 'object' || v === null || Array.isArray(v) || (v as { type?: unknown }).type !== 'score') return null;
-  const n = (v as { score?: unknown }).score;
-  return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= max ? n : null;
-};
 
 /**
  * Estimated root turns for a `tool_calls` score, not the tool calls one request will make. Owner-supplied
@@ -301,8 +263,7 @@ export const decideAdmissionAtomic = (
   depth: number | null,
   floor: number,
   model: DelegationCostModel,
-  config: Pick<ConfigV5, 'admittedShape' | 'maxParallelWorkers'> = { admittedShape: 'auto', maxParallelWorkers: 1 },
-): AdmissionDecision & { estimate: AdmissionEstimate | null; execution: 'single' | 'hierarchy' | null; preference?: 'bounded_tool_worker' } => {
+): AdmissionDecision & { estimate: AdmissionEstimate | null; execution: 'single' | null; preference?: 'bounded_tool_worker' } => {
   const fallback = (reason: PreserveReason, estimate: AdmissionEstimate | null = null) => ({
     shape: 'direct' as const,
     execution: null,
@@ -318,12 +279,10 @@ export const decideAdmissionAtomic = (
   if (forbid >= FACT_TRUE) return fallback('admission_forbids_delegation');
   const context = validateChoice(answers['task_context'], TASK_CONTEXT_CHOICES);
   if (!context) return fallback('admission_invalid');
-  if (
-    context.choice !== 'self_contained' ||
-    topChoices(context).length !== 1 ||
-    context.probabilities.self_contained < ADMISSION_CONTEXT_SUPPORT
-  )
-    return fallback('admission_needs_context');
+  if (topChoices(context).length !== 1) return fallback('admission_tie');
+  if (context.choice === 'needs_context') return fallback('admission_needs_context');
+  if (context.choice === 'unclear') return fallback('admission_context_unclear');
+  if (context.probabilities.self_contained < ADMISSION_CONTEXT_SUPPORT) return fallback('admission_context_low_confidence');
   const calls = validateScore(answers['tool_calls']);
   if (!calls) return fallback('admission_invalid');
   const turns = estimatedTurns(calls.score);
@@ -337,64 +296,14 @@ export const decideAdmissionAtomic = (
     cost_basis: priced.basis, cost: priced,
     cost_support: calls.normalized.reduce((n, p, i) => n + (bins[i]! > 0 ? p : 0), 0),
   };
-  const parallel = config.admittedShape === 'auto' && config.maxParallelWorkers > 1 ? noulValue(answers['parallel_outcomes']) : 0;
-  const size = config.admittedShape === 'auto' && config.maxParallelWorkers > 1 ? scoreValue(answers['size'], SIZE_MAX_SCORE) : 0;
   // Bounded tool outcomes use one fresh fast worker even when the legacy coordinator estimate
-  // cannot pay. This is execution policy, not a measured token saving. Keep explicit hierarchy and every veto.
+  // cannot pay. This is execution policy, not a measured token saving. Keep every veto.
   const bounded = validateChoice(answers['bounded_tool_work'], Object.keys(ADMISSION_FACT_QUESTIONS.bounded_tool_work.criteria));
-  if (config.admittedShape !== 'hierarchy' && bounded?.choice === 'bounded' && topChoices(bounded).length === 1 &&
+  if (bounded?.choice === 'bounded' && topChoices(bounded).length === 1 &&
       bounded.probabilities.bounded! >= ADMISSION_CONTEXT_SUPPORT &&
-      parallel !== null && parallel < FACT_TRUE && size !== null && size < SIZE_PROJECT &&
       calls.normalized[1]! + calls.normalized[2]! + Number.EPSILON * 8 >= ADMISSION_COST_SUPPORT)
     return { shape: 'orchestrated', execution: 'single', decided: true, reason: null, answer: null, estimate, preference: 'bounded_tool_worker' };
   if ((priced.savingUsd ? priced.savingUsd[0]! : estimate.saving_tokens) <= 0) return fallback('admission_not_worth', estimate);
   if (estimate.cost_support + Number.EPSILON * 8 < ADMISSION_COST_SUPPORT) return fallback('admission_low_confidence', estimate);
-  let execution: 'single' | 'hierarchy';
-  if (config.admittedShape !== 'auto') execution = config.admittedShape;
-  else if (config.maxParallelWorkers === 1) execution = 'single';
-  else {
-    if ((parallel !== null && parallel >= FACT_TRUE) || (size !== null && size >= SIZE_PROJECT)) execution = 'hierarchy';
-    else if (parallel === null || size === null) return fallback('admission_shape_unknown', estimate);
-    else execution = 'single';
-  }
-  return { shape: 'orchestrated', execution, decided: true, reason: null, answer: null, estimate };
-};
-
-/** A score at or above this reads as "a project": the one size a planner splitting the work is kept for. */
-export const SIZE_PROJECT = 4;
-
-/**
- * A21, applied since 2026-09-28: what the request said about shape. `admitted_shape` is the shape `admittedShape:
- * "auto"` gives the turn -- `hierarchy` only when the request names separate outcomes or is a whole project, `single`
- * otherwise -- and `applied` says whether the configured value let it decide. Measured on this repository's two jobs,
- * single passed 6/6 and hierarchy 4/6, both hierarchy failures in the plan machinery single does not have
- * (DECISION-admitted-shape-2026-09-19.md); the owner chose single-first on 2026-09-28.
- */
-export interface ShapeRecommendation {
-  admitted_shape: 'hierarchy' | 'single' | null;
-  plan_only: boolean | null;
-  applied: boolean;
-}
-
-export const shapeRecommendation = (answers: Record<string, unknown>, applied = false): ShapeRecommendation => {
-  const parallel = noulValue(answers['parallel_outcomes']);
-  const planOnly = noulValue(answers['plan_only']);
-  const size = scoreValue(answers['size'], SIZE_MAX_SCORE);
-  const split = (parallel !== null && parallel >= FACT_TRUE) || (size !== null && size >= SIZE_PROJECT);
-  return {
-    admitted_shape: parallel === null && size === null ? null : split ? 'hierarchy' : 'single',
-    plan_only: planOnly === null ? null : planOnly >= FACT_TRUE,
-    applied,
-  };
-};
-
-/**
- * The shape an admitted turn runs: the configured one, or under `auto` the request's own, single when it did not say.
- * A turn orchestrated without asking Gate A at all (the forced bench arm, native mode) has no answers to read and
- * keeps `hierarchy`, the shape those arms were built to measure.
- */
-export const resolveAdmittedShape = (configured: AdmittedShape, answers: Record<string, unknown> | null): 'hierarchy' | 'single' => {
-  if (configured !== 'auto') return configured;
-  if (answers === null) return 'hierarchy';
-  return shapeRecommendation(answers).admitted_shape === 'hierarchy' ? 'hierarchy' : 'single';
+  return { shape: 'orchestrated', execution: 'single', decided: true, reason: null, answer: null, estimate };
 };

@@ -1,62 +1,8 @@
-import type { DenyReason, MainSessionStep, RoutingMode, Tier, WorkerIsolation } from './types.js';
+import type { DenyReason, Receipt, RoutingMode, Tier } from './types.js';
+import { workerReceipt } from './plan.js';
 
-/** All coordinator text is fixed (D10): it never contains the user's prompt, repository content or a Jev answer's text. */
+/** Guidance is fixed (D10); worker deliveries append only the shared, screened receipt projection. */
 export const GUIDANCE_HEADER = '[Jev Gate coordinator guidance for this session]';
-
-export const DIRECT_GUIDANCE = [
-  'Keep the current request and relevant prior user constraints authoritative.',
-  'Keep the main conversation for coordination and result integration. For a complete bounded repository lookup, file or symbol search, listing, or mechanical edit with focused checks, dispatch the whole outcome once to jev-gate:worker-fast without a model argument.',
-  'Do not spawn a worker for each file read or tool step of a larger unresolved task. Give one worker the complete bounded outcome, then integrate its result. Conversational answers stay in the main session.',
-  'Include the outcome, original restrictions, established interfaces, file locations and requested checks.',
-  "Integrate returned results and check the complete user's outcome before claiming success.",
-  'Respect explicit models, no-delegation requests, plan mode, permissions and cancellation.',
-];
-
-export const DIRECT_MODE_SENTENCE: Record<RoutingMode, string> = {
-  native: 'Execution shape: you decide whether this request needs planning or delegation. Jev is not involved.',
-  auto: 'Execution shape: direct. This request was admitted as one native conversation; no orchestration state is active.',
-};
-
-/** T5: the dispatch sentence states the configured cap, so the guidance can never ask for more workers than will run. */
-export const renderDispatchRule = (cap: number): string =>
-  cap <= 1
-    ? 'Follow the plan: dispatch one ready task at a time in the background; answer new user questions while awaiting its terminal result. This build runs one worker at a time; a second concurrent dispatch is denied.'
-    : `Follow the plan: dispatch a task whose dependencies are already accepted. At most ${cap} workers run at once, so send at most ${cap} ready tasks with disjoint deliverables in one message and hold the rest.`;
-
-/**
- * #48 P1-2: shown once in orchestration guidance and again after every accepted worker while `workerIsolation` is
- * `"worktree"` -- the write boundary is per-worker there, so a dependent task must not start until the predecessor's
- * worker diff is integrated into the checkout the next snapshot reads. #53 review: a one-task plan or an
- * independent final task has no dependent dispatch to trigger that merge, yet Stop records the plan completed, so the
- * merge is owed for every accepted worker, not only for one that has a dependent.
- */
-export const WORKTREE_ISOLATION_SENTENCE =
-  'workerIsolation is "worktree": each worker starts from a snapshot of this checkout including staged, unstaged and untracked files (ignored files are excluded). Record each worker snapshot baseline before it edits. After accepting a worker, inspect and apply only git diff --binary <snapshot-baseline> <worker-branch> in this checkout with git apply. Do not merge the snapshot commit or overwrite conflicting root changes. Integrate each predecessor before dispatching dependent work and integrate all accepted changes before reporting completion.';
-
-/**
- * #53 review: appended to every patched worker prompt under worktree isolation. The worker profiles say not to commit
- * unless the contract asks, and a worktree's uncommitted edits never reach the branch the coordinator merges, so a
- * dependent worker would start without them. This is the contract asking.
- */
-export const WORKTREE_WORKER_SENTENCE =
-  '\n\n[Jev Gate isolation] You run in a snapshot worktree containing the caller working files. Before editing, record git rev-parse HEAD as your snapshot baseline. Commit your own changes on this branch after checks, do not push, and report the baseline and branch. The coordinator applies only your diff from the baseline, preserving its uncommitted work.';
-
-const DENIED_UNLESS_ALLOWED = ['Edit', 'Write', 'Bash'];
-
-/**
- * The guard's allow-list is policy, not a host tool inventory. Never promise that an allowed tool is installed.
- */
-export const renderToolRule = (agents: string, allowTools: readonly string[] = [], allowMcp = false): string => {
-  const denied = DENIED_UNLESS_ALLOWED.filter((t) => !allowTools.includes('*') && !allowTools.includes(t));
-  const rootTools = denied.length ? `The plugin guard denies root ${denied.join(', ')} calls for this request.` : '';
-  if (allowTools.includes('*')) return `Jev Gate permits all host-provided root tools; native host permissions still apply. Use ${agents}.`;
-  const rule = `Jev Gate permits ${agents} and the read/task tools actually provided by the host. Other Agent roles are denied by this root guard. ${rootTools} Host availability and permissions still apply.`;
-  return allowMcp ? `${rule} ${MCP_SENTENCE}` : rule;
-};
-
-/** Child sessions inherit host tools; root MCP policy does not describe what workers have. */
-export const MCP_SENTENCE =
-  'Connected MCP tools and ToolSearch pass the root plugin guard. Include the target URL or ID and constraints in a worker brief so the worker can inspect and verify it directly.';
 
 /**
  * Every root turn re-reads the whole session, so the saving of a delegated turn is the root turns it removes. The
@@ -67,206 +13,75 @@ export const DISPATCH_FIRST_SENTENCE =
 
 export const BACKGROUND_GUIDANCE = 'Owned executions run in the background by default. Answer new user messages in the main conversation while they work. A launch receipt is not completion: accept only the original contract result after native terminal evidence. Do not duplicate active work or edit its files. Explicit user cancellation remains authoritative.';
 
-export const orchestrationRules = (cap: number, workerIsolation: WorkerIsolation = 'none', allowTools: readonly string[] = [], allowMcp = false): string[] => [
-  'You do not implement this request yourself; you coordinate.',
-  BACKGROUND_GUIDANCE,
-  renderToolRule('Agent calls to jev-gate:planner and the jev-gate worker roles', allowTools, allowMcp),
-  'Planner first: call jev-gate:planner with no model argument. Give it the exact request, the relevant earlier user constraints, and factual observations about this repository. It is read-only and returns the plan.',
-  renderDispatchRule(cap),
-  'Each worker prompt starts with the marker [JEV_TASK rev=<n> id=<id>] followed by your own short brief. Do not paste the planner task block: the hook appends the canonical task contract, the global constraints, the required check ids and the predecessor facts.',
-  'Never pass a model argument to an owned agent call. Add attempt=<n> to the marker only when you deliberately rework a task that was already dispatched, and only with the next attempt number for that task.',
-  'A declared deliverable is the planner\'s claim about what a task writes, not an enforced write boundary; two workers that touch the same file can still collide.',
-  ...(workerIsolation === 'worktree' ? [WORKTREE_ISOLATION_SENTENCE] : []),
-  'Replan only on a changed interface, a changed dependency, an invalidated task or a major failure, and only after active workers have finished: call the planner again with the concrete violated assumption. A new plan revision starts every task again; results from the previous revision are kept as history, not reused.',
-  'Report what was implemented, what was checked, and what was reported but not verified, separately.',
-];
-
 /**
- * A19: the single-executor shape. It removes the planner, the plan, the task contract and the replan path from an
- * admitted turn, leaving the depth reader, Gate A, Gate B's tier choice and one worker. It exists to test whether the
- * saving measured at depth comes from starting in a fresh context or from splitting the work, which every figure in
- * this repository so far confounds.
+ * A19: the single-executor shape, the only one an admitted turn runs since the planner was removed (#289): the depth
+ * reader, Gate A, Gate B's tier choice and one worker.
  */
-export const singleRules = (allowTools: readonly string[] = [], allowMcp = false, preferFastWorker = false): string[] => [
+export const singleRules = (preferFastWorker = false): string[] => [
   'You do not implement this request yourself; you coordinate.',
   BACKGROUND_GUIDANCE,
-  renderToolRule('one Agent call to the jev-gate worker role', allowTools, allowMcp),
-  `Dispatch this request once, whole, to ${preferFastWorker ? 'jev-gate:worker-fast' : 'jev-gate:worker'}. There is no plan for this request: jev-gate:planner is denied, and splitting the work across several workers is not what this shape does.`,
+  `Dispatch this request once, whole, to ${preferFastWorker ? 'jev-gate:worker-fast' : 'jev-gate:worker'}. Do not split it across several workers.`,
   DISPATCH_FIRST_SENTENCE,
   'Your brief does not have to restate the request: the hook appends the user\'s own request verbatim, and the worker is told it is the task.',
   'Never pass a model argument to an owned agent call.',
-  'If the worker comes back incomplete or wrong, say so and dispatch it again with what was wrong; there is no replan path here.',
+  'If the worker comes back incomplete or wrong, say so and dispatch it again with what was wrong.',
   'Report what was implemented, what was checked, and what was reported but not verified, separately.',
 ];
 
+export const WORKTREE_REMINDER = 'The worker runs in an isolated worktree. Apply only its changes relative to its initial snapshot baseline to the main checkout before final checks and reporting; do not merge the snapshot commit.';
+
 export interface SingleGuidanceOptions {
+  workerIsolation?: 'none' | 'worktree';
   preferFastWorker?: boolean;
   mode: RoutingMode;
   confidence: number | null;
   superseded: boolean;
-  guardAllowTools?: readonly string[];
-  guardAllowMcp?: boolean;
 }
 
 export const renderSingleGuidance = (opts: SingleGuidanceOptions): string =>
   [
     GUIDANCE_HEADER,
     opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...singleRules(opts.guardAllowTools, opts.guardAllowMcp, opts.preferFastWorker),
+    ...singleRules(opts.preferFastWorker),
+    ...(opts.workerIsolation === 'worktree' ? [WORKTREE_REMINDER] : []),
     ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
   ].join('\n');
 
 export const SUPERSEDED_SENTENCE =
-  'A previous Jev Gate job for this session was still unfinished and has been superseded by this request; results from it are not counted toward this plan.';
+  'A previous Jev Gate job for this session was still unfinished and has been superseded by this request; results from it are not counted toward this job.';
 
-export const NATIVE_ORCHESTRATION_SENTENCE = 'You decide whether to start planning; no admission decision was made for this request.';
+export const NATIVE_ORCHESTRATION_SENTENCE = 'You decide whether to dispatch; no admission decision was made for this request.';
 
 export const renderAdmissionLine = (confidence: number | null): string =>
   `Execution shape: orchestrated${confidence === null ? '' : ` (admission confidence ${confidence.toFixed(2)})`}.`;
 
-export const renderDirectGuidance = (mode: RoutingMode, delegationForbidden = false): string => [GUIDANCE_HEADER, ...(delegationForbidden ? [
-  'The user explicitly prohibited delegation. Complete this request in the main conversation without a worker or planner. Keep the original restrictions and native permissions authoritative.',
-] : DIRECT_GUIDANCE), DIRECT_MODE_SENTENCE[mode]].join('\n');
-
-export interface OrchestrationGuidanceOptions {
-  mode: RoutingMode;
-  confidence: number | null;
-  superseded: boolean;
-  maxParallelWorkers: number;
-  /** #48 P1-2: optional so every existing call site that predates isolation keeps compiling and behaving as before. */
-  workerIsolation?: WorkerIsolation;
-  guardAllowTools?: readonly string[];
-  guardAllowMcp?: boolean;
-}
-
-export const renderOrchestrationGuidance = (opts: OrchestrationGuidanceOptions): string =>
-  [
-    GUIDANCE_HEADER,
-    opts.mode === 'auto' ? renderAdmissionLine(opts.confidence) : NATIVE_ORCHESTRATION_SENTENCE,
-    ...orchestrationRules(opts.maxParallelWorkers, opts.workerIsolation ?? 'none', opts.guardAllowTools, opts.guardAllowMcp),
-    ...(opts.superseded ? [SUPERSEDED_SENTENCE] : []),
-  ].join('\n');
-
-/**
- * A12: the precedence the worker must apply when the sources disagree. A17: the request block, when one is carried, sits
- * between the two -- a contract is planned from the request, so the request outranks it on what was asked for, while the
- * contract still fixes this task's boundary.
- */
-export const PRECEDENCE_SENTENCE =
-  'Precedence: the user restrictions and your native permissions first, then the "[Jev Gate user request]" block if one is above, then the task contract, then the predecessor facts reported by earlier workers, then this note.';
-
-/** A19: the same note without the contract, because a single-executor dispatch has none to be authoritative. */
+/** A12/A19: the precedence a worker must apply when the sources disagree. The single shape carries the request block. */
 export const renderSingleRouteNote = (tier: Tier): string =>
   `\n\n[Jev Gate route note] Tier: ${tier}. Precedence: the user restrictions and your native permissions first, then the "[Jev Gate user request]" block above, then this note.`;
 
 export const renderRouteNote = (tier: Tier): string =>
-  `\n\n[Jev Gate route note] Tier: ${tier}. The task contract above is authoritative for this task's boundary. ${PRECEDENCE_SENTENCE}`;
-
-/** A6: the fixed reason for a root tool that is not on the orchestration allow-list. */
-export const GUARD_DENY_REASON =
-  'Jev Gate orchestration is active for this request. The main session coordinates; send implementation, shell checks and integration to a planned jev-gate worker task ([JEV_TASK ...]). Nothing was changed by this call.';
-
-/** A single job has no planner, marker or task contract. Its guard must describe the actual dispatch. */
-export const SINGLE_GUARD_DENY_REASON =
-  'Jev Gate single-worker execution is active for this request. Dispatch the whole request once to the Jev Gate worker role selected in coordinator guidance as a background call; the hook appends the original request. No planner or JEV_TASK marker is required. Nothing was changed by this call.';
-
-export const SINGLE_STOP_REASON =
-  'Jev Gate: the main session repeatedly tried to implement this admitted request directly instead of dispatching its single worker. Nothing further will run for this request. Relaunch with JEV_GATE_MODE=off to work without delegation.';
-
-export const STOP_REASON =
-  'Jev Gate: orchestration blocked. The main session repeatedly tried to implement an admitted compound job directly instead of dispatching planned worker tasks. Nothing further will run for this request. Relaunch with JEV_GATE_MODE=off to work without orchestration.';
+  `\n\n[Jev Gate route note] Tier: ${tier}. Precedence: the user restrictions and your native permissions first, then this note.`;
 
 const DISPATCH_DENY_TEXT: Record<DenyReason, string> = {
-  guard_denied: GUARD_DENY_REASON,
   dispatch_ineligible:
-    'This owned agent call cannot be validated as a planned dispatch while orchestration is active. Dispatch a planned task as a background call with no resume, team, fork or isolation field, and with a well-formed prompt within the size bound.',
-  no_marker: 'This worker prompt has no [JEV_TASK rev=<n> id=<id>] marker on its first line. Dispatch a planned task, or call jev-gate:planner first.',
-  unknown_task: 'The marker names a task id that is not in the current plan. Use an id from the current plan revision.',
-  stale_rev: 'The marker names an older plan revision. Re-read the current plan revision and dispatch its task ids.',
-  deps_incomplete: 'This task still has dependencies without an accepted receipt for the current contract. Dispatch its predecessors first.',
-  phase_not_planned: 'No valid plan is active for this request. Call jev-gate:planner and wait for a ready plan before dispatching workers.',
-  single_shape:
-    'This request was admitted as a single executor, so there is no plan to make and the planner is not available for it. Dispatch the whole request once to the Jev Gate worker role selected in coordinator guidance; the hook appends the user\'s own request to your brief.',
+    'This owned agent call cannot be validated while orchestration is active. Dispatch the worker as a background call with no resume, team, fork or isolation field, and with a well-formed prompt within the size bound.',
   task_active:
     'This task is already running and its worker was never observed to stop, so a second dispatch of it is refused rather than replacing a live writer. Wait for its result, or cancel it in the session first.',
-  task_accepted: 'This task already has an accepted receipt for the current contract. Add attempt=<n> only to deliberately rework it.',
-  attempt_mismatch:
-    'The attempt number on the marker is not the next attempt this task actually has. attempt=<n> in the text confers nothing on its own; use the number this job has counted, or dispatch without attempt=<n>.',
-  dependent_active:
-    'A task that depends on this one is running right now, so reworking this one would change the contract underneath it. Let the dependent finish before reworking its predecessor.',
+  attempt_mismatch: 'This dispatch is not the retry this job expects. Retry with the worker profile and model it names.',
   stale_generation:
-    'A newer user request replaced this one while this dispatch was being validated, so it belongs to a plan that is no longer in force. Nothing was run; re-read the current plan and dispatch from it.',
-  deliverable_overlap: 'This task writes deliverables that a running task is already writing. Dispatch it after that task finishes.',
-  parallel_cap: 'The configured parallel worker limit is already in use. Dispatch this task when one of the running workers finishes.',
-  planner_pin_conflict: 'This planner call pins a model that is not one of the configured strong planning models. Remove the model argument, or pin a configured deep/frontier model.',
-  planner_active: 'A planner call for this request is already running. Wait for its plan before calling the planner again.',
-  workers_active: 'Workers from the current plan are still running. Let them finish before replanning, then call the planner with the concrete violated assumption.',
+    'A newer user request replaced this one while this dispatch was being validated, so it belongs to a job that is no longer in force. Nothing was run; dispatch from the current request.',
   bounds_exhausted: 'This job has used its allowed attempts for that step. Report the blocker to the user instead of retrying.',
-  composed_too_large: 'The composed task contract exceeds the size bound, so nothing was sent and no constraint was dropped. Ask the planner for a smaller task.',
 };
 
-/** Planner-reported text is bounded before it reaches the coordinator; the plugin never forwards unbounded child output. */
+/** Worker-reported text is bounded before it reaches the coordinator; the plugin never forwards unbounded child output. */
 const bounded = (detail: string): string => (detail.length > 1000 ? `${detail.slice(0, 1000)}…` : detail);
 
 export const renderDispatchDeny = (reason: DenyReason, detail: string | null = null): string =>
   `${DISPATCH_DENY_TEXT[reason]}${detail ? ` (${bounded(detail)})` : ''} Nothing was changed by this call.`;
 
 /**
- * #48 P2-1: a `main_session_steps` entry is never dispatched and never gates readiness -- it is read here so the main
- * session is reminded, at the moment a plan is accepted, of what it agreed to keep for itself.
- */
-export const renderMainSessionSteps = (steps: readonly MainSessionStep[]): string =>
-  steps.length ? ` Main-session steps explicitly reserved by the planner: ${steps.map((s) => `${s.step} (needs ${s.needs})`).join('; ')}.` : '';
-
-/** T5: the dispatch sentence carries the real cap, so the plan context cannot ask for more workers than will be admitted. */
-export const renderPlannedContext = (rev: number, readyIds: string[], cap: number, mainSessionSteps: readonly MainSessionStep[] = []): string =>
-  `[Jev Gate plan] Revision ${rev} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)} Each prompt starts with [JEV_TASK rev=${rev} id=<id>].${renderMainSessionSteps(mainSessionSteps)}`;
-
-/** T4: what the pin asked for and what the host reported running are different facts; an unknown id settles neither. */
-export const renderPlannerModelNote = (agreement: 'mismatch' | 'unverified'): string =>
-  agreement === 'mismatch'
-    ? ' The model the host reported for this planner is not the planning profile this job requested, so this plan is not evidence that a strong planner produced it.'
-    : ' The host did not report a model this plugin recognizes for this planner, so whether the requested planning profile actually ran is unverified.';
-
-export const renderPlannerProblem = (status: string, detail: string): string =>
-  `[Jev Gate plan] The planner returned ${status}; workers cannot be dispatched until a valid plan exists. ${bounded(detail)}`;
-
-/** A failed replan changes nothing: the revision it tried to replace is still the contract in force. */
-export const renderReplanProblem = (status: string, detail: string, rev: number): string =>
-  `[Jev Gate plan] The replan returned ${status}; plan revision ${rev} stays in force and its ready tasks can still be dispatched. ${bounded(detail)}`;
-
-/**
- * A7: the replan bound bounds revising the plan, not the job. The revision in force was accepted and its ready tasks
- * are still dispatchable, so the exhaustion text names them the way a failed replan does. Observed 2026-09-19
- * (`v5-job2-orbit`): told only to report the blocker, a coordinator holding an accepted four-task revision dispatched
- * no worker at all and the turn ended with the working tree untouched, at 96 % of a successful cell's cost.
- */
-export const renderReplanBoundExhausted = (rev: number, readyIds: string[], cap: number): string =>
-  `This job has used its allowed replans, so plan revision ${rev} cannot be revised again. It stays in force and its ready tasks can still be dispatched. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)} Dispatch what the plan covers and report separately what it does not. Report a blocker with nothing dispatched only when no ready task is left. Nothing was changed by this call.`;
-
-export const renderWorkerIncomplete = (taskId: string, reason: string): string =>
-  `[Jev Gate result] Task ${taskId} is incomplete: ${reason}. Dependent tasks stay locked. Rework it with attempt=<n> on the marker, or replan once no worker is active.`;
-
-/**
- * T10: a malformed report is a reporting failure, not a demonstrated implementation failure. The recovery says so, so
- * a whole implementation is not redone because an id did not match a regular expression.
- */
-export const renderWorkerInvalid = (taskId: string, reason: string): string =>
-  `[Jev Gate result] Task ${taskId} returned no valid WorkerReply (${bounded(reason)}). This is a report-format failure and says nothing about the code: nothing was accepted, and nothing was shown to be wrong either. Rework it with attempt=<n> on the marker and tell the worker to read the files it already changed, re-run only the checks whose result it cannot confirm, and correct the report to the required check ids. Do not ask it to redo an implementation that was not shown to fail.`;
-
-export const renderWorkerUnknown = (taskId: string): string =>
-  `[Jev Gate result] Task ${taskId} did not complete, so no receipt was recorded. Its reservation was released; dispatch it again with attempt=<n> if the work is still needed.`;
-
-/** T11: the worker itself reported the failed required check or the invalidated plan; no second model judged it. */
-export const renderWorkerReported = (taskId: string, verdict: 'rework' | 'replan', reason: string): string =>
-  verdict === 'rework'
-    ? `[Jev Gate result] Task ${taskId} reported a required check as failed (${bounded(reason)}), so dependent tasks stay locked. Rework it with attempt=<n> on the marker.`
-    : `[Jev Gate result] Task ${taskId} reported that the plan's assumptions no longer hold (${bounded(reason)}), so dependent tasks stay locked. Replan once no worker is active, with the concrete violated assumption.`;
-
-/**
  * A19: the single shape has no contract, so its result line says what was and was not established. An accept here is
- * the worker's own report; nothing in this plugin checked it, and the coordinator is told so rather than left to read
- * an accept as the hierarchy's deterministic one.
+ * the worker's own report and the checks the transcript confirmed, and the coordinator is told so.
  */
 export const renderSingleResult = (
   verdict: 'accept' | 'incomplete' | 'unknown' | 'invalid',
@@ -274,7 +89,7 @@ export const renderSingleResult = (
   opts: { formatHint?: string; rootFallback?: boolean; rootFallbackReason?: 'attempt_cap' | 'accepted'; checks?: string } = {},
 ): string => {
   if (opts.rootFallback && opts.rootFallbackReason !== 'accepted') {
-    return `[Jev Gate result] The single-worker attempt limit is reached (${bounded(reason)}). Jev Gate has released the root tool guard for this turn. Finish the remaining work in this session, run checks you can execute, and identify anything still unverified.${opts.checks ? ` ${opts.checks}` : ''}`;
+    return `[Jev Gate result] The single-worker attempt limit is reached (${bounded(reason)}). Finish the remaining work in this session, run checks you can execute, and identify anything still unverified.${opts.checks ? ` ${opts.checks}` : ''}`;
   }
   const result =
     verdict === 'accept'
@@ -283,11 +98,11 @@ export const renderSingleResult = (
         ? `[Jev Gate result] The single-executor dispatch returned no usable reply (${bounded(reason)}). Its reservation was released; dispatch the request again if the work is still needed.`
         : verdict === 'invalid'
           ? `[Jev Gate result] The single-executor dispatch replied in a shape this plugin could not read (${bounded(reason)}). Nothing about the work is settled; dispatch it again or finish it another way.`
-          : `[Jev Gate result] The single-executor dispatch reported that it did not finish (${bounded(reason)}). There is no replan path on this shape: dispatch it again with what was wrong.`;
-  const format = opts.formatHint ? ` This appears to be a check-command format mismatch. Closest executed command per unmatched check: ${bounded(opts.formatHint)}. Run each reported check_id as its own exact Bash command, with no ; echo, pipe, or output suffix. Retry the same worker profile and model; this formatting retry does not use one of the two charged attempts.` : '';
+          : `[Jev Gate result] The single-executor dispatch reported that it did not finish (${bounded(reason)}). Dispatch it again with what was wrong.`;
+  const format = opts.formatHint ? ` This appears to be a check-command format mismatch for ${bounded(opts.formatHint)}. Run each reported check_id as its own exact Bash command, with no ; echo, pipe, or output suffix. Retry the same worker profile and model; this formatting retry does not use one of the two charged attempts.` : '';
   const handoff =
     opts.rootFallbackReason === 'accepted'
-      ? ' The worker actually ended and no Agent remains active. Jev Gate released the root guard for remaining review, integration and reporting; this is not a claim of complete requirements verification.'
+      ? ' The worker actually ended and no owned execution remains active. Continue review, integration and reporting in this session; this is not a claim of complete requirements verification.'
       : '';
   return result + (opts.checks ? ` ${opts.checks}` : '') + handoff + format;
 };
@@ -295,20 +110,22 @@ export const renderSingleResult = (
 export const renderAdhocResult = (verdict: string, reason: string, checks: string): string =>
   `[Jev Gate result] The bounded worker ended with verdict ${verdict}${reason ? ` (${bounded(reason)})` : ''}. Integrate this subtask result in the main session; the overall user request remains yours to complete. ${checks}`;
 
-export interface WorkerAcceptedOptions {
-  workerIsolation?: WorkerIsolation;
-  /** #48 P2-1: repeated only when `isLastTask` -- the packet's proxy for this is "nothing else is ready to dispatch". */
-  mainSessionSteps?: readonly MainSessionStep[];
-  isLastTask?: boolean;
-  rootHandoff?: boolean;
-  checks?: string;
-}
-
-export const renderWorkerAccepted = (taskId: string, readyIds: string[], cap: number, opts: WorkerAcceptedOptions = {}): string => {
-  const isolationNote = opts.workerIsolation === 'worktree' ? ` ${WORKTREE_ISOLATION_SENTENCE}` : '';
-  const stepsNote = opts.isLastTask ? renderMainSessionSteps(opts.mainSessionSteps ?? []) : '';
-  const handoff = opts.rootHandoff
-    ? ' All planned tasks are accepted and no Agent remains active. Jev Gate released the root guard for remaining integration, requirement review and reporting. Reuse observed checks on the same state; verify new edits and merge differences separately. This is not complete requirements verification.'
-    : '';
-  return `[Jev Gate result] Task ${taskId} accepted. Ready task ids: ${readyIds.length ? readyIds.join(', ') : 'none'}. ${renderDispatchRule(cap)}${isolationNote}${stepsNote}${opts.checks ? ` ${opts.checks}` : ''}${handoff}`;
+/** Every owned delivery uses the same functional projection and positional evidence, including legacy replay. */
+export const renderWorkerDelivery = (raw: Receipt, opts: { single?: boolean; rootFallback?: boolean; rootFallbackReason?: 'attempt_cap' | 'accepted' } = {}): string => {
+  const receipt = workerReceipt(raw), verification = receipt.verification;
+  const passed = receipt.reply?.checks.filter(check => check.result === 'pass').length ?? 0;
+  const rejected = verification ? [...verification.contradicted, ...verification.stale, ...verification.unobserved] : [];
+  const confirmed = verification && verification.transcript !== 'unavailable' && !rejected.includes('unmapped')
+    ? receipt.reply?.checks.filter(check => check.result === 'pass' && !rejected.includes(check.check_id)).length ?? 0 : 0;
+  const checks = verification
+    ? `Check evidence: reported pass ${passed}; confirmed command pass ${confirmed}; transcript ${verification.transcript}; contradicted ${verification.contradicted.length}; stale ${verification.stale.length}; unobserved ${verification.unobserved.length}. Confirmation covers matched command runs and observed edit timing only; this does not establish requirement coverage.`
+    : 'Check evidence: observation disabled or unavailable. No verified pass is claimed.';
+  const guidance = opts.single
+    ? renderSingleResult(receipt.verdict as 'accept' | 'incomplete' | 'unknown' | 'invalid', receipt.verdict_reason ?? '', {
+      ...opts, checks, formatHint: receipt.evidence_format_only ? verification?.unobserved.map(id => `check ${id}`).join(', ') || 'reported checks' : '',
+    })
+    : renderAdhocResult(receipt.verdict, receipt.verdict_reason ?? '', checks);
+  const worktree = receipt.worker_worktree;
+  const integration = worktree ? `\nWorker worktree: ${worktree.path}\nBranch: ${worktree.branch}\nSnapshot baseline: ${worktree.baseline}. Apply only the diff from this baseline to the worker branch in the root; this result does not integrate it.` : '';
+  return `${receipt.reply ? JSON.stringify({ ...receipt.reply, ...(verification ? { verification } : {}) }) : 'No usable worker report.'}\n\n${guidance}${integration}`;
 };

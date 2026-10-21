@@ -3,6 +3,8 @@ import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { activityChecks } from '../../src/doctor-activity.js';
+import { loadActivity } from '../../src/activity.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import type { Obj } from '../../src/codex/source.js';
@@ -237,6 +239,29 @@ describe('original Codex root execution boundaries', () => {
     }
     expect(f.policy.sessions.size).toBe(1); expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
   });
+  it.each([['codex_exec',false],['codex-tui',true],[undefined,true]] as const)('a %s root keeps its own model and effort only for codex exec, whatever Jev answers',async(originator,routed)=>{
+    // Jev would move fixture-A/high to fixture-B/max; the request names fixture-A as a -m run or a config default would.
+    const f = await fixture(true,'fixture-B','max');
+    for (let i=0;i<2;i++) {
+      const r = await f.policy.externalRequest('root',f.request,new AbortController().signal,originator);
+      expect(r.request).toEqual(routed ? {...f.request,model:'fixture-B',reasoning:{...f.request.reasoning,effort:'max'}} : f.request);
+    }
+    expect(f.fetchImpl).toHaveBeenCalledTimes(routed ? 1 : 0);
+    const rows = readdirSync(join(dir,'trace')).map(file => JSON.parse(readFileSync(join(dir,'trace',file),'utf8')));
+    if (!routed) expect(rows).toContainEqual(expect.objectContaining({phase:'codex_router_skipped',session_id:'root',reason:'pinned',known_not_sent:true}));
+    f.rpc.close();
+  });
+  it.each(['gpt-6-sol','fixture-A'])('a codex exec root pinned to %s keeps it on every request, superseded or the configured model',async model=>{
+    // gpt-6.1-sol supersedes gpt-6-sol; fixture-A is the session's configured model. Jev would move either to fixture-B/max.
+    const f = await fixture(true,'fixture-B','max');
+    f.policy.catalog = [...catalog,...['gpt-6.1-sol','gpt-6-sol'].map(id => ({ model: id, description: 'Workhorse model for coding.', supportedReasoningEfforts: ['high','xhigh'].map(reasoningEffort => ({ reasoningEffort })) }))];
+    const request = {...f.request,model};
+    for (let i=0;i<2;i++) expect((await f.policy.externalRequest('root',request,new AbortController().signal,'codex_exec')).request).toEqual(request);
+    expect(f.fetchImpl).not.toHaveBeenCalled();
+    const rows = readdirSync(join(dir,'trace')).map(file => JSON.parse(readFileSync(join(dir,'trace',file),'utf8')));
+    expect(rows).not.toContainEqual(expect.objectContaining({superseded_baseline:expect.objectContaining({from:model})}));
+    f.rpc.close();
+  });
   it('shares pending assessment across concurrent external requests and keeps manual C',async()=>{
     let release!:()=>void; const wait = new Promise<void>(r=>{release=r;}); const f = await fixture(true,'fixture-B','max',wait);
     const one = f.policy.externalRequest('root',f.request,new AbortController().signal);
@@ -315,4 +340,32 @@ it('a confirmed manual settings change during managed assessment wins in both na
   await f.rpc.onResponse({},'thread/settings/update',{threadId:'root',model:'fixture-C',effort:'low'});release();await run;
   expect(f.forward).toHaveBeenCalledOnce();expect(f.forward.mock.calls[0]![0]).toMatchObject({params:{model:'fixture-C',effort:'low',collaborationMode:{settings:{model:'fixture-C',reasoning_effort:'low'}}}});
   expect(f.fetchImpl).toHaveBeenCalledOnce();f.rpc.close();
+});
+
+
+it.each(['failure', 'missing', 'partial', 'invalid', 'complete', 'mismatch', 'child'] as const)('D4: Codex real %s provider records reach activity', async kind => {
+  const trace = join(dir, 'trace');
+  let before = new Set<string>(); try { before = new Set(readdirSync(trace)); } catch { /* first producer */ }
+  const child = kind === 'child' ? await ownedFixture() : null;
+  const f = child ?? await fixture(true, 'fixture-B', 'low');
+  try {
+    const id = child?.child.id ?? 'root';
+    const source = child?.next ?? f.request;
+    const selected = (await f.policy.externalRequest(id, source, new AbortController().signal)).request;
+    const submitted = f.policy.observeRequest(id, selected)!;
+    if (kind === 'failure') f.policy.observeRequestFailure(id, submitted);
+    else if (kind !== 'missing') f.policy.observeUsage(id, { id: 'response-canary', model: kind === 'mismatch' ? 'another-model' : submitted.model,
+      usage: { input_tokens: 20, ...(kind !== 'partial' ? { output_tokens: kind === 'invalid' ? -1 : 10 } : {}), input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } }, submitted);
+    const records = readdirSync(trace).filter(file => !before.has(file)).map(file => JSON.parse(readFileSync(join(trace, file), 'utf8')) as Obj);
+    const checks = activityChecks({ traces: { codex: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+    const cost = checks.find(c => c.message.startsWith('router_cost:'))!;
+    expect(cost.metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
+    expect(cost.message).toContain(['failure', 'missing', 'partial', 'invalid'].includes(kind) ? '1 requests with incomplete usage; 1 sessions excluded' : '0 requests with incomplete usage');
+    if (kind !== 'failure' && kind !== 'missing') expect(checks.find(c => c.message.startsWith('router_applied:'))).toMatchObject({ level: kind === 'mismatch' ? 'fail' : 'ok', message: expect.stringContaining('1 routed requests with an observed model') });
+    if (kind === 'child') expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('1 child steps sent to Jev, 1 changed the effort');
+    const isolated = mkdtempSync(join(dir, 'activity-'));
+    records.forEach((r, i) => writeFileSync(join(isolated, `r${i}.json`), JSON.stringify(r)));
+    const dashboard = loadActivity({ traceDir: isolated, host: 'codex', env: { HOME: join(isolated, 'home'), XDG_CONFIG_HOME: join(isolated, 'config') } });
+    expect(dashboard.activity24h.codex.find(c => c.feature === 'router')?.metrics).toEqual(cost.metrics);
+  } finally { f.policy.close(); f.rpc.close(); }
 });

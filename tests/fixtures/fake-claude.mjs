@@ -63,7 +63,7 @@ if (traceDir) {
 }
 // T8 regression control: rewrite the config sources mid-run, so a later cell proves it kept the frozen values.
 if (process.env.FAKE_CLAUDE_MUTATE_CONFIG) {
-  const mutated = { version: 5, mode: 'auto', models: { fast: 'mutated-fast', standard: 'mutated-standard', deep: 'mutated-deep', frontier: 'mutated-frontier' }, maxParallelWorkers: 9 };
+  const mutated = { version: 5, mode: 'auto', models: { fast: 'mutated-fast', standard: 'mutated-standard', deep: 'mutated-deep', frontier: 'mutated-frontier' }, delegationCoordinatorTurns: 9 };
   for (const target of JSON.parse(process.env.FAKE_CLAUDE_MUTATE_CONFIG)) {
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, JSON.stringify(mutated, null, 2));

@@ -1,10 +1,22 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RESTORE_CAP, askedPath, buildRestore, buildSteering, classicConfig, runClassicCompact, shares, transcriptMessages, heldRecords } from '../../src/claude-compact.ts';
 import type { Transport } from '../../mods/router/hooks/client.ts';
+import { activityChecks } from '../../src/doctor-activity.js';
+import { loadActivity } from '../../src/activity.js';
+import { sessionFacts } from '../../src/bench/ab.js';
+
+const loss = vi.hoisted(() => ({ on: false }));
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>();
+  return { ...fs, openSync: (...args: Parameters<typeof fs.openSync>) => {
+    if (loss.on && String(args[0]).includes('/trace/.mod_compact-')) throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+    return fs.openSync(...args);
+  } };
+});
 
 const SESSION = 'b4f5b22d-d356-47c4-8e6c-dc52ae655985';
 let dir: string;
@@ -44,11 +56,27 @@ beforeEach(() => {
   mkdirSync(env['JEV_GATE_TRACE_DIR']!, { recursive: true, mode: 0o700 });
   write(session());
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => { loss.on = false; rmSync(dir, { recursive: true, force: true }); });
 
-const traces = (): Rec[] => files('trace').filter((n) => n.startsWith('mod_compact-')).map((n) => JSON.parse(readFileSync(join(dir, 'trace', n), 'utf8')) as Rec);
+// Trace files are named by a random id, so order comes from each record's write time.
+const traces = (): Rec[] => files('trace').filter((n) => n.startsWith('mod_compact-')).map((n) => JSON.parse(readFileSync(join(dir, 'trace', n), 'utf8')) as Rec)
+  .sort((a, b) => String(a['written_at']).localeCompare(String(b['written_at'])));
 
 describe('classic path: which path runs', () => {
+  it('binds pre-send intent and completion to a fake send whose receipt is lost, even if restore persistence then fails', async () => {
+    mkdirSync(join(dir, 'state/jev-gate'), { recursive: true });
+    writeFileSync(join(dir, 'state/jev-gate/compact'), 'not a directory');
+    const fake = fakeJev(ids => Object.fromEntries(ids.map(id => [id, 'discard'])));
+    const fetch = fake.transport.fetch;
+    fake.transport.fetch = async (url, init) => { const reply = await fetch(url, init); loss.on = true; return reply; };
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' }, { key: 'k'.repeat(16), transport: fake.transport })).toBeNull();
+    loss.on = false;
+    expect(fake.calls).toHaveLength(1);
+    expect(traces()).toMatchObject([{ stage: 'started', run_id: expect.any(String) }]);
+    const receipt = files('trace').find(name => name.startsWith('recording_complete-'))!;
+    expect(JSON.parse(readFileSync(join(dir, 'trace', receipt), 'utf8'))).toMatchObject({ complete: false, producer: 'classic' });
+    expect(sessionFacts(join(dir, 'trace'), SESSION)).toMatchObject({ jevRequests: 1, jevCost: null });
+  });
   it('PreCompact the engine runs (the Mod was never asked) guides the summarizer and saves the restore', async () => {
     const out = await runClassicCompact(input('PreCompact', { trigger: 'auto', custom_instructions: null }), env);
     expect(out).toContain('Write no <analysis> section');
@@ -111,6 +139,79 @@ describe('classic path: which path runs', () => {
 });
 
 describe('classic path: restore', () => {
+  it.each([false, true])('finds the last human request before a tool-filled 2 MiB tail (one oversized row: %s)', async oversized => {
+    const task = '현재 작업: repair the parser and keep the existing API.';
+    const output = oversized ? call(1, 'x'.repeat(5 * 1024 * 1024)) : Array.from({ length: 6 }, (_, i) => call(i, 'x'.repeat(512 * 1024))).flat();
+    write([user('An older request.'), user(task), ...output,
+      { ...user('Background job completed.'), promptSource: 'system', origin: { kind: 'task-notification' } },
+      { ...user('Previous compaction summary.'), isCompactSummary: true }]);
+    const out = await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    expect(out).toContain(`The current task: "${task}"`);
+    const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), env);
+    expect(restored).toContain(task);
+    expect(restored).not.toContain('Background job completed.');
+    expect(restored).not.toContain('Previous compaction summary.');
+  });
+
+  it.each([false, true])('records no_current_task for only notices and summaries, without restoring either (Jev enabled: %s)', async enabled => {
+    write([{ ...user('Background job completed.'), promptSource: 'system', origin: { kind: 'task-notification' } },
+      { ...user('Previous compaction summary.'), isCompactSummary: true }]);
+    const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: String(enabled) };
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev)).toBeNull();
+    expect(traces()).toMatchObject([{ deferred: 'nothing_to_restore', selection: 'no_current_task' }]);
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), jev)).toBeNull();
+    expect(files('state/jev-gate/compact')).toEqual([]);
+  });
+
+  it('still restores the human task when a single tool result fills even the 16 MiB message tail', async () => {
+    write([user('Keep this human task.'), ...call(1, 'x'.repeat(17 * 1024 * 1024))]);
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env)).toContain('The current task: "Keep this human task."');
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toContain('Keep this human task.');
+  });
+
+  it('a new root compaction with no human task cannot restore a previous pending task', async () => {
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    write([{ ...user('Background job completed.'), promptSource: 'system', origin: { kind: 'task-notification' } }]);
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env)).toBeNull();
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toBeNull();
+    expect(files('state/jev-gate/compact')).toEqual([]);
+    expect(traces().filter((r) => 'deferred' in r).at(-1)).toMatchObject({ deferred: 'nothing_to_restore', selection: 'no_current_task' });
+  });
+
+  it.each(['SessionStart', 'PostCompact'])('a sidechain %s cannot consume or clear the parent restore', async event => {
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    const file = join(dir, 'state/jev-gate/compact', files('state/jev-gate/compact')[0]!);
+    const saved = readFileSync(file, 'utf8');
+    expect(await runClassicCompact(input(event, { source: 'compact', agent_id: 'child', compact_summary: 'child summary' }), env)).toBeNull();
+    expect(readFileSync(file, 'utf8')).toBe(saved);
+    expect(traces().some(t => t['stage'] === 'restore' || t['stage'] === 'post')).toBe(false);
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toContain('Rename parseRow');
+  });
+
+  it.each(['SessionStart', 'PostCompact'])('%s for another transcript cannot consume the saved restore', async event => {
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    expect(await runClassicCompact(input(event, { source: 'compact', transcript_path: join(dir, 'child.jsonl') }), env)).toBeNull();
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toContain('Rename parseRow');
+  });
+
+  it.each([
+    ['disabled', false, 'session'],
+    ['no_current_task', true, 'tools'],
+    ['no_prior_assistant', true, 'user'],
+    ['no_key', true, 'session'],
+    ['no_candidates', true, 'assistant'],
+  ] as const)('records the actual Jev selection reason: %s', async (reason, enabled, content) => {
+    if (content === 'tools') write(session().slice(1));
+    if (content === 'user') write([user('Only a human request.')]);
+    if (content === 'assistant') write([user('A human request.'), { type: 'assistant', message: { content: 'No tool results.' } }]);
+    const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: String(enabled) };
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev, { key: reason === 'no_key' ? undefined : 'k'.repeat(16) });
+    expect(traces().find(t => t['guided'] === true)).toMatchObject({ selection: reason });
+    await runClassicCompact(input('SessionStart', { source: 'compact' }), jev);
+    await runClassicCompact(input('PostCompact', { compact_summary: 'summary' }), jev);
+    expect(traces().find(t => t['stage'] === 'post')).toMatchObject({ selection: reason });
+  });
+
   it('SessionStart(compact) hands the restore up once, as additional context', async () => {
     await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
     const out = JSON.parse((await runClassicCompact(input('SessionStart', { source: 'compact' }), env))!) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
@@ -157,6 +258,14 @@ describe('classic path: restore', () => {
     expect(body.state.candidates.map((c) => c.id)).not.toContain('m1t0');
     expect(Math.min(...body.state.candidates.map((c) => Number(/^m(\d+)t/.exec(c.id)![1])))).toBeGreaterThan(20);
     expect((await runClassicCompact(input('SessionStart', { source: 'compact' }), jev))).toContain('"additionalContext"');
+  });
+
+  it('#281: the current task is the person\'s last request, never a task notice or an earlier compact summary', async () => {
+    const notice = '<task-notification>\n<task-id>b6w41xrqn</task-id>\n<status>completed</status>\n<summary>Background command completed</summary>\n</task-notification>';
+    write([...session(), { type: 'user', uuid: 'n1', promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' }, message: { role: 'user', content: notice } },
+      { type: 'user', uuid: 'c1', isCompactSummary: true, isVisibleInTranscriptOnly: true, turnOrigin: 'human', message: { role: 'user', content: 'This session is being continued from a previous conversation.' } }]);
+    const out = await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    expect(out).toContain('The current task: "Rename parseRow to readRow in src/rows.ts and keep the tests green."');
   });
 
   it('a Jev that fails or answers wrongly costs the selection only: the guidance and the restore stand', async () => {
@@ -268,4 +377,18 @@ describe('classic path: wiring', () => {
     expect(ours.sort()).toEqual(['PostCompact:*', 'PreCompact:*', 'SessionStart:compact']);
     expect(statSync(new URL('../../scripts/build-claude-compact.mjs', import.meta.url)).isFile()).toBe(true);
   });
+});
+
+
+it.each(['active', 'shadow', 'overBudget'] as const)('D4: real classic Compact %s records preserve lifecycle and budget facts', async kind => {
+  const configured = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTMODE: kind === 'shadow' ? 'shadow' : 'active', CLAUDE_PLUGIN_OPTION_COMPACTBUDGETCHARS: '8000' };
+  await runClassicCompact(input('PreCompact', { trigger: 'auto' }), configured);
+  await runClassicCompact(input('SessionStart', { source: 'compact' }), configured);
+  await runClassicCompact(input('PostCompact', { compact_summary: 'x'.repeat(kind === 'overBudget' ? 8000 : 100) }), configured);
+  const records = traces();
+  const facts = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')!;
+  expect(facts.metrics).toMatchObject({ fired: 1, applied: kind === 'shadow' ? 0 : 1, restored: kind === 'shadow' ? 0 : 1, regression: kind === 'overBudget' ? 1 : 0, budget: 8000 });
+  const dashboard = loadActivity({ traceDir: env['JEV_GATE_TRACE_DIR']!, env: configured });
+  expect(dashboard.activity24h.claude.find(c => c.feature === 'compact')?.metrics).toEqual(facts.metrics);
+  expect(dashboard.operations.feed.find(s => s.feature === 'compact' && s.summary.includes('압축 완료'))?.state).toBe(kind === 'overBudget' ? 'error' : 'done');
 });

@@ -21,7 +21,7 @@ export interface OwnedAgentProfile {
   /**
    * Host tools withheld in frontmatter. `tools` stays absent so connected MCPs are still inherited; withholding Skill
    * drops the skills listing, and Artifact its large definition. Every profile also sets `omitClaudeMd: true`: its
-   * contract carries what it needs.
+   * prompt carries what it needs.
    */
   disallowedTools: readonly string[];
 }
@@ -32,17 +32,18 @@ const EFFORT: Record<string, string | null> = {
   'jev-gate:worker': null,
   'jev-gate:worker-deep': 'high',
   'jev-gate:worker-frontier': 'xhigh',
-  'jev-gate:planner': 'high',
-  'jev-gate:planner-frontier': 'xhigh',
 };
 
 const WORKER_DISALLOWED = ['Agent', 'SendMessage', 'Skill', 'Artifact', 'ArtifactComments', 'ArtifactData'];
-/** A planner reads and plans; it never implements. */
-const DISALLOWED: Record<OwnedRole, readonly string[]> = { worker: WORKER_DISALLOWED, planner: [...WORKER_DISALLOWED, 'Edit', 'Write', 'NotebookEdit'] };
+const DISALLOWED: Record<OwnedRole, readonly string[]> = { worker: WORKER_DISALLOWED };
 
-/** The six tiered profiles. */
+/** The four tiered profiles. */
 export const OWNED_AGENT_PROFILES: readonly OwnedAgentProfile[] = OWNED_AGENT_NAMES.map((name) => {
   const owned = OWNED_AGENTS[name];
   if (!owned || !(name in EFFORT)) throw new Error(`agents.ts: OWNED_AGENTS and EFFORT must agree on ${name}`);
   return { name, file: `${name.slice('jev-gate:'.length)}.md`, role: owned.role, tier: owned.tier, effort: EFFORT[name] ?? null, disallowedTools: DISALLOWED[owned.role] };
 });
+
+/** Shared by generated profiles and the isolation-specific dispatch note on both hosts. */
+export const ISOLATION_COMMIT_INSTRUCTION = "A `[Jev Gate isolation]` note in your prompt is that request for one commit: when it is there, commit your changes on your worktree's branch as it says, and do not push. Explicit user restrictions still take precedence.";
+export const ISOLATION_NOTE = "[Jev Gate isolation] Commit your changes once on your worktree's branch after running checks; do not push. The coordinator applies only the diff from the initial snapshot baseline to that branch, so uncommitted edits cannot be integrated that way. If the user forbids commits, report the uncommitted edits as a blocker instead.";

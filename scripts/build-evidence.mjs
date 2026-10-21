@@ -1,4 +1,4 @@
-// Bundles the jev_evidence MCP server (#77) and the SDK it runs on into one file under plugins/evidence/dist, outside
+// Bundles the plugin's MCP server (#77) and the SDK it runs on into one file under plugins/evidence/dist, outside
 // dist/, so the legacy archive never carries it and the installed plugin needs no node_modules.
 // Usage: node scripts/build-evidence.mjs [outfile]
 import { dirname, join, resolve } from 'node:path';

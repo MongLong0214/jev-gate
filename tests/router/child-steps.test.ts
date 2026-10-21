@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
 import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { createRouter, type TurnStepEvent } from '../../mods/router/hooks/router.ts';
+import { activityChecks } from '../../src/doctor-activity.js';
+import { createRecorder } from '../../mods/router/hooks/recording.ts';
 import { childStepContext } from '../../src/router-child-context.ts';
+import { dispatchMarker } from '../../src/claude-background.js';
 import { choice, deferred, drain, fakeEngine, streamNext, type SentRequest, type Responder } from './fake-engine.ts';
 
 const OPUS = 'claude-opus-5-5', SONNET = 'claude-sonnet-5-5', HAIKU = 'claude-haiku-5-5';
@@ -30,6 +33,33 @@ async function setup(options: Record<string, boolean> = {}, respond: Responder =
 }
 
 describe('native worker inference routing', () => {
+  it.each(['id', 'token'])('N1: passes the %s dispatch identity to Router ownership checks', async key => {
+    const resolved = resolveConfig({ enabled: true, allowFable: false });
+    if (!resolved.ok) throw Error(resolved.field);
+    const router = createRouter(resolved.config, undefined, true), f = fakeEngine();
+    const id = '12345678-1234-4234-8234-123456789abc';
+    const dispatch = vi.fn(async () => ({ deny: 'Fixture ownership refusal; no child started.' }));
+    f.engine.dispatchPair = dispatch;
+    const next = vi.fn(Object.assign(async () => ({ agentId: 'child', model: OPUS }), { signal: new AbortController().signal }));
+    await router.agentSpawn(f.engine, { tool_use_id: 'spawn', prompt: 'Repair src/rows.ts.' + dispatchMarker(id).replace(/(?:id|token)=/, `${key}=`),
+      description: 'repair', subagentType: 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' }, parentModel: OPUS, fork: false }, next);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith('spawn', '', false, 'jev-gate:worker', true, id);
+    expect(next).not.toHaveBeenCalled(); expect(f.sent).toHaveLength(0);
+  });
+
+  it('N1: routes child steps with the real Gate dispatch marker instead of input_secret', async () => {
+    const prompt = 'Repair src/rows.ts and run npm test.' + dispatchMarker('12345678-1234-4234-8234-123456789abc');
+    const { router, f } = await setup({}, req => reply(req, OPUS), prompt);
+    expect(f.sent).toHaveLength(0); // The spawn keeps Gate B's allocation.
+    for (const index of [1, 2]) await drain(router.turnStep(f.engine, step(index), streamNext<TurnStepEvent>().next));
+    expect(f.sent).toHaveLength(2);
+    expect(f.sent.every(req => JSON.stringify(req.state).includes(prompt.replaceAll('\n', '\\n')))).toBe(true);
+    expect(f.logs.filter(row => row.event === 'child_route')).toEqual([
+      expect.objectContaining({ sent: true }), expect.objectContaining({ sent: true }),
+    ]);
+    expect(f.logs.some(row => row.assessment === 'input_secret')).toBe(false);
+  });
+
   it('restores child effort protection after native four-counter cache reuse followed by a miss', async () => {
     let effort = 'high';
     const { router, f } = await setup({ routeSubagentModel: false }, req => reply(req, OPUS, effort));
@@ -146,4 +176,21 @@ describe('native worker inference routing', () => {
     expect(context.tools).toEqual([{ name: 'Read', state: 'done' }, { name: 'Bash', state: 'error' }]);
     expect(JSON.stringify(context)).not.toMatch(/PRIVATE|SECRET|SOURCE|OUTPUT|private/);
   });
+});
+
+
+it('D4: real Claude child continuation records reach activity', async () => {
+  const { router, f } = await setup();
+  const records: Array<Record<string, unknown>> = [];
+  const recorder = createRecorder({
+    paths: async () => ({ home: '/synthetic', state: '/synthetic', config: '/synthetic', trace: '/synthetic', session: 'producer-child' }),
+    stat: async () => ({ isLink: false, kind: 'dir', size: 0 }), exists: async () => false, read: async () => '',
+    write: async (_path, text) => { records.push(JSON.parse(text)); }, wait: () => new Promise<void>(() => undefined),
+  });
+  f.engine.log = recorder.log;
+  await drain(router.turnStep(f.engine, step(1), streamNext<TurnStepEvent>(undefined, COUNTS).next));
+  await recorder.flush();
+  const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+  expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('1 child steps sent to Jev, 1 changed the effort');
+  expect(checks.find(c => c.message.startsWith('router_applied:'))?.message).toContain('1 routed requests with an observed model');
 });

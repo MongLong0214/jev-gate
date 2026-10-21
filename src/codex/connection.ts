@@ -1,23 +1,23 @@
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants, existsSync, lstatSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
+import { codexConnectionOwnerPath, codexHome } from '../codex-paths.js';
 import { startCodexSession } from './launch.js';
 import { obj, type Obj } from './source.js';
 import type { Env } from '../config.js';
 import type { CodexRpc } from './rpc.js';
+import type { TraceWriter } from '../trace.js';
 import { resolveApiKey, withApiKey } from '../credentials.js';
 
-const PROVIDER = 'jev-gate-native';
-export interface Connection { version: 1; pid: number; port: number; token: string; marker: string; root: string; original: Obj; installed: Obj }
-const home = (env: Env): string => {
-  const path = env['CODEX_HOME'] ?? join(env['HOME'] ?? homedir(), '.codex');
-  if (!isAbsolute(path)) throw new Error('Codex home must be absolute');
-  return path;
-};
-const directory = (env: Env): string => join(home(env), 'jev-gate', 'connection');
-const statePath = (env: Env): string => join(directory(env), 'owner.json');
+export const PROVIDER = 'jev-gate-native';
+/** `marker` is carried over only from versions with Codex Compact, whose still-running readers require it. */
+export interface Connection { version: 1; pid: number; port: number; token: string; marker?: string; root: string; original: Obj; installed: Obj }
+/** The compact_prompt that versions with Codex Compact wrote. No other value is ever treated as theirs. */
+const LEGACY_COMPACT_PROMPT = /^\[jev-gate compact [0-9a-f]{48}\] Produce a factual compaction summary of the preceding conversation\.$/;
+const home = codexHome;
+const directory = (env: Env): string => dirname(codexConnectionOwnerPath(env));
+const statePath = codexConnectionOwnerPath;
 const privateDir = (env: Env): void => {
   for (const path of [join(home(env), 'jev-gate'), directory(env)]) {
     if (!existsSync(path)) mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -30,7 +30,7 @@ const read = (env: Env): Connection | null => {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024 || stat.mode & 0o077) return null;
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     let value: Obj | null; try { value = obj(JSON.parse(readFileSync(fd, 'utf8'))); } finally { closeSync(fd); }
-    if (value?.['version'] !== 1 || !Number.isSafeInteger(value['pid']) || Number(value['pid']) < 1 || !Number.isSafeInteger(value['port']) || Number(value['port']) < 1 || Number(value['port']) > 65535 || typeof value['token'] !== 'string' || !/^[a-f0-9]{64}$/.test(value['token']) || typeof value['marker'] !== 'string' || typeof value['root'] !== 'string' || !isAbsolute(value['root']) || !obj(value['original']) || !obj(value['installed'])) return null;
+    if (value?.['version'] !== 1 || !Number.isSafeInteger(value['pid']) || Number(value['pid']) < 1 || !Number.isSafeInteger(value['port']) || Number(value['port']) < 1 || Number(value['port']) > 65535 || typeof value['token'] !== 'string' || !/^[a-f0-9]{64}$/.test(value['token']) || typeof value['root'] !== 'string' || !isAbsolute(value['root']) || !obj(value['original']) || !obj(value['installed'])) return null;
     return value as unknown as Connection;
   } catch { return null; }
 };
@@ -62,16 +62,19 @@ export const installConnection = async (rpc: CodexRpc, connection: Connection, e
   const values: Obj = {
     model_provider: PROVIDER,
     [`model_providers.${PROVIDER}`]: { name: 'Jev Gate / native Codex', base_url: `http://127.0.0.1:${connection.port}`, wire_api: 'responses', requires_openai_auth: env['JEV_CODEX_CONNECTION_TEST_NO_AUTH'] !== '1', supports_websockets: false, http_headers: { 'x-jev-gate-session': connection.token } },
-    compact_prompt: connection.marker,
   };
   for (const key of Object.keys(values)) {
     const actual = valueAt(user.config, key);
     if (previous && key in previous.installed && !equal(actual, previous.installed[key]) && !equal(actual, previous.original[key])) throw new Error('owner modified the connection settings');
     connection.original[key] = previous && Object.hasOwn(previous.original, key) ? previous.original[key] : actual ?? null;
   }
+  // An earlier version's own marker returns to the owner's value from before it; any other compact_prompt is the owner's.
+  const legacy = typeof user.config['compact_prompt'] === 'string' && LEGACY_COMPACT_PROMPT.test(user.config['compact_prompt']);
+  const prior = previous?.original['compact_prompt'];
+  if (legacy) connection.original['compact_prompt'] = typeof prior === 'string' && !LEGACY_COMPACT_PROMPT.test(prior) ? prior : null;
   connection.installed = values;
   write(env, connection); // Recovery facts precede the transaction.
-  await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits: Object.entries(values).map(([keyPath, value]) => ({ keyPath, value, mergeStrategy: 'replace' })) });
+  await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits: Object.entries(legacy ? { ...values, compact_prompt: connection.original['compact_prompt'] } : values).map(([keyPath, value]) => ({ keyPath, value, mergeStrategy: 'replace' })) });
 };
 export const restoreConnection = async (rpc: CodexRpc, env: Env): Promise<void> => {
   const state = read(env); if (!state) return;
@@ -80,14 +83,30 @@ export const restoreConnection = async (rpc: CodexRpc, env: Env): Promise<void> 
   if (edits.length) await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits });
 };
 
-export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<Obj | null> => {
-  const state = read(env); if (!state) return null;
-  try {
-    await provision(state, env);
-    const response = await fetch(`http://127.0.0.1:${state.port}${path}`, { method: 'POST', headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), ...(signal ? { signal } : {}) });
-    return response.ok ? obj(await response.json()) : null;
-  } catch { return null; }
+/** Closed, so a trace or tool result names why the helper did not answer without carrying its exception text. */
+export type ConnectionFailure = 'state_missing' | 'unreachable' | 'http_error' | 'timeout' | 'aborted' | 'invalid_reply';
+// The caller's signal decides cancellation: the MCP SDK aborts with a string reason, which fetch throws as is, without a name.
+const stopped = (e: unknown, other: ConnectionFailure, signal?: AbortSignal): ConnectionFailure =>
+  (e as Error | null)?.name === 'TimeoutError' || (signal?.reason as Error | null)?.name === 'TimeoutError' ? 'timeout'
+    : signal?.aborted || (e as Error | null)?.name === 'AbortError' ? 'aborted' : other;
+type HelperReply = { ok: true; value: Obj } | { ok: false; reason: ConnectionFailure };
+/** One POST to a local helper (the automatic connection or the managed bridge). */
+export const helperRequest = async (url: string, token: string, input: Obj, signal?: AbortSignal): Promise<HelperReply> => {
+  let response: Response;
+  try { response = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), ...(signal ? { signal } : {}) }); }
+  catch (e) { return { ok: false, reason: stopped(e, 'unreachable', signal) }; }
+  if (!response.ok) return { ok: false, reason: 'http_error' };
+  try { const value = obj(await response.json()); return value ? { ok: true, value } : { ok: false, reason: 'invalid_reply' }; }
+  catch (e) { return { ok: false, reason: stopped(e, 'invalid_reply', signal) }; }
 };
+export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<HelperReply> => {
+  const state = read(env); if (!state) return { ok: false, reason: 'state_missing' };
+  try { await provision(state, env); } catch (e) { return { ok: false, reason: stopped(e, 'unreachable') }; }
+  return helperRequest(`http://127.0.0.1:${state.port}${path}`, state.token, input, signal);
+};
+/** #287: every unanswered helper call leaves one failure row named by its closed reason, never by its exception or reply body. */
+export const recordConnectionFailure = (trace: TraceWriter | undefined, reason: ConnectionFailure, fields: Obj): boolean =>
+  trace?.write('failure', { host: 'codex', ...fields, error_first_line: `connection_${reason}`, connection_failure: reason }).ok === true;
 const healthy = async (state: Connection): Promise<boolean> => {
   try {
     const response = await fetch(`http://127.0.0.1:${state.port}/health`, { headers: { authorization: `Bearer ${state.token}` }, signal: AbortSignal.timeout(250) });
@@ -101,6 +120,8 @@ export const connectionDiagnostic = async (env: Env): Promise<{ state: 'disabled
   if (!state) return { state: existsSync(statePath(env)) ? 'invalid' : 'absent', version: null };
   return { state: await healthy(state) ? 'ready' : 'unreachable', version: (await import('../release-info.js')).packageVersion(state.root, 'codex') };
 };
+/** #282: whether a connection owner record exists. Its liveness proves nothing about the provider a session loaded; the MCP can start the helper independently. */
+export const connectionOwner = (env: Env): 'absent' | 'present' => existsSync(statePath(env)) ? 'present' : 'absent';
 const enabled = (env: Env): boolean => env['JEV_CODEX_AUTO_CONNECT'] !== '0' && env['JEV_CODEX_ENABLED'] !== '0' && !env['JEV_CODEX_BRIDGE_URL'];
 const packageVersion = (root: string): number => {
   try { const v = obj(JSON.parse(readFileSync(join(root, '.codex-plugin', 'plugin.json'), 'utf8')))?.['version']; const m = typeof v === 'string' && /^(\d+)\.(\d+)\.(\d+)$/.exec(v); return m ? Number(m[1]) * 1_000_000 + Number(m[2]) * 1000 + Number(m[3]) : -1; }
@@ -152,7 +173,7 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
   }
   writeFileSync(join(lock, 'pid'), String(process.pid), { mode: 0o600, flag: 'wx' });
   const previous = read(env);
-  const state: Connection = { version: 1, pid: process.pid, port: previous?.port ?? 0, token: previous?.token ?? randomBytes(32).toString('hex'), marker: previous?.marker ?? `[jev-gate compact ${randomBytes(24).toString('hex')}] Produce a factual compaction summary of the preceding conversation.`, root, original: {}, installed: {} };
+  const state: Connection = { version: 1, pid: process.pid, port: previous?.port ?? 0, token: previous?.token ?? randomBytes(32).toString('hex'), ...(previous?.marker ? { marker: previous.marker } : {}), root, original: {}, installed: {} };
   let session: Awaited<ReturnType<typeof startCodexSession>> | undefined;
   let timer: NodeJS.Timeout | undefined;
   let closing = false;
@@ -172,7 +193,7 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
     return plugin['localVersion'] === null || plugin['localVersion'] === undefined || plugin['localVersion'] === version ? 1 : 0;
   };
   try {
-    session = await startCodexSession({ env, cwd: home(env), ...(env['JEV_CODEX_CONNECTION_TEST_NO_AUTH'] === '1' ? { nativeAuth: false } : {}), connection: { token: state.token, marker: state.marker, port: state.port, ready: () => ready, restart: () => { void close(); } } });
+    session = await startCodexSession({ env, cwd: home(env), ...(env['JEV_CODEX_CONNECTION_TEST_NO_AUTH'] === '1' ? { nativeAuth: false } : {}), connection: { token: state.token, port: state.port, ready: () => ready, restart: () => { void close(); } } });
     state.port = Number(new URL(session.url).port);
     const user = await userConfig(session.rpc);
     if (!env['JEV_CODEX_UPSTREAM']) {

@@ -14,13 +14,14 @@ const hasZip = spawnSync('unzip', ['-v'], { encoding: 'utf8' }).status === 0;
 
 // The root README's install targets (#95, #98).
 const INSTALL_DOCS = [
+  '.claude-plugin/icon.png',
+  'LICENSE',
   'README.md',
   'AGENTS.md',
   'CHANGELOG.md',
   'docs/advanced-usage.md',
   'docs/bench-ab.md',
   'bench/ab/tasks.example.json',
-  'plugins/evidence/README.md',
   'plugins/codex/README.md',
   'mods/compact/README.md',
   'mods/router/README.md',
@@ -28,8 +29,6 @@ const INSTALL_DOCS = [
   'assets/readme/jev-gate-logo-dark.svg',
   'assets/readme/results.svg',
   'assets/readme/results-dark.svg',
-  'assets/readme/dashboard.svg',
-  'assets/readme/dashboard-dark.svg',
 ];
 
 const relativeReadmeLinks = (markdown: string): string[] => {
@@ -57,8 +56,6 @@ const expectReadmeLinksInside = (dir: string, rel = 'README.md') => {
 
 const expectInstallDocs = (dest: string) => {
   for (const rel of INSTALL_DOCS) expect(readFileSync(join(dest, rel), 'utf8').length, rel).toBeGreaterThan(20);
-  expect(readFileSync(join(dest, 'README.md'), 'utf8')).toContain('plugins/evidence/README.md#configure');
-  expect(readFileSync(join(dest, 'plugins/evidence/README.md'), 'utf8')).toMatch(/^## Configure$/m);
   for (const rel of INSTALL_DOCS.filter((f) => f.endsWith('.svg'))) expect(readFileSync(join(dest, rel), 'utf8'), rel).toMatch(/^<svg\b/);
   expectReadmeLinksInside(dest);
   expectReadmeLinksInside(dest, 'docs/advanced-usage.md');
@@ -71,13 +68,15 @@ beforeAll(() => {
   const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', join(pluginRoot, 'dist')], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
   mkdirSync(join(pluginRoot, 'docs'), { recursive: true });
-  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills', 'plugins/evidence/.claude-plugin', 'plugins/evidence/README.md', 'plugins/codex/README.md', 'assets/readme', 'README.md', 'AGENTS.md', 'CHANGELOG.md', 'docs/advanced-usage.md', 'docs/bench-ab.md', 'bench/ab/tasks.example.json', '.env.example', 'package.json']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
-  // The evidence bundle is build output, and the tests run before the build.
+  for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/codex/README.md', 'assets/readme', 'README.md', 'AGENTS.md', 'CHANGELOG.md', 'docs/advanced-usage.md', 'docs/bench-ab.md', 'bench/ab/tasks.example.json', '.env.example', 'package.json', 'LICENSE']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+  // The MCP server bundle is build output, and the tests run before the build.
   const evidence = spawnSync(process.execPath, [join(root, 'scripts', 'build-evidence.mjs'), join(pluginRoot, 'plugins', 'evidence', 'dist', 'server.mjs')], { encoding: 'utf8' });
   expect(evidence.status, evidence.stderr).toBe(0);
   // The classic Compact bundle is build output too (esbuild, outside tsc's rootDir).
   const classic = spawnSync(process.execPath, [join(root, 'scripts', 'build-claude-compact.mjs'), join(pluginRoot, 'dist', 'compact-hook.js')], { encoding: 'utf8' });
   expect(classic.status, classic.stderr).toBe(0);
+  const router = spawnSync(process.execPath, [join(root, 'scripts', 'build-claude-router.mjs'), join(pluginRoot, 'dist', 'router-observation-hook.js')], { encoding: 'utf8' });
+  expect(router.status, router.stderr).toBe(0);
 }, 60_000);
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -91,16 +90,16 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const archive = readdirSync(outDir).find((f) => /^jev-gate-.*\.zip$/.test(f));
     expect(archive).toBeDefined();
     const list = spawnSync('unzip', ['-Z1', join(outDir, archive!)], { encoding: 'utf8' }).stdout.trim().split('\n');
-    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier', 'planner', 'planner-frontier'].map((a) => `agents/${a}.md`);
-    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/compact-hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
+    const agents = ['worker-fast', 'worker', 'worker-deep', 'worker-frontier'].map((a) => `agents/${a}.md`);
+    for (const must of ['dist/entry.js', 'dist/hook.js', 'dist/compact-hook.js', 'dist/router-observation-hook.js', 'dist/jev.js', 'dist/brief.js', 'dist/cli.js', 'dist/job.js', 'dist/plan.js', 'hooks/hooks.json', ...agents, '.claude-plugin/plugin.json', ...INSTALL_DOCS]) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('agents/'))).toEqual([...agents].sort());
-    expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|secret)|claude-(?:models|candidates))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
-    // v0.6.0: the one plugin carries the two Mods from their source, the module that loads them, and the evidence
-    // server with its skill, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
+    expect(list.some((f) => f.startsWith('src/') && !/^src\/(?:cost|provider-prices(?:-data)?|route-cost|claude-cache|frontier-routing|router-(?:answers|selection|context|child-context|observation|secret)|claude-(?:models|candidates|dispatch))\.ts$/.test(f) || f.includes('/tests/') || f.startsWith('tests/') || f.startsWith('node_modules/') || f.startsWith('bench/') && f !== 'bench/ab/tasks.example.json' || f === 'HANDOFF.md' || f.includes('.env') && !f.endsWith('.env.example'))).toBe(false);
+    // v0.6.0: the one plugin carries the two Mods from their source, the module that loads them, and the MCP
+    // server bundle, at the paths plugin.json and hooks/register.ts name; no Mod manifest, test or declaration.
     // #95 adds the feature READMEs beside that source, not the Mod tests.
-    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) expect(list, must).toContain(must);
+    for (const must of ['hooks/register.ts', 'mods/compact/hooks/register.ts', 'mods/router/hooks/router.ts', 'plugins/evidence/dist/server.mjs']) expect(list, must).toContain(must);
     expect(list.filter((f) => f.startsWith('mods/') && !/^mods\/(compact|router)\/(?:hooks\/[a-z-]+\.ts|README\.md)$/.test(f))).toEqual([]);
-    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/README.md', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']);
+    expect(list.filter((f) => f.startsWith('plugins/'))).toEqual(['plugins/codex/README.md', 'plugins/evidence/dist/server.mjs']);
 
     const dest = join(tmp, 'installed here', 'jev gate');
     mkdirSync(dest, { recursive: true });
@@ -116,7 +115,8 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const env = { PATH: process.env['PATH'] ?? '', HOME: join(tmp, 'home'), JEV_GATE_MODE: 'auto' };
     const guidance = spawnSync('node "' + join(dest, 'dist', 'hook.js') + '"', { shell: true, cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: 'add a test' }) });
     expect(guidance.status).toBe(0);
-    expect(JSON.parse(guidance.stdout).hookSpecificOutput.additionalContext).toContain('coordinator guidance');
+    expect(guidance.stdout).toBe('');
+    expect(guidance.stderr).toBe('jev-gate: prompt_id_absent\n');
     const pre = spawnSync(process.execPath, [join(dest, 'dist', 'hook.js')], { cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's', tool_use_id: 't', tool_name: 'Agent', tool_input: { subagent_type: 'jev-gate:worker', description: 'd', prompt: 'p', run_in_background: false } }) });
     expect(pre).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: key_missing\n' });
     // #48 P2: hooks.json actually commands dist/entry.js, not dist/hook.js directly -- this is the one check in this
@@ -124,7 +124,8 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     // invoking dist/hook.js as if it were still the installed command.
     const viaEntry = spawnSync('node "' + join(dest, 'dist', 'entry.js') + '"', { shell: true, cwd: otherCwd, encoding: 'utf8', env, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: 'add a test' }) });
     expect(viaEntry.status).toBe(0);
-    expect(JSON.parse(viaEntry.stdout).hookSpecificOutput.additionalContext).toContain('coordinator guidance');
+    expect(viaEntry.stdout).toBe('');
+    expect(viaEntry.stderr).toBe('jev-gate: prompt_id_absent\n');
     const offViaEntry = spawnSync('node "' + join(dest, 'dist', 'entry.js') + '"', { shell: true, cwd: otherCwd, encoding: 'utf8', env: { ...env, JEV_GATE_MODE: 'off' }, input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: 'add a test' }) });
     expect(offViaEntry).toMatchObject({ status: 0, stdout: '', stderr: 'jev-gate: mode_off\n' });
     // The config-file-off variant (#48 P2): no JEV_GATE_MODE at all, only a config file saying mode:"off" under this
@@ -182,7 +183,8 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const outDir = join(tmp, 'pack router out');
     const otherCwd = join(tmp, 'other router cwd');
     mkdirSync(otherCwd, { recursive: true });
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--profile', 'router'], { cwd: otherCwd, encoding: 'utf8' });
+    // Use the fixture's built reader, independent of a prior or concurrent checkout build.
+    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--profile', 'router', '--root', pluginRoot], { cwd: otherCwd, encoding: 'utf8' });
     expect(pack.status, pack.stderr).toBe(0);
     const manifest = JSON.parse(readFileSync(join(root, 'mods', 'router', '.claude-plugin', 'plugin.json'), 'utf8')) as { name: string; version: string };
     expect(manifest.name).toBe('jev-gate-router');
@@ -190,9 +192,9 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const list = spawnSync('unzip', ['-Z1', join(outDir, `jev-gate-router-${manifest.version}.zip`)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const modules = readdirSync(join(root, 'mods', 'router', 'hooks')).filter((n) => n.endsWith('.ts'));
     const files = list.filter((f) => !f.endsWith('/')).sort();
-    expect(files).toEqual(['.claude-plugin/plugin.json', 'README.md', 'hooks/hooks.json', ...modules.map((n) => `hooks/${n}`), ...['cost','provider-prices','provider-prices-data','route-cost','claude-cache','router-answers','router-selection','router-context','router-child-context','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
-    // Declarations, host tests, compiled modules and agents stay out.
-    expect(list.some((f) => /^(types|tests|dist|agents)\//.test(f))).toBe(false);
+    expect(files).toEqual(['.claude-plugin/plugin.json', '.claude-plugin/icon.png', 'LICENSE', 'README.md', 'hooks/hooks.json', 'dist/router-observation-hook.js', ...modules.map((n) => `hooks/${n}`), ...['cost','provider-prices','provider-prices-data','route-cost','claude-cache','claude-dispatch','router-answers','router-selection','router-context','router-child-context','router-observation','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
+    // Only the bounded transcript reader is compiled; declarations, host tests and legacy agents stay out.
+    expect(list.filter(f => f !== 'dist/router-observation-hook.js').some((f) => /^(types|tests|dist|agents)\//.test(f))).toBe(false);
     const dest = join(tmp, 'router installed', 'jev router');
     mkdirSync(dest, { recursive: true });
     expect(dest.includes(' ')).toBe(true);
@@ -200,25 +202,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(spawnSync('unzip', ['-q', join(outDir, `jev-gate-router-${manifest.version}.zip`), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
     expectReadmeLinksInside(dest);
     expect(readFileSync(join(dest, 'README.md'), 'utf8')).toMatch(/^## Enable$/m);
-  });
-
-  it('packs evidence with a root readme whose relative links stay inside that archive', () => {
-    const outDir = join(tmp, 'pack evidence out');
-    const otherCwd = join(tmp, 'other evidence cwd');
-    mkdirSync(otherCwd, { recursive: true });
-    const pack = spawnSync(process.execPath, [join(root, 'scripts', 'pack.mjs'), outDir, '--root', pluginRoot, '--profile', 'evidence'], { cwd: otherCwd, encoding: 'utf8' });
-    expect(pack.status, pack.stderr).toBe(0);
-    const manifest = JSON.parse(readFileSync(join(pluginRoot, 'plugins', 'evidence', '.claude-plugin', 'plugin.json'), 'utf8')) as { version: string };
-    const archive = join(outDir, `jev-gate-evidence-${manifest.version}.zip`);
-    const list = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8' }).stdout.trim().split('\n').sort();
-    expect(list).toEqual(['.claude-plugin/plugin.json', 'README.md', 'dist/server.mjs', 'skills/evidence/SKILL.md']);
-    const dest = join(tmp, 'evidence installed', 'jev evidence');
-    mkdirSync(dest, { recursive: true });
-    expect(dest.includes(' ')).toBe(true);
-    expect(dest.startsWith(root)).toBe(false);
-    expect(spawnSync('unzip', ['-q', archive, '-d', dest], { encoding: 'utf8' }).status).toBe(0);
-    expectReadmeLinksInside(dest);
-    expect(readFileSync(join(dest, 'README.md'), 'utf8')).toMatch(/^## Configure$/m);
-    expect(existsSync(join(dest, 'dist', 'server.mjs'))).toBe(true);
+    expect(readFileSync(join(dest, 'hooks/router.ts'), 'utf8')).toContain("from '../src/claude-dispatch.ts'");
+    expect(readFileSync(join(dest, 'src/claude-dispatch.ts'), 'utf8')).toBe(readFileSync(join(root, 'src/claude-dispatch.ts'), 'utf8'));
   });
 });

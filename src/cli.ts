@@ -10,15 +10,16 @@ import { claudeConfigDir, claudeTraceDir } from './claude-setup.js';
 import { AUTH_CONFLICT_ENV, isSubscriptionOAuth, parseAuthStatus, subagentModelOverride, type CommandResult } from './auth.js';
 import { OWNED_AGENT_PROFILES } from './agents.js';
 import { foregroundDispatchPossible } from './brief.js';
-import { DEFAULT_CONFIG, effectiveDepthFloor, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
+import { DEFAULT_CONFIG, effectiveDepthFloor, IGNORED_KEYS, LEGACY_DEPTH_FLOOR, loadConfig, MIGRATION_SAMPLE, NATIVE_HOOK_TIMEOUT_MS, type ConfigResult } from './config.js';
 import { startDashboard, dashboardSources } from './dashboard.js';
 import { ensureDashboard, serveAutomaticDashboard } from './dashboard-launch.js';
 import { dashboardPreferenceCommand } from './dashboard-settings.js';
 import { recordingCommand, recordingStatus } from './recording.js';
 import { explainDir } from './explain.js';
-import { HOST_WINDOW_MAX, HOST_WINDOW_MIN, measuredCompactPoint, readHostCompactWindow, readHostWorktreeBaseRef, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
+import { HOST_WINDOW_MAX, HOST_WINDOW_MIN, measuredCompactPoint, readHostCompactWindow, readManagedSetting, readSettingsEnvVar, STANDARD_CONTEXT_WINDOW } from './host-window.js';
 import { jobsDir } from './job.js';
-import { LIVENESS_WINDOW, livenessPath, readLiveness } from './liveness.js';
+import { readLiveness } from './liveness.js';
+import { activityChecks, activityTraces, codexOwnerFacts } from './doctor-activity.js';
 import { OWNED_AGENTS, type Mode, type Tier } from './types.js';
 import { doctorChecks, finishDoctor, renderDoctor, readableFile, storageIssue, moduleIssues, dashboardDiagnostic, versionDiagnostic, type DoctorReport } from './doctor.js';
 import { checkRelease, unknownRelease, packageVersion } from './release-info.js';
@@ -36,7 +37,7 @@ export const runCommand = (cmd: string, args: string[], env: NodeJS.ProcessEnv =
 
 
 /**
- * #48 P0-2: derived, not hand-copied. The six owned rows come from `OWNED_AGENT_PROFILES` (src/agents.ts) with
+ * #48 P0-2: derived, not hand-copied. The four owned rows come from `OWNED_AGENT_PROFILES` (src/agents.ts) with
  * `model` read off `DEFAULT_CONFIG.models[tier]` -- the same table `gen-agents.mjs` writes frontmatter from -- so
  * this expectation and the packaged frontmatter can only agree or both be visibly wrong, never quietly disagree.
  */
@@ -84,16 +85,16 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       const servers = isRecord(manifest) && isRecord(manifest['mcpServers']) ? manifest['mcpServers'] : {};
       const evidence = servers['evidence'];
       const validMcp = isRecord(evidence) && evidence['command'] === 'node' && JSON.stringify(evidence['args']) === JSON.stringify(['${CLAUDE_PLUGIN_ROOT}/plugins/evidence/dist/server.mjs']);
-      say(validMcp ? 'ok' : 'fail', 'Evidence MCP: packaged server command and discovery path');
-      for (const rel of ['plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md']) say(readableFile(join(root, rel)) ? 'ok' : 'fail', `${rel}: readable regular file required`);
-      say(isRecord(manifest) && manifest['skills'] === './plugins/evidence/skills/' ? 'ok' : 'fail', 'Evidence skill: packaged discovery path');
+      say(validMcp ? 'ok' : 'fail', 'Plugin MCP: packaged server command and discovery path');
+      say(readableFile(join(root, 'plugins/evidence/dist/server.mjs')) ? 'ok' : 'fail', 'plugins/evidence/dist/server.mjs: readable regular file required');
       const hooks = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8')) as unknown;
       const modules = isRecord(hooks) ? hooks['modules'] : undefined;
       if (JSON.stringify(modules) !== JSON.stringify(['./register.ts'])) say('fail', 'Function Hooks: exactly one packaged hooks/register.ts module required');
       const issues = moduleIssues(root, 'hooks/register.ts');
       say(issues.length ? 'fail' : 'ok', `Function Hooks module dependencies: ${issues.length ? issues.join('; ') : 'packaged entry and relative imports readable'}`);
       const table = isRecord(hooks) && isRecord(hooks['hooks']) ? hooks['hooks'] : {};
-      // V5: PreToolUse guards every root tool, so it is registered once with no matcher; Stop records the terminal
+      // V5: PreToolUse is registered once with no matcher, because any root tool call also reconciles finished
+      // background workers; Stop records the terminal
       // outcome. SessionStart (#48 P2) is the liveness warning -- also no matcher, and registered unconditionally the
       // same as the others.
       // The classic Compact hooks (PreCompact, SessionStart on source compact, PostCompact) are a second entry point,
@@ -103,7 +104,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
         ['PreToolUse', null, 'entry'],
         ['PostToolUse', '^(Agent|TaskStop)$', 'entry'],
         ['PostToolUseFailure', '^Agent$', 'entry'],
-        ['SubagentStop', '^jev-gate:(?:worker(?:-fast|-deep|-frontier)?|planner(?:-frontier)?)$', 'entry'],
+        ['SubagentStop', '^jev-gate:worker(?:-fast|-deep|-frontier)?$', 'entry'],
         ['Stop', null, 'entry'],
         ['SessionStart', null, 'entry'],
         ['PreCompact', null, 'compact-hook'],
@@ -126,7 +127,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const agentsDir = join(root, 'agents');
     let files: string[] = []; try { files = readdirSync(agentsDir).filter((f) => f.endsWith('.md')); } catch { say('fail', 'agents/ is missing or unreadable'); }
     const extra = files.filter((f) => !(f in AGENT_EXPECTATIONS));
-    if (extra.length) say('warn', `agents/ contains extra definitions (${extra.join(', ')}); only the six owned profiles are V5 roles`);
+    if (extra.length) say('warn', `agents/ contains extra definitions (${extra.join(', ')}); only the four owned profiles are V5 roles`);
     for (const [file, exp] of Object.entries(AGENT_EXPECTATIONS)) {
       const p = join(agentsDir, file);
       if (!existsSync(p)) continue;
@@ -182,7 +183,10 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       return;
     }
     const c = loaded.config;
-    say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} plannerDefaultTier=${c.plannerDefaultTier} models=${JSON.stringify(c.models)} maxParallelWorkers=${c.maxParallelWorkers} guardAllowTools=${JSON.stringify(c.guardAllowTools)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} maxTasksPerPlan=${c.maxTasksPerPlan} admittedShape=${c.admittedShape} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} guardAllowMcp=${c.guardAllowMcp} verifyWorkerChecks=${c.verifyWorkerChecks}`);
+    let ignored: string[] = [];
+    try { const raw: unknown = JSON.parse(readFileSync(loaded.source, 'utf8')); if (isRecord(raw)) ignored = Object.keys(raw).filter((k) => IGNORED_KEYS.has(k)); } catch { /* defaults or env: no file */ }
+    if (ignored.length) say('info', `config ${loaded.source}: ${ignored.join(', ')} ${ignored.length === 1 ? 'is a withdrawn key' : 'are withdrawn keys'}: loaded, never read, and safe to delete`);
+    say('ok', `config ${loaded.source}: mode=${c.mode} jevModel=${c.jevModel} deadline=${c.requestDeadlineMs}ms floors={admission:${c.admissionConfidenceFloor},route:${c.routeConfidenceFloor}} models=${JSON.stringify(c.models)} routeQuestionShape=${c.routeQuestionShape} admissionQuestionShape=${c.admissionQuestionShape} delegationDepthFloor=${c.delegationDepthFloor === null ? 'null (derived)' : c.delegationDepthFloor} delegationDepthFraction=${c.delegationDepthFraction} delegationCoordinatorTurns=${c.delegationCoordinatorTurns} delegationWorkerTokensPerCall=${c.delegationWorkerTokensPerCall} verifyWorkerChecks=${c.verifyWorkerChecks} workerIsolation=${c.workerIsolation}`);
     if (c.admissionQuestionShape === 'atomic') {
       say(
         'info',
@@ -190,7 +194,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       );
     }
     if (c.routeQuestionShape === 'atomic') say('info', 'atomic Gate B: six core facts; yes >= 0.6, no <= 0.4; uncertain answers preserve the called profile; fast requires all cheap-work evidence; specific difficulty upgrades only fast/standard to deep');
-    if (c.admissionQuestionShape === 'atomic') say('info', `atomic admission execution: ${c.admittedShape === 'auto' && c.maxParallelWorkers === 1 ? 'single (no planner)' : c.admittedShape}; ${c.admittedShape === 'auto' && c.maxParallelWorkers > 1 ? 5 : 3} questions in one batch; selected execution is recorded before application`);
+    if (c.admissionQuestionShape === 'atomic') say('info', 'atomic admission execution: single; 4 questions in one batch; selected execution is recorded before application');
     /**
      * #48 P0-1: doctor resolves the same host window and effective floor the hook resolves on the auto path
      * (`effectiveDepthFloor` in src/config.ts), so what is printed here is the number that would actually gate the
@@ -230,20 +234,11 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       // per-hook-event process spawn -- that cost is the plugin being registered at all, and only disabling it removes it.
       say('warn', 'mode=off still starts a node process for every matched hook event (hooks.json registration is unconditional): to remove that cost too, disable the plugin with `claude plugin disable jev-gate@<marketplace>`');
     }
-    if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state and guard when orchestration starts, no Jev request');
-    if (c.mode === 'auto') say('info', 'mode=auto: admission and allocation gates send the request, the planned task and summaries of earlier worker replies to TypeSafe (may include source excerpts and prior constraints)');
+    if (c.mode === 'native') say('info', 'mode=native: guidance + owned profiles + job state when orchestration starts, no Jev request');
+    if (c.mode === 'auto') say('info', 'mode=auto: Gate A sends the current request; Gate B sends the composed single-worker packet to TypeSafe');
     say('info', `job state directory: ${jobsDir(env)} (0700, one 0600 file per session, removed after 7 days)`);
     if (env['JEV_GATE_EXPERIMENT_ADMISSION'] === 'orchestrated') say('warn', `JEV_GATE_EXPERIMENT_ADMISSION=orchestrated is set: every prompt starts an orchestrated job in ${c.mode} mode without a Gate A request (recorded as forced/admission_forced); allocation is unaffected`);
-    if (c.workerIsolation === 'worktree') {
-      let snapshot = false;
-      try { snapshot = JSON.stringify(JSON.parse(readFileSync(join(root, 'hooks', 'hooks.json'), 'utf8'))?.hooks?.WorktreeCreate).includes('/dist/worktree-cli.js'); } catch { /* Standalone/legacy adapters retain the native baseRef behavior. */ }
-      if (snapshot) say('info', 'workerIsolation=worktree: the installed WorktreeCreate hook snapshots current working files with a private index; root HEAD and index are preserved. No manual baseRef setting is needed');
-      else {
-      const baseRef = readHostWorktreeBaseRef(env, cwd);
-      if (baseRef.value === 'head') say('info', `workerIsolation=worktree with worktree.baseRef="head" (${baseRef.source}): every planned worker dispatch the hook patches also carries isolation: "worktree" (an ad-hoc or single-executor dispatch never does); whether the host actually gives that worker its own git worktree for a patched call is not yet observed`);
-      else say('warn', `workerIsolation=worktree is not in effect: host worktree.baseRef is ${baseRef.value === null ? (baseRef.source === 'unset' ? 'unset' : `unknown (${baseRef.source})`) : `"${baseRef.value}" (${baseRef.source})`}, so an isolated worker would start from origin/<default-branch> instead of this branch. The hook runs such turns as workerIsolation=none with one worker at a time; set "worktree": {"baseRef": "head"} in Claude Code settings to use it`);
-      }
-    } else say('info', `workerIsolation=${c.workerIsolation}: workers share the caller's working tree; maxParallelWorkers stays 1 under this setting`);
+    say('info', `workerIsolation=${c.workerIsolation}: ${c.workerIsolation === 'worktree' ? 'owned Agent patches request isolated worktrees; integrate their changes before final checks' : "workers share the caller's working tree"}`);
   };
 
   const checkClaude = (): string | null => {
@@ -293,6 +288,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     else say('warn', `Compact: host ${hostVersion} (>=2.1.299) + ${seat} -> function compact unavailable (the built-in security default passes it over for an installed plugin); classic path active (PreCompact steering, SessionStart restore, PostCompact record). It guides and supplements the native compaction and cannot replace it, so native summarization time remains. Gate and Router still run. If an administrator can enable jev-gate@<marketplace> in managed settings ("enabledPlugins"), the full function compact runs; see mods/compact/README.md`);
   };
 
+  let keyPresent = false;
   const checkEnv = (mode: Mode | null): void => {
     const conflicts = AUTH_CONFLICT_ENV.filter((k) => env[k]);
     say(conflicts.length ? 'warn' : 'ok', conflicts.length ? `auth-related env set: ${conflicts.join(', ')} (may replace subscription OAuth; jev-gate does not change it)` : 'no API-key/gateway/cloud env overrides detected');
@@ -310,8 +306,8 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const gated = mode === 'auto';
     const o = subagentModelOverride({ CLAUDE_CODE_SUBAGENT_MODEL: launch('CLAUDE_CODE_SUBAGENT_MODEL'), CLAUDE_CODE_SUBAGENT_MODEL_FORCE: launch('CLAUDE_CODE_SUBAGENT_MODEL_FORCE') });
     const overrideEffect = gated ? `mode=${mode} stays native on every prompt as host_unsupported and sends no Jev request` : 'eligible calls are preserved (no routing)';
-    if (o.force) say(gated ? 'fail' : 'warn', `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1: every subagent model is overridden; ${overrideEffect}`);
-    else if (o.concrete) say(gated ? 'fail' : 'warn', `CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; ${overrideEffect}`);
+    if (o.force) say(gated ? 'fail' : 'warn', `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=${launch('CLAUDE_CODE_SUBAGENT_MODEL_FORCE')?.trim()}: every subagent model is overridden; ${overrideEffect}`);
+    else if (o.concrete) say('info', `CLAUDE_CODE_SUBAGENT_MODEL=${o.value} is the default model of a child that names none; owned roles and routed spawns override it`);
     else if (o.value === 'inherit') say('info', 'CLAUDE_CODE_SUBAGENT_MODEL=inherit is treated as unset on v2.1.196+ (harmless)');
     else say('ok', 'no CLAUDE_CODE_SUBAGENT_MODEL override');
     const fork = launch('CLAUDE_CODE_FORK_SUBAGENT');
@@ -330,7 +326,7 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
     const keyEnv = { ...env, TYPESAFE_API_KEY: launch('TYPESAFE_API_KEY') };
     const overrideKey = apiKeyOverride(keyEnv);
     if (overrideKey?.trim() && !validApiKey(overrideKey)) say('fail', 'Jev API key override has an invalid format (value hidden)', 'Correct or remove the explicit key override; it takes precedence over the private credential store.');
-    const key = resolveApiKey(keyEnv);
+    const key = resolveApiKey(keyEnv); keyPresent = !!key;
     say('info', 'Router automatic Fable default: off; active routerAllowFable is controlled by the host plugin options. Capabilities do not establish account access; missing response model/effort remains unknown.');
     say('info', `Router launch pins: model=${launch('ANTHROPIC_MODEL')?.trim() ? 'present' : 'absent'}; effort=${launch('CLAUDE_CODE_EFFORT_LEVEL')?.trim() ? 'present' : 'absent'} (values hidden; injector source unknown). Starting with /model or --model establishes a baseline, not a permanent routing pin.`);
     let installed = 'unknown'; try { const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8')); if (typeof manifest.version === 'string' && /^\d+\.\d+\.\d+$/.test(manifest.version)) installed = manifest.version; } catch { /* metadata unknown */ }
@@ -348,27 +344,10 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
       if (!isRecord(s)) return;
       if ('apiKeyHelper' in s) say('warn', 'settings.json has apiKeyHelper: the session may not use subscription OAuth');
       const env = isRecord(s['env']) ? Object.keys(s['env']) : [];
-      const risky = env.filter((k) => k.startsWith('ANTHROPIC_') || k.startsWith('CLAUDE_CODE_SUBAGENT_MODEL') || k === 'CLAUDE_CODE_FORK_SUBAGENT' || k === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS');
+      const risky = env.filter((k) => k.startsWith('ANTHROPIC_') || k === 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE' || k === 'CLAUDE_CODE_FORK_SUBAGENT' || k === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS');
       if (risky.length) say('warn', `settings.json env sets ${risky.join(', ')} (names only; not modified)`);
     } catch {
       say('warn', 'cannot parse ~/.claude/settings.json');
-    }
-  };
-
-  /**
-   * #48 P2: the same ring SessionStart reads, surfaced in doctor so `jev-gate doctor` alone answers "is Gate A ever
-   * firing" without waiting for a session to start (or for the warning's own 50-decision window to fill first).
-   */
-  const checkLiveness = (): void => {
-    const state = readLiveness(env);
-    if (state === null) {
-      say('info', `liveness: no record yet at ${livenessPath(env)} (written by the first auto-mode admission decision)`);
-      return;
-    }
-    const attempted = state.recent.filter((e) => e.attempted).length;
-    say('info', `liveness: ${state.recent.length}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, ${attempted} attempted a Gate A call`);
-    if (state.recent.length >= LIVENESS_WINDOW && attempted === 0) {
-      say('warn', `liveness: the last ${state.recent.length} auto-mode admission decisions never attempted a Gate A call -- same condition SessionStart's systemMessage warns about`);
     }
   };
 
@@ -395,13 +374,14 @@ export const claudeDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: st
   inspect('environment', () => checkEnv(loaded.ok ? loaded.config.mode : null));
   report.group('configuration');
   inspect('host settings', checkUserSettings);
-  report.group('activity');
-  inspect('liveness', checkLiveness);
+  // Fixed reminders, not observations: shown with --verbose only, by the package group's detail visibility.
+  report.group('package');
   say('info', `in Claude Code: /hooks should list seven jev-gate lifecycle entries (UserPromptSubmit, PreToolUse with no matcher, PostToolUse on ^(Agent|TaskStop)$, PostToolUseFailure on ^Agent$, Stop, SessionStart, owned SubagentStop); the @agent- typeahead should show ${Object.keys(OWNED_AGENTS).join(', ')} once each`);
   say('info', `start: JEV_GATE_MODE=auto CLAUDE_CODE_FORK_SUBAGENT=0 claude --model sonnet --plugin-dir "${root}"  (doctor performed no inference; a passing doctor is not proof of patch support, effort support or model access)`);
   report.group('storage');
   inspect('storage', () => { for (const path of [jobsDir(env), claudeTraceDir(env)]) { const issue = storageIssue(path); say(issue ? 'fail' : 'ok', `storage: ${path}: ${issue ?? 'readable/writable or creatable (not created by doctor)'}`); } });
   report.group('activity');
+  inspect('activity', () => { for (const c of activityChecks({ traces: activityTraces(env), now: Date.now(), installed: packageVersion(root, 'claude'), recording: recordingStatus(env).enabled, keyPresent, codexOwner: codexOwnerFacts(env), liveness: readLiveness(env) })) say(c.level, c.message, c.action ?? undefined); });
   const dashboard = await dashboardDiagnostic(env); say(dashboard.level, dashboard.message);
   report.group('version');
   const release = options.checkUpdate ? await checkRelease() : unknownRelease();

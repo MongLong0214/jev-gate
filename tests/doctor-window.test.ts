@@ -7,9 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { LIVENESS_WINDOW, appendLiveness } from '../src/liveness.js';
 
 /**
- * #48 P0-1/P2: doctor's own resolution of the effective depth floor and the liveness ring, exercised as a real
+ * #48 P0-1/P2, #279: doctor's own resolution of the effective depth floor and its activity checks, exercised as a real
  * process against the compiled CLI -- the same way tests/hook.test.ts's "dist/hook.js (process)" block treats
- * hook.ts, and for the same reason: `checkConfig`/`checkLiveness` are not exported, so the only way to see their
+ * hook.ts, and for the same reason: `checkConfig` and the activity wiring are not exported, so the only way to see their
  * FAIL/WARN output is to run `doctor` itself.
  */
 let out: string;
@@ -22,7 +22,7 @@ beforeAll(() => {
   out = join(root, 'dist');
   const r = spawnSync(process.execPath, [join(__dirname, '..', 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(__dirname, '..', 'tsconfig.json'), '--outDir', out], { encoding: 'utf8' });
   expect(r.status, r.stdout + r.stderr).toBe(0);
-  for (const d of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
+  for (const d of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src']) cpSync(join(__dirname, '..', d), join(root, d), { recursive: true });
   mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
   writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
   writeFileSync(join(out, 'compact-hook.js'), '// Fake classic compact bundle; Doctor only checks that it is there.\n');
@@ -109,39 +109,26 @@ describe('doctor: effective depth floor (#48 P0-1)', () => {
   it('prints delegationDepthFraction alongside the raw config summary', () => {
     const stdout = doctor({});
     expect(stdout).toMatch(/delegationDepthFloor=0 delegationDepthFraction=0\.6/);
-    expect(stdout).toMatch(/admittedShape=auto delegationCoordinatorTurns=11 delegationWorkerTokensPerCall=40000 guardAllowMcp=true verifyWorkerChecks=true/);
+    expect(stdout).toMatch(/delegationCoordinatorTurns=11 delegationWorkerTokensPerCall=40000 verifyWorkerChecks=true workerIsolation=none$/m);
   });
 });
 
-describe('doctor: liveness (#48 P2)', () => {
-  it('reports no record yet on a fresh install', () => {
-    const stateDir = mktemp();
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(/\[info\] liveness: no record yet at .*liveness\.json/);
+describe('doctor: activity from trace records (#279)', () => {
+  it('warns 추적 불가 with no trace records, and keeps fixed reminders behind --verbose', () => {
+    const env = { PATH: '/nonexistent', HOME: mktemp(), JEV_GATE_TRACE_DIR: mktemp() };
+    const r = spawnSync(process.execPath, [join(out, 'cli.js'), 'doctor'], { cwd: mktemp(), encoding: 'utf8', env });
+    expect(r.stdout).toMatch(/\[warn\] activity: 추적 불가 \(untrackable\) -- no trace records in the last 24 h/);
+    expect(r.stdout).not.toMatch(/\/hooks should list|start: JEV_GATE_MODE=auto/);
+    expect(r.stdout).not.toMatch(/Local readiness only|missing observations do not establish/);
   });
 
-  it('reports counts without warning below a full window', () => {
-    const stateDir = mktemp();
-    for (let i = 0; i < LIVENESS_WINDOW - 1; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(new RegExp(`\\[info\\] liveness: ${LIVENESS_WINDOW - 1}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, 0 attempted`));
-    expect(stdout).not.toMatch(/liveness:.*\[warn\]/);
-  });
-
-  it('warns when a full window never attempted a call, matching SessionStart', () => {
-    const stateDir = mktemp();
+  it('folds the liveness ring into gate_a: a full window that never called Jev warns', () => {
+    const stateDir = mktemp(), traceDir = mktemp();
     for (let i = 0; i < LIVENESS_WINDOW; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(/\[warn\] liveness: the last 50 auto-mode admission decisions never attempted a Gate A call/);
-  });
-
-  it('does not warn when at least one of a full window attempted a call', () => {
-    const stateDir = mktemp();
-    for (let i = 0; i < LIVENESS_WINDOW - 1; i++) appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: `t${i}`, attempted: false, reason: 'depth_below_floor' });
-    appendLiveness({ JEV_GATE_STATE_DIR: stateDir }, { at: 'last', attempted: true, reason: null });
-    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir });
-    expect(stdout).toMatch(new RegExp(`liveness: ${LIVENESS_WINDOW}/${LIVENESS_WINDOW} recent auto-mode decisions recorded, 1 attempted`));
-    expect(stdout).not.toMatch(/liveness:.*never attempted/);
+    writeFileSync(join(traceDir, 'admission_result-1.json'), JSON.stringify({ phase: 'admission_result', attempted: false, decision: { shape: 'direct', reason: 'depth_below_floor' }, written_at: new Date().toISOString() }));
+    const stdout = doctor({ JEV_GATE_STATE_DIR: stateDir, JEV_GATE_TRACE_DIR: traceDir });
+    expect(stdout).toMatch(/\[warn\] gate_a: 1 decisions, 0 Jev calls, 0 orchestrated; .*liveness 0\/50 recent auto-mode decisions called Jev/);
+    expect(stdout).not.toMatch(/\] liveness:/);
   });
 });
 
@@ -167,29 +154,12 @@ describe('doctor: mentions all seven lifecycle hooks', () => {
   });
 });
 
-describe('doctor: worker isolation base (#48 P1-2 review)', () => {
-  const isolated = (): string => configFile({ version: 5, mode: 'auto', maxParallelWorkers: 2, workerIsolation: 'worktree', guardAllowTools: ['Bash'] });
-  const configDir = (settings: unknown): string => {
-    const dir = mktemp();
-    writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings));
-    return dir;
-  };
-
-  it('reports automatic snapshot isolation without a host base ref', () => {
-    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: mktemp() });
-    expect(stdout).toMatch(/\[info\] workerIsolation=worktree: the installed WorktreeCreate hook snapshots current working files/);
-  });
-
-  it('uses the integrated snapshot hook even when native baseRef is fresh', () => {
-    const dir = configDir({ worktree: { baseRef: 'fresh' } });
-    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: dir });
-    expect(stdout).toContain('No manual baseRef setting is needed');
-  });
-
-  it('reports snapshot isolation with native baseRef head', () => {
-    const stdout = doctor({ JEV_GATE_CONFIG: isolated(), CLAUDE_CONFIG_DIR: configDir({ worktree: { baseRef: 'head' } }) });
-    expect(stdout).toContain('root HEAD and index are preserved');
-    expect(stdout).not.toMatch(/is not in effect/);
+describe('doctor: withdrawn config keys', () => {
+  it('names a withdrawn key as loaded and unread, without saying which change withdrew it', () => {
+    const stdout = doctor({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto', resultConfidenceFloor: 0.8, workerIsolation: 'worktree' }) });
+    expect(stdout).toMatch(/\[info\] config .*: resultConfidenceFloor is a withdrawn key: loaded, never read, and safe to delete/);
+    expect(stdout).toContain('workerIsolation=worktree');
+    expect(stdout).not.toContain('#289');
   });
 });
 
@@ -243,12 +213,19 @@ describe('doctor: a launch profile that lets an admitted job reach a worker (#48
     expect(expectFail(doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }) }, cwd))).toContain('fork=1');
   });
 
-  it('fails in auto mode under a subagent model override, which every owned Agent call refuses', () => {
-    const r = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_SUBAGENT_MODEL: 'opus' });
+  it('fails in auto mode under a forced subagent model, which every owned Agent call refuses', () => {
+    const forced = { CLAUDE_CODE_SUBAGENT_MODEL: 'opus', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' };
+    const r = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CODE_FORK_SUBAGENT: '0', ...forced });
     expect(r.status).toBe(1);
-    expect(r.stdout).toMatch(/\[fail\] CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; mode=auto stays native on every prompt as host_unsupported/);
-    const off = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'off' }), CLAUDE_CODE_SUBAGENT_MODEL: 'opus' });
-    expect(off.stdout).toMatch(/\[warn\] CLAUDE_CODE_SUBAGENT_MODEL is a concrete override; eligible calls are preserved/);
+    expect(r.stdout).toMatch(/\[fail\] CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1: every subagent model is overridden; mode=auto stays native on every prompt as host_unsupported/);
+    const off = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'off' }), ...forced });
+    expect(off.stdout).toMatch(/\[warn\] CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1: every subagent model is overridden; eligible calls are preserved/);
+  });
+
+  it('reports a concrete subagent model without _FORCE as the default of a child that names none', () => {
+    const r = doctorRun({ JEV_GATE_CONFIG: configFile({ version: 5, mode: 'auto' }), CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_SUBAGENT_MODEL: 'opus' });
+    expect(r.stdout).toMatch(/\[info\] CLAUDE_CODE_SUBAGENT_MODEL=opus is the default model of a child that names none; owned roles and routed spawns override it/);
+    expect(r.stdout).not.toMatch(/\[(fail|warn)\][^\n]*SUBAGENT_MODEL/);
   });
 
   it('reads the profile from the user settings env too, and lets it win over the shell', () => {

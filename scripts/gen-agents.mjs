@@ -2,7 +2,7 @@
 // `OWNED_AGENT_PROFILES` table (src/agents.ts) and `DEFAULT_CONFIG.models` (src/config.ts) -- the same table doctor's
 // `checkModelAuthority` reads -- so the packaged frontmatter and that table cannot quietly drift apart.
 // It also writes each profile's `disallowedTools` and `omitClaudeMd: true` and removes any `tools` list, so host tools
-// and connected MCPs stay inherited; every other frontmatter field and the whole body are left untouched.
+// and connected MCPs stay inherited; every other frontmatter field and body text except the shared isolation instruction are left untouched.
 // Usage: node scripts/gen-agents.mjs [--check]   (requires `npm run build` first: it reads dist/, not src/)
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -17,7 +17,7 @@ if (!existsSync(distAgents) || !existsSync(distConfig)) {
   process.stderr.write('gen-agents: dist/agents.js or dist/config.js is missing -- run npm run build first\n');
   process.exit(1);
 }
-const { OWNED_AGENT_PROFILES } = await import(`${distAgents}?t=${Date.now()}`);
+const { OWNED_AGENT_PROFILES, ISOLATION_COMMIT_INSTRUCTION } = await import(`${distAgents}?t=${Date.now()}`);
 const { DEFAULT_CONFIG } = await import(`${distConfig}?t=${Date.now()}`);
 
 let drift = false;
@@ -40,7 +40,7 @@ for (const profile of OWNED_AGENT_PROFILES) {
   const model = DEFAULT_CONFIG.models[profile.tier];
   const effort = profile.effort;
   const head = text.slice(0, end);
-  const tail = text.slice(end);
+  const tail = text.slice(end).replace(/(or discard existing changes unless the user request explicitly asks for it\.)(?:\nA `\[Jev Gate isolation\]`[^\n]*)?/, `$1\n${ISOLATION_COMMIT_INSTRUCTION}`);
 
   let nextHead = /^model:.*$/m.test(head) ? head.replace(/^model:.*$/m, `model: ${model}`) : `${head}\nmodel: ${model}`;
   if (effort === null) {

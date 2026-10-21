@@ -1,7 +1,12 @@
 {
   "name": "jev-gate",
-  "version": "0.8.31",
-  "description": "Jev Gate, Router, Compact and Evidence for native Codex.",
+  "version": "0.8.32",
+  "license": "MIT",
+  "interface": {
+    "logo": "./assets/icon.png",
+    "composerIcon": "./assets/icon.png"
+  },
+  "description": "Jev Gate and Router for native Codex.",
   "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }

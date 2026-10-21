@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { HttpReply } from '../../mods/router/hooks/client.ts';
@@ -5,8 +8,14 @@ import { JEV_ENDPOINT, JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { resolveConfig } from '../../mods/router/hooks/config.ts';
 import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import { offerableEfforts, TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
-import type { RootRecord, SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
+import type { HostPins, RootRecord, SpawnEvent, SpawnOutcome, TurnStepEvent } from '../../mods/router/hooks/router.ts';
 import { cachePatch, createRouter, hostSupported, ROUTER_HOOK_VERSION, VERIFIED_HOST } from '../../mods/router/hooks/router.ts';
+import { createRecorder } from '../../mods/router/hooks/recording.ts';
+import { activityChecks } from '../../src/doctor-activity.js';
+import { loadActivity } from '../../src/activity.js';
+import { sessionFacts } from '../../src/bench/ab.js';
+import { buildOperations } from '../../src/operations.js';
+import { normalizeUsage } from '../../src/cost.ts';
 import type { Responder } from './fake-engine.ts';
 import { answering, choice, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext, warmRoot } from './fake-engine.ts';
 
@@ -372,7 +381,7 @@ describe('root effort', () => {
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', assessment: 'timeout', sent: true }));
     // What the late reply cost is still recorded, against the turn that asked, under the short trace keys (`input`, not
     // `input_tokens`).
-    expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', usage: { input: 900, output: 40 } });
+    expect(f.logs).toContainEqual({ event: 'late', scope: 'root', turn: 't1', jev_model: JEV_MODEL, usage: { input: 900, output: 40 } });
   });
 
   it('stops asking for the rest of the activation after a 401, including one that arrives late', async () => {
@@ -481,6 +490,54 @@ describe('root effort', () => {
     await drain(during.turnStep(g.engine, step(), n.next));
     expect(n.calls).toEqual([step()]);
     expect(g.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 0, reason: 'effort_pinned' });
+  });
+
+  it('keeps a routed root turn routed past a subagent run that raises its own turn.start (#283)', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const first = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step(), first.next));
+    expect(first.calls[0]?.effort).toBe('low');
+    // 2.1.300+ starts a turn for each Agent, SendMessage or forked Skill run, carrying its agentId.
+    router.turnStart({ turnId: 'child-run', text: 'Find the failing test and repair it.', agentId: 'a70a7c70ce9c8992d' });
+    const second = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ index: 1 }), second.next));
+    expect(second.calls).toEqual([step({ index: 1, effort: 'low' })]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'prepared', turn: 't1', index: 1, routed: true }));
+  });
+
+  it('records why a routed root turn goes out native, once, where no record said so as it stopped (#283)', async () => {
+    const routed = async () => {
+      const router = createRouter(configOf(EFFORT_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
+      router.turnStart({ turnId: 't1', text: TEXT });
+      await drain(router.turnStep(f.engine, step(), streamNext<TurnStepEvent>().next));
+      const later = async (index: number) => { const n = streamNext<TurnStepEvent>(); await drain(router.turnStep(f.engine, step({ index }), n.next)); return n.calls[0]; };
+      return { router, f, later };
+    };
+    const stops = (f: { logs: Record<string, unknown>[] }) => f.logs.filter(l => l['event'] === 'root_stop');
+
+    const reset = await routed();
+    reset.router.contextChanged();
+    expect(await reset.later(1)).toEqual(step({ index: 1 }));
+    await reset.later(2);
+    expect(stops(reset.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'context_reset' }]);
+
+    const next = await routed();
+    next.router.turnStart({ turnId: 't2', text: TEXT });
+    expect(await next.later(1)).toEqual(step({ index: 1 }));
+    expect(stops(next.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'next_turn' }]);
+
+    const failing = await routed();
+    failing.f.engine.availableModels = () => { throw new Error('host read failed'); };
+    expect(await failing.later(1)).toEqual(step({ index: 1 }));
+    expect(stops(failing.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'internal_error' }]);
+
+    const ended = await routed();
+    ended.router.sessionEnd();
+    expect(await ended.later(1)).toEqual(step({ index: 1 }));
+    expect(stops(ended.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'session_ended' }]);
   });
 
   it('keeps the selected request independent of missing or mismatched response diagnostics', async () => {
@@ -843,6 +900,9 @@ describe('spawn model', () => {
     expect(await router.agentSpawn(f.engine, spawn({ tool_use_id: 'tu2' }), other.next)).toEqual({ model: 'claude-sonnet-5-5' });
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_result', denied: true }));
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_result', reason: 'model_mismatch', requested: 'claude-haiku-5-5', observed: 'claude-sonnet-5-5' }));
+    const records = f.logs.map(r => ({ ...r, phase: 'mod_router', session_id: 'spawn-mismatch', written_at: new Date().toISOString() }));
+    const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+    expect(checks.find(c => c.message.startsWith('router_applied:'))).toMatchObject({ level: 'fail', message: expect.stringContaining('1 answered by another model family') });
   });
 
   it('stays native when a pin or the allowlist changes while Jev answers', async () => {
@@ -864,6 +924,20 @@ describe('spawn model', () => {
       await run;
       expect(n.calls, reason).toEqual([spawn()]);
       expect(f.logs, reason).toContainEqual({ event: 'spawn_stop', tool_use_id: 'tu1', reason, requested: 'claude-haiku-5-5' });
+      // The `spawn` receipt is the applied route, so a stop writes none: the dashboard shows no change, and the sent
+      // intent leaves the bench's Jev cost unknown rather than 0.
+      expect(f.logs.some(r => r['event'] === 'spawn'), reason).toBe(false);
+      const at = '2026-10-20T00:00:00.000Z';
+      const view = buildOperations([], f.logs.map(rec => ({ at, component: 'router' as const, rec: { ...rec, session_id: 's' } })), new Date(at), { trace: true });
+      const steps = view.runs.flatMap(r => r.steps);
+      expect(steps.find(s => s.title === 'Router · Agent 판단 중단')?.summary, reason).toBe(reason);
+      expect(JSON.stringify(steps), reason).not.toMatch(/설정 변경|claude-haiku-5-5/);
+      // The decision closes its request: it is not left waiting for an answer.
+      expect(steps.filter(s => s.state === 'active' || s.state === 'unconfirmed'), reason).toEqual([]);
+      const dir = mkdtempSync(join(tmpdir(), 'router-receipt-'));
+      f.logs.forEach((r, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify({ ...r, phase: 'mod_router', session_id: 's', invocation_id: String(i) })));
+      expect(sessionFacts(dir, 's'), reason).toMatchObject({ jevRequests: 1, jevInput: null, jevCost: null });
+      rmSync(dir, { recursive: true });
     }
   });
 
@@ -995,8 +1069,65 @@ describe('spawn model', () => {
     expect(JSON.stringify(f.logs)).not.toContain(type);
   });
 
+  it("compares a built-in that names no model with the host's default subagent model, not its parent's", async () => {
+    const run = async (subagentDefault: string, tier: string) => {
+      const router = createRouter(configOf(SPAWN_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: [tier, 0.95], effort: ['high', 0.95] }), pins: { subagentDefault } });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      const e = spawn({ subagentType: 'general-purpose' });
+      const n = spawnNext();
+      await router.agentSpawn(f.engine, e, n.next);
+      return { e, calls: n.calls, logs: f.logs };
+    };
+    // Under an Opus parent: read as Opus, a standard answer was a move down to Sonnet, above the Haiku the host runs.
+    const up = await run('haiku', 'standard');
+    expect(up.calls).toEqual([up.e]);
+    expect(up.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-haiku-5-5', reasons: expect.objectContaining({ model: 'tool_ceiling' }) }));
+    const down = await run('opus', 'fast');
+    expect(down.calls).toEqual([{ ...down.e, model: 'claude-sonnet-5-5' }]);
+    expect(down.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-opus-5-5' }));
+  });
+
+  it.each(['general-purpose', 'claude'])("%s: checks the host's default subagent model, not the parent's, for a restricted baseline", async type => {
+    const run = async (parentModel: string, subagentDefault: string, envKey: string | undefined) => {
+      const router = createRouter(configOf({ ...SPAWN_ONLY, allowFable: false }));
+      // A move up, which the child's tools hold.
+      const f = fakeEngine({ envKey, respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['high', 0.95] }), pins: { subagentDefault } });
+      router.agentOffer(OFFER_BUILT_IN(type));
+      const e = spawn({ subagentType: type, parentModel });
+      const n = spawnNext(() => ({ model: 'claude-haiku-5-5', agentId: 'child' }));
+      return { e, out: await router.agentSpawn(f.engine, e, n.next), calls: n.calls, f };
+    };
+    for (const key of [FAKE_KEY, undefined]) {
+      // Under a Fable parent the child runs on its Haiku default, which may still be sent.
+      const kept = await run('claude-fable-5-1', 'haiku', key);
+      expect(kept.out).toEqual({ model: 'claude-haiku-5-5', agentId: 'child' });
+      expect(kept.calls).toEqual([kept.e]);
+      expect(kept.f.sent).toHaveLength(key ? 1 : 0);
+    }
+    // Under an Opus parent the child would run on its Fable default, which may not.
+    const refused = await run('claude-opus-5-5', 'claude-fable-5-1', undefined);
+    expect(refused.out).toEqual({ deny: 'Restricted automatic child disabled; continue in the main session.' });
+    expect(refused.calls).toEqual([]);
+    expect(refused.f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_denied', reason: 'restricted_baseline' }));
+  });
+
+  it.each(['general-purpose', 'claude'].flatMap(type => ['project', 'plugin'].map(kind => [type, kind] as const)))("%s: a %s agent of that name is not the built-in, so the host's default does not apply to it", async (type, kind) => {
+    const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false, allowFable: false }));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }), pins: { subagentDefault: 'claude-fable-5-1' } });
+    f.engine.agentModel = async () => 'opus';
+    // A project's file is listed under its own source; a plugin's is a built-in listing served by another provider.
+    router.agentOffer(kind === 'project' ? { agent: type, source: 'projectSettings', provider: { plugin: 'engine', tier: 'core' } } : OFFER_BUILT_IN(type));
+    const e = spawn({ subagentType: type, parentModel: 'claude-opus-5-5', ...(kind === 'plugin' ? { provider: { plugin: 'someone', tier: 'append' } } : {}) });
+    const n = spawnNext();
+    // The agent's own model is opus: the host's Fable default is not its model, so nothing here may refuse the call.
+    expect(await router.agentSpawn(f.engine, e, n.next)).toEqual({ model: 'claude-opus-5-5' });
+    expect(n.calls).toEqual([e]);
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'definition_unverified' }));
+  });
+
   describe('a custom agent\'s file model', () => {
-    const custom = (declared: string | null, over: Partial<SpawnEvent> = {}, tier = 'standard', edits = true) => {
+    const custom =(declared: string | null, over: Partial<SpawnEvent> = {}, tier = 'standard', edits = true) => {
       const router = createRouter(configOf(SPAWN_ONLY));
       const f = fakeEngine({ respond: answering({ ...CLEAR, tier: [tier, 0.95], effort: ['high', 0.95] }) });
       const read: string[] = [];
@@ -1042,16 +1173,80 @@ describe('spawn model', () => {
       expect(n.calls).toEqual([e]);
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', from: 'claude-opus-5-5', model_asked: false }));
     });
-    it('sends nothing for a SendMessage resumption, and asks no model when resumption cannot be read', async () => {
-      for (const resumes of [async () => true, async () => { throw new Error('list unavailable'); }]) {
-        const { router, f, e } = custom('opus', { name: 'aaabb33b14b57a515' });
-        f.engine.resumes = resumes;
-        const n = spawnNext();
-        await router.agentSpawn(f.engine, e, n.next);
-        expect(n.calls).toEqual([e]);
-        expect(f.sent).toHaveLength(0);
-        expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'resumed' }));
+    it('sends nothing for a confirmed SendMessage resumption', async () => {
+      const { router, f, e } = custom('opus', { name: 'aaabb33b14b57a515' });
+      f.engine.resumes = async () => true;
+      const n = spawnNext();
+      await router.agentSpawn(f.engine, e, n.next);
+      expect(n.calls).toEqual([e]);
+      expect(f.sent).toHaveLength(0);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'resumed' }));
+    });
+    it('routes a named custom agent normally when its resumption lookup fails', async () => {
+      const { router, f, e } = custom('opus', { name: 'reviewer' });
+      f.engine.resumes = async () => { throw new Error('list unavailable'); };
+      const n = spawnNext();
+      await router.agentSpawn(f.engine, e, n.next);
+      expect(n.calls).toEqual([{ ...e, model: 'claude-sonnet-5-5' }]);
+      expect(f.sent).toHaveLength(1);
+      expect(f.logs).not.toContainEqual(expect.objectContaining({ skipped: 'resumed' }));
+    });
+    it.each(['error', 'timeout'] as const)('returns dispatch policy denial for a new named Gate worker after resumption lookup %s', async failure => {
+      const { router, f, e } = custom('inherit', { name: 'reviewer', subagentType: 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' } });
+      const pending = deferred<boolean>();
+      const pairs: string[] = [];
+      f.engine.resumes = failure === 'timeout' ? () => pending.promise : async () => { throw new Error('list unavailable'); };
+      const deny = 'Dispatch ownership denied; no child started.';
+      f.engine.dispatchPair = async id => { pairs.push(id); return { deny }; };
+      const n = spawnNext();
+      const run = router.agentSpawn(f.engine, e, n.next);
+      if (failure === 'timeout') {
+        await settle();
+        f.clock.ms += configOf(SPAWN_ONLY).timeoutMs;
+        f.expire();
       }
+      expect(await run).toEqual({ deny });
+      pending.resolve(true);
+      await settle();
+      expect(e.resume).toBeUndefined();
+      expect(n.calls).toEqual([]);
+      expect(pairs).toEqual(['tu1']);
+      expect(f.sent).toHaveLength(0);
+      expect(f.logs).toContainEqual({ event: 'spawn_denied', tool_use_id: 'tu1', type: 'jev-gate:worker', reason: 'policy_denied' });
+      expect(f.logs).not.toContainEqual(expect.objectContaining({ skipped: 'resumed' }));
+    });
+    it.each(['session', 'dispatch'] as const)('never forwards a resumption after its %s ends', async end => {
+      const { router, f, e } = custom('inherit', { name: 'reviewer' });
+      const pending = deferred<boolean>();
+      f.engine.resumes = () => pending.promise;
+      const n = spawnNext();
+      const run = router.agentSpawn(f.engine, e, n.next);
+      await settle();
+      if (end === 'session') router.sessionEnd();
+      else n.controller.abort();
+      await expect(run).rejects.toThrow('spawn dispatch abandoned');
+      pending.resolve(true);
+      await settle();
+      expect(n.calls).toEqual([]);
+      expect(f.sent).toHaveLength(0);
+    });
+    it('sends nothing for a SendMessage resumption of a finished, unnamed agent (#290)', async () => {
+      // SendMessage({ to: <agent id> }) of an agent spawned without a name: no list holds a finished agent.
+      const { router, f, e } = custom('opus', { tool_use_id: 'send', resume: { agentId: 'a986b732adfdb860c' } });
+      f.engine.resumes = async () => false;
+      f.engine.childContext = async () => ({ messages: 0, coverage: 'available', tools: [] });
+      const n = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a986b732adfdb860c' }));
+      await router.agentSpawn(f.engine, e, n.next);
+      expect(n.calls).toEqual([e]);
+      expect(f.sent).toHaveLength(0);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', tool_use_id: 'send', skipped: 'resumed' }));
+      expect(f.logs.filter(l => l.event === 'spawn_result')).toEqual([]);
+      // Its resumed run is a continuation: its steps stay native too.
+      const resumed = step({ agentId: 'a986b732adfdb860c', turnId: 'resumed-run' });
+      const s = streamNext<TurnStepEvent>();
+      await drain(router.turnStep(f.engine, resumed, s.next));
+      expect(s.calls).toEqual([resumed]);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child_route', agent_id: 'a986b732adfdb860c', skipped: 'child_unregistered' }));
     });
   });
 
@@ -2150,6 +2345,35 @@ describe('#81: control correctness', () => {
     expect(b.calls).toEqual([childStep({ agentId: 'a2', turnId: 'c2', effort: 'medium' }), childStep({ agentId: 'a2', turnId: 'c2', index: 1, effort: 'medium' })]);
   });
 
+  it.each([
+    ['root', false], ['child', false], ['root', true], ['child', true],
+  ] as const)('records independent applied evidence and never replays the completed %s response when observation fails: %s', async (scope, fails) => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', .95] }) });
+    const host = { usage: { model: 'claude-opus-5-5', input_tokens: 2, output_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 } };
+    const linked = { ...host.usage, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 20 } };
+    f.engine.observation = vi.fn(async () => {
+      if (fails) throw new Error('transcript unavailable');
+      return { effort: 'medium', request: 'linked-request', model: host.usage.model, usage: normalizeUsage('claude', linked) };
+    });
+    const calls: TurnStepEvent[] = [];
+    const next = Object.assign(async function* (e: TurnStepEvent) { calls.push(e); yield 'chunk'; return host; }, { signal: new AbortController().signal });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const e = step(scope === 'child' ? { agentId: 'native-child' } : {});
+    const result = await drain(router.turnStep(f.engine, e, next));
+    expect(result).toEqual({ chunks: ['chunk'], result: host });
+    expect(result.result).toBe(host);
+    expect(calls).toHaveLength(1);
+    expect(f.engine.observation).toHaveBeenCalledExactlyOnceWith(e.agentId, 0, host.usage);
+    const row = f.logs.find(l => l.event === `${scope}_result`);
+    expect(row).toMatchObject({ observed_effort: fails ? 'unknown' : 'medium', effort_evidence: fails ? 'unobserved' : 'transcript_api_request',
+      accounting: { write5m: fails ? null : 0, write1h: fails ? null : 20 } });
+    if (scope === 'root') {
+      expect(row).toMatchObject({ applied: { effort: 'low' }, cost: fails ? { usd: null, reason: 'write_ttl_unknown' } : { usd: expect.any(Number) } });
+    } else expect(row).toMatchObject({ requested_effort: 'high' });
+    expect(host.usage).not.toHaveProperty('cache_creation');
+  });
+
   it('records a requested effort as requested, and the effort it ran at as unknown', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });
@@ -2420,7 +2644,7 @@ describe('bounded child history question feasibility (#140)', () => {
 
 describe('native spawn outcome observability', () => {
   const NATIVE = { ...SPAWN_ONLY, routeExplicitSpawnModel: false, routeSubagentEffort: false };
-  const nativeRecord = async (e: SpawnEvent, observed: string, over: { pins?: Record<string, boolean>; offer?: string; cfg?: Partial<typeof NATIVE> } = {}) => {
+  const nativeRecord = async (e: SpawnEvent, observed: string, over: { pins?: Partial<HostPins>; offer?: string; cfg?: Partial<typeof NATIVE> } = {}) => {
     const router = createRouter(configOf({ ...NATIVE, ...over.cfg }));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95] }), ...(over.pins ? { pins: over.pins } : {}) }); router.agentOffer(OFFER_BUILT_IN(over.offer ?? 'general-purpose'));
     const n = spawnNext(() => ({ model: observed, agentId: 'child' }));
@@ -2462,6 +2686,20 @@ describe('native spawn outcome observability', () => {
       expect(record).toMatchObject({ requested: null, observed: 'claude-sonnet-5-5', confirmation: 'unobserved' });
       expect(record).not.toHaveProperty('reason');
     }
+  });
+
+  it("expects the host's default subagent model for a built-in that names none, and still the parent's for Plan's inherit", async () => {
+    const effortOnly = { routeSubagentModel: false, routeSubagentEffort: true };
+    expect(await nativeRecord(spawn({ subagentType: 'general-purpose' }), 'claude-haiku-5-5', { pins: { subagentDefault: 'haiku' }, cfg: effortOnly })).toMatchObject({ requested: 'claude-haiku-5-5', confirmation: 'confirmed' });
+    expect(await nativeRecord(spawn({ subagentType: 'Plan' }), 'claude-opus-5-5', { offer: 'Plan', pins: { subagentDefault: 'haiku' }, cfg: effortOnly })).toMatchObject({ requested: 'claude-opus-5-5', confirmation: 'confirmed' });
+  });
+
+  it.each(['general-purpose', 'claude'])("%s: flags a child that ran on its parent's model instead of the host's default", async type => {
+    const effortOnly = { routeSubagentModel: false, routeSubagentEffort: true };
+    expect(await nativeRecord(spawn({ subagentType: type }), 'claude-opus-5-5', { offer: type, pins: { subagentDefault: 'haiku' }, cfg: effortOnly }))
+      .toMatchObject({ requested: 'claude-haiku-5-5', observed: 'claude-opus-5-5', confirmation: 'mismatch' });
+    expect(await nativeRecord(spawn({ subagentType: type, parentModel: 'claude-haiku-5-5' }), 'claude-haiku-5-5', { offer: type, pins: { subagentDefault: 'opus' }, cfg: effortOnly }))
+      .toMatchObject({ requested: 'claude-opus-5-5', observed: 'claude-haiku-5-5', confirmation: 'mismatch' });
   });
 
   it('leaves a model pin unconfirmed whatever the call named', async () => {
@@ -2839,6 +3077,18 @@ describe('root baseline across a resume', () => {
     expect(s.f.sent).toHaveLength(1);
   });
 
+  it("leaves a built-in that names no model on the host's default subagent model while the main loop drifts", async () => {
+    const resumed = processOf(DRIFTED(), KEEP, undefined, { routeSubagentModel: true });
+    resumed.f.pins.subagentDefault = 'haiku';
+    await turn(resumed, 't1', 'claude-haiku-5-5', 'medium', 40);
+    resumed.router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const main = spawnNext(() => ({ model: 'claude-haiku-5-5', agentId: 'child' }));
+    const e = spawn({ subagentType: 'general-purpose', parentModel: 'claude-haiku-5-5' });
+    // Restoring the native Opus here would run the child above the Haiku the host gives it.
+    expect(await resumed.router.agentSpawn(resumed.f.engine, e, main.next)).toEqual({ model: 'claude-haiku-5-5', agentId: 'child' });
+    expect(main.calls).toEqual([e]);
+  });
+
   it("keeps a custom agent's declared model while the main loop drifts; only an inheriting agent takes the native one", async () => {
     const store = new Map<string, unknown>([['session', { native: { model: 'claude-sonnet-5-5', effort: 'high' }, routed: { model: 'claude-haiku-5-5', effort: 'low' }, drift: null, origin: 'turn.step' }]]);
     let failing = false;
@@ -2861,4 +3111,115 @@ describe('root baseline across a resume', () => {
     await resumed.router.agentSpawn(resumed.f.engine, custom('inherit', 'tu3'), inheriting.next);
     expect(inheriting.calls[0]?.model).toBe('claude-sonnet-5-5');
   });
+
+  // #290: a resumption is no new spawn. Drift restoration patched an inheriting agent, and Gate patched a worker,
+  // though the host runs a resumed agent on the model it ran before.
+  it.each([
+    ['an inheriting agent the host names as resumed', { resume: { agentId: 'a986b732adfdb860c' } }, false],
+    ['an inheriting agent resumed by its running name', { name: 'reviewer' }, false],
+    ['a Gate worker the host names as resumed', { resume: { agentId: 'a986b732adfdb860c' } }, true],
+  ] as const)('leaves the resumption of %s as called, past a drift', async (_, over, gate) => {
+    const resumed = processOf(DRIFTED(), KEEP, undefined, { routeSubagentModel: true, routeSubagentEffort: true });
+    await turn(resumed, 't1', 'claude-haiku-5-5', 'medium', 40);
+    const pairs: string[] = [];
+    Object.assign(resumed.f.engine, {
+      agentModel: async () => 'inherit',
+      resumes: async () => 'name' in over,
+      childContext: async () => ({ messages: 0, coverage: 'available', tools: [] }),
+      dispatchPair: async (id: string) => { pairs.push(id); return { model: 'claude-sonnet-5-5' }; },
+    });
+    const sent = resumed.f.sent.length;
+    const logged = resumed.f.logs.length;
+    const e = spawn({ tool_use_id: 'send', parentModel: 'claude-haiku-5-5', ...over, ...gate
+      ? { subagentType: 'jev-gate:worker', provider: { plugin: 'jev-gate', tier: 'plugin' } }
+      : { subagentType: 'guardian', provider: { plugin: 'user', tier: 'local' } } });
+    const n = spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a986b732adfdb860c' }));
+    await resumed.router.agentSpawn(resumed.f.engine, e, n.next);
+    expect(n.calls).toEqual([e]);
+    expect(n.calls[0]).toBe(e);
+    expect(pairs).toEqual([]);
+    expect(resumed.f.sent).toHaveLength(sent);
+    expect(resumed.f.logs.slice(logged)).toEqual([{ event: 'spawn', tool_use_id: 'send', type: gate ? 'jev-gate:worker' : 'other', skipped: 'resumed' }]);
+    // No child is registered for it: its run stays native.
+    const run = step({ agentId: 'a986b732adfdb860c', turnId: 'resumed-run' });
+    const s = streamNext<TurnStepEvent>();
+    await drain(resumed.router.turnStep(resumed.f.engine, run, s.next));
+    expect(s.calls).toEqual([run]);
+    expect(resumed.f.sent).toHaveLength(sent);
+    expect(resumed.f.logs).toContainEqual(expect.objectContaining({ event: 'child_route', agent_id: 'a986b732adfdb860c', skipped: 'child_unregistered' }));
+  });
+});
+
+
+describe('Router producer activity accounting', () => {
+  it.each(['failure', 'missing', 'partial', 'invalid', 'complete'] as const)('D2: real provider records keep %s usage honest in doctor and dashboard', async kind => {
+    const dir = mkdtempSync(join(tmpdir(), 'router-activity-'));
+    try {
+      const records: Array<Record<string, unknown>> = [];
+      const recorder = createRecorder({
+        paths: async () => ({ home: dir, state: dir, config: dir, trace: dir, session: 'producer-session' }),
+        stat: async () => ({ isLink: false, kind: 'dir', size: 0 }), exists: async () => false, read: async () => '',
+        write: async (path, text) => { writeFileSync(path, text); records.push(JSON.parse(text)); },
+        wait: () => new Promise<void>(() => undefined),
+      });
+      const router = createRouter(configOf(MODEL_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', .99] }) });
+      f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+      f.engine.currentEffort = async () => undefined;
+      await warmRoot(router, f, 'claude-sonnet-5-5', 'high');
+      f.engine.log = recorder.log;
+      router.turnStart({ turnId: 'producer-turn', text: TEXT });
+      const counts = { input_tokens: 0, output_tokens: 2000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      await drain(router.turnStep(f.engine, step({ turnId: 'producer-turn' }), streamNext<TurnStepEvent>(undefined, counts).next));
+      await recorder.flush();
+      expect(records.find(r => r['event'] === 'root')).toMatchObject({ patch: { model: 'claude-sonnet-5-5' } });
+      const good = activityChecks({ traces: { claude: { records: [...records], unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null }).find(c => c.message.startsWith('router_cost:'))!;
+      expect(good.metrics?.effect).toBeGreaterThan(0);
+      if (kind === 'failure' || kind === 'missing') {
+        const next = Object.assign(async function* (_e: TurnStepEvent): AsyncGenerator<string, { usage: null }> { throw new Error('synthetic provider failure'); }, { signal: new AbortController().signal });
+        await expect(drain(router.turnStep(f.engine, step({ turnId: 'producer-turn', index: 1 }), next))).rejects.toThrow('synthetic provider failure');
+        await recorder.flush();
+      } else if (kind !== 'complete') {
+        const broken: Record<string, unknown> = { ...counts };
+        if (kind === 'partial') delete broken['output_tokens']; else broken['output_tokens'] = -1;
+        await drain(router.turnStep(f.engine, step({ turnId: 'producer-turn', index: 1 }), streamNext<TurnStepEvent>(undefined, broken).next));
+        await recorder.flush();
+      }
+      // A missing failure file exercises the independent intent-without-return path, using the producer's send.
+      const kept = kind === 'missing' ? records.filter(r => r['event'] !== 'model_failure') : records;
+      if (kind === 'missing') {
+        const { readdirSync, readFileSync, unlinkSync } = await import('node:fs');
+        for (const file of readdirSync(dir)) if (JSON.parse(readFileSync(join(dir, file), 'utf8'))['event'] === 'model_failure') unlinkSync(join(dir, file));
+      }
+      const cost = activityChecks({ traces: { claude: { records: kept, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null }).find(c => c.message.startsWith('router_cost:'))!;
+      const dashboard = loadActivity({ traceDir: dir, env: { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config') } }).activity24h.claude.find(c => c.feature === 'router')!;
+      expect(dashboard.metrics).toEqual(cost.metrics);
+      if (kind === 'complete') expect(cost.metrics?.effect).toBeGreaterThan(0);
+      else {
+        expect(cost).toMatchObject({ level: 'warn', message: expect.stringContaining('1 sessions excluded'), metrics: { effect: null } });
+        expect(cost.message).not.toContain('net ');
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+
+it('D4: real Claude child and spawn records reach activity', async () => {
+  const router = createRouter(configOf(CHILD));
+  const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', .95], effort: ['low', .95] }) });
+  const records: Array<Record<string, unknown>> = [];
+  const recorder = createRecorder({
+    paths: async () => ({ home: '/synthetic', state: '/synthetic', config: '/synthetic', trace: '/synthetic', session: 'producer-child' }),
+    stat: async () => ({ isLink: false, kind: 'dir', size: 0 }), exists: async () => false, read: async () => '',
+    write: async (_path, text) => { records.push(JSON.parse(text)); }, wait: () => new Promise<void>(() => undefined),
+  });
+  f.engine.log = recorder.log;
+  router.agentOffer(OFFER_BUILT_IN('Explore'));
+  await router.agentSpawn(f.engine, spawn(), spawnNext(() => ({ model: 'claude-opus-5-5', agentId: 'a1' })).next);
+  await drain(router.turnStep(f.engine, childStep(), streamNext<TurnStepEvent>().next));
+  await recorder.flush();
+  const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
+  // The first child step reuses the spawn allocation; it makes no child Jev call.
+  expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('0 child steps sent to Jev');
+  expect(checks.find(c => c.message.startsWith('router_applied:'))?.message).toContain('2 routed requests with an observed model');
 });

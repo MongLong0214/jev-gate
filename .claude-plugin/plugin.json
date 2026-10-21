@@ -1,7 +1,8 @@
 {
   "name": "jev-gate",
-  "version": "0.8.31",
-  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor, the Jev effort and model router and the jev_evidence tool. Every part is on by default; each has its own on/off option.",
+  "version": "0.8.32",
+  "license": "MIT",
+  "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor and the Jev effort and model router. Every part is on by default; each has its own on/off option.",
   "author": {
     "name": "MongLong0214",
     "url": "https://github.com/MongLong0214"
@@ -16,7 +17,6 @@
     "function-hooks",
     "mcp"
   ],
-  "skills": "./plugins/evidence/skills/",
   "mcpServers": {
     "evidence": {
       "command": "node",
@@ -100,7 +100,7 @@
     },
     "typesafeApiKey": {
       "title": "Jev API key (all features)",
-      "description": "One key for Gate, Router and Evidence, shared with Codex. Blank opens the local key-entry screen when no environment or saved key is available.",
+      "description": "One key for Gate, Router and Compact, shared with Codex. Blank opens the local key-entry screen when no environment or saved key is available.",
       "type": "string",
       "sensitive": true
     },
@@ -155,7 +155,7 @@
     "routerAllowFable": {
       "type": "boolean",
       "title": "Router: Router: Allow automatic Fable selection",
-      "description": "Opt in to new automatic Fable model targets, including owned planners and workers. A manually selected root remains usable when off.",
+      "description": "Opt in to new automatic Fable model targets, including owned workers. A manually selected root remains usable when off.",
       "default": false
     },
     "compactJevEnabled": {

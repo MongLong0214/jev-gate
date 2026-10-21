@@ -16,6 +16,16 @@ describe('Claude and Codex routing role parity', () => {
     { model: 'fixture-balanced', description: 'Balanced model for straightforward work.' },
     { model: 'gpt-6-astra', description: 'Frontier intelligence for the most demanding work.' },
   ].map(m => ({ ...m, supportedReasoningEfforts: ['low', 'medium', 'high', 'max'].map(reasoningEffort => ({ reasoningEffort })) }));
+  it.each(['root', 'child', 'spawn'] as const)('keeps another tool or agent model instruction out of the caller lock in both hosts: %s', scope => {
+    const offers = [
+      offerPairs({ baseline: { model: 'claude-opus-5-5', effort: 'high' }, candidates: claudeCandidates({ baseline: 'claude-opus-5-5', aliases: {}, allowFable: false }), model: true, effort: true, upgrade: .8, downgrade: .6, scope })!,
+      offerPairs({ baseline: { model: 'gpt-6.1-sol', effort: 'high' }, candidates: codexCandidates(native, false), model: true, effort: true, upgrade: .8, downgrade: .6, scope })!,
+    ];
+    for (const offer of offers) {
+      expect(offer.questions.control!.instructions).toContain('another tool, program or agent should use');
+      expect(offer.questions.control!.instructions).toContain("is not a lock on the current caller's model or effort");
+    }
+  });
   it.each([.59, .6, .7, .8, 1])('uses the same downward floor in both adapters: %s', probability => {
     const claude = claudeOffer();
     const codex = offerPairs({ baseline: { model: 'gpt-6.1-sol', effort: 'high' }, candidates: codexCandidates(native, false), model: true, effort: true, upgrade: .8, downgrade: .6 })!;

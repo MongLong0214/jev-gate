@@ -3,7 +3,7 @@ import type { EngineInterface, On, Register, SessionMessage } from 'claude-code'
 import type { CompactConfig } from './config.ts';
 import { resolveCompactConfig } from './config.ts';
 import { assemble, buildDigest } from './digest.ts';
-import { createRecorder } from './recording.ts';
+import { createRecorder, createRecordingState, type RecordingState } from './recording.ts';
 import { createCompactSelector } from './selection.ts';
 import { installedKeyPath, parseInstalledKey } from '../../router/hooks/key.ts';
 
@@ -11,7 +11,7 @@ let sequence = 0;
 
 
 // The native validator follows $ only within this file; the shared recorder receives plain callbacks.
-const recorderOf = ($: EngineInterface) => createRecorder({
+const recorderOf = ($: EngineInterface, state: RecordingState) => createRecorder({
   paths: async () => {
     const [home, state, config, trace, session] = await Promise.all([
       $.env.get('HOME'), $.env.get('XDG_STATE_HOME'), $.env.get('XDG_CONFIG_HOME'), $.env.get('JEV_GATE_TRACE_DIR'), $.session.id(),
@@ -21,7 +21,7 @@ const recorderOf = ($: EngineInterface) => createRecorder({
   stat: path => $.fs.stat(path), exists: path => $.fs.exists(path), read: path => $.fs.read(path),
   write: (path, text) => $.fs.write(path, text),
   wait: (ms, signal) => $.clock.sleep(ms, { signal }),
-});
+}, state);
 
 /** Bookkeeping never stands between the host and its own event. */
 const quietly = (f: () => void): void => {
@@ -35,16 +35,22 @@ const quietly = (f: () => void): void => {
 /**
  * On by default; off registers no hook at all. `shadow` builds the digest, logs its size and lets the engine
  * compact as usual (logging how long that took and what its summarizer used); `active` answers the compaction with
- * the digest and the kept tail, so no summarizer request runs. `/compact` stays the engine's unless `compactManual`.
+ * the digest and the kept tail, so no summarizer request runs, ahead of time (`precompute`) included. `/compact` stays the
+ * engine's unless `compactManual`.
  */
 export const register: Register = (on, options) => {
   const resolved = resolveCompactConfig(options);
   if (!resolved.ok) return;
-  registerCompact(on, resolved.config);
+  const recording = createRecordingState();
+  registerCompact(on, resolved.config, undefined, recording);
+  if (resolved.config.enabled) on('session.end', async ($, e, next) => {
+    try { return await next(e); }
+    finally { await recorderOf($, recording).finish(); }
+  });
 };
 
 /** The hooks for a resolved config; the combined jev-gate module (hooks/register.ts) calls this directly. */
-export const registerCompact = (on: On, config: CompactConfig, observer?: { contextChanged?: (agentId?: string) => void }): void => {
+export const registerCompact = (on: On, config: CompactConfig, observer?: { contextChanged?: (agentId?: string) => void }, recording = createRecordingState()): void => {
   if (!config.enabled && !observer) return;
   const select = createCompactSelector(config.jevTimeoutMs ?? 1000);
 
@@ -55,19 +61,39 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
       return result;
     };
     if (!config.enabled) return forward(e);
-    const recorder = recorderOf($);
+    const recorder = recorderOf($, recording);
     try {
     // The engine's PreCompact that follows a deferral is this module's compaction too; its command-hook path reads this.
     quietly(() => recorder.touch());
     await recorder.flush();
     const runId = `${Date.now()}-${++sequence}`;
     const log = (fields: Record<string, unknown>): void =>
-      quietly(() => recorder.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`));
-    const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual);
+      quietly(() => recorder.log(`jev-compact ${JSON.stringify({ event: 'compact', run_id: runId, mode: config.mode, budget: config.budgetChars, trigger: e.trigger, subagent: e.agentId !== undefined, ...fields })}`));
+    // `precompute` asks the engine's summarizer ahead of the compaction that comes. Where active answers that one itself,
+    // the summary would be paid for and dropped, so none is computed (below, once the digest can be built).
+    const handled = e.trigger === 'auto' || (e.trigger === 'manual' && config.manual) || (e.trigger === 'precompute' && config.mode === 'active');
     const deferred = !handled ? 'trigger' : e.agentId !== undefined && !config.subagents ? 'subagent' : e.trigger === 'manual' && e.instructions ? 'instructions' : null;
     if (deferred) {
       log({ deferred });
       return forward(e);
+    }
+    if (e.trigger === 'precompute') {
+      // Skip only where the local check the auto path starts with (no Jev call) builds a digest from this transcript now;
+      // on a fallback or an error the engine's precompute runs as before. The compaction that follows is judged again on its own.
+      let fallback: string | null = null;
+      try {
+        const local = buildDigest(e.messages, { budgetChars: config.budgetChars });
+        if (local.ok) assemble(e.messages, local.result);
+        else fallback = local.reason;
+      } catch {
+        fallback = 'error';
+      }
+      if (fallback) {
+        log({ applied: false, messages: e.messages.length, fallback });
+        return forward(e);
+      }
+      log({ skipped: 'precompute' });
+      return { skip: 'jev-gate compact answers the compaction that comes' };
     }
 
     log({ stage: 'started', messages: e.messages.length });
@@ -88,8 +114,7 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
           const selection = await select(e.messages, outcome.result, key,
             { fetch: (url, init) => $.http.fetch(url, init), sleep: (ms, signal) => $.clock.sleep(ms, { signal }) }, next.signal);
           log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, jev_model: selection.model, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason });
-          if (next.signal?.aborted) return forward(e);
-          if (selection.priorities.length) {
+          if (!next.signal?.aborted && selection.priorities.length) {
             const enhanced = buildDigest(e.messages, { budgetChars: config.budgetChars, priorityResults: selection.priorities });
             if (enhanced.ok) outcome = enhanced;
           }
@@ -98,8 +123,7 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
           log({ stage: 'jev', selection: 'error', jev_sent: null });
         }
       }
-      if (next.signal?.aborted) return forward(e);
-      if (config.mode === 'active' && outcome.ok) answer = assemble(e.messages, outcome.result);
+      if (!next.signal?.aborted && config.mode === 'active' && outcome.ok) answer = assemble(e.messages, outcome.result);
     } catch {
       outcome = null;
     }

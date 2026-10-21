@@ -13,32 +13,34 @@ const fixture = () => {
   let now = 100000; vi.spyOn(Date, 'now').mockImplementation(() => now);
   const env = { HOME: root, JEV_GATE_STATE_DIR: root, TYPESAFE_API_KEY: 'fake', JEV_GATE_MODE: 'auto' };
   const controller = new AbortController();
-  const host: NonNullable<HookDeps['host']> = { id: 'codex', config: { ...DEFAULT_CONFIG, mode: 'auto', maxParallelWorkers: 1, workerIsolation: 'none', admittedShape: 'single', delegationDepthFloor: 0 },
-    depth: () => ({ ok: true, tokens: 500000, model: null, modelSwitched: false, bytesRead: 0, durationMs: 0 }), compactWindow: null, recentRequests: () => ['implement the feature'], observation: () => null };
+  const host: NonNullable<HookDeps['host']> = { id: 'codex', config: { ...DEFAULT_CONFIG, mode: 'auto', delegationDepthFloor: 0 },
+    depth: () => ({ ok: true, tokens: 500000, model: null, modelSwitched: false, bytesRead: 0, durationMs: 0 }), compactWindow: null, observation: () => null };
   const reply = (context = 'self_contained') => new Response(JSON.stringify({ answers: { forbids_delegation: { type: 'noul', noul: 0 }, task_context: { type: 'choice', choice: context, confidence: 1, probabilities: { self_contained: context === 'self_contained' ? 1 : 0, needs_context: context === 'needs_context' ? 1 : 0, unclear: 0 } }, tool_calls: { type: 'score', score: 4, confidence: 1, probabilities: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 1 } } } }));
   const run = (fetchImpl: typeof fetch) => runHook({ env, host, startedAt: 100000, signal: controller.signal, fetchImpl, stdin: (async function* () { yield JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt_id: 'p', prompt: 'continue' }); })() });
   return { env, host, run, reply, controller, time: () => now, advance: (ms: number) => { now += ms; } };
 };
 describe('Gate A single hook deadline (#138)', () => {
-  it('shares remaining budget across the context retry and rejects a late answer despite timer lag', async () => {
-    const f = fixture(); let calls = 0;
-    const fetchImpl = vi.fn(async () => { f.advance(++calls === 1 ? 2800 : 1700); return f.reply(calls === 1 ? 'needs_context' : 'self_contained'); });
+  it('ends needs_context after one on-time answer without a second call', async () => {
+    const f = fixture();
+    const fetchImpl = vi.fn(async () => { f.advance(2800); return f.reply('needs_context'); });
     const r = await f.run(fetchImpl as typeof fetch);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(r.code).toBe('deadline_exhausted');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ code: 'admission_needs_context', stdout: null });
     expect(readJob(f.env, 's')).toMatchObject({ ok: true, value: { current: { shape: 'direct' } } });
   });
-  it('counts preparation and context reading and sends nothing with less than 250ms left', async () => {
-    const f = fixture(); f.host.depth = () => { f.advance(2000); return { ok: true, tokens: 500000, model: null, modelSwitched: false, bytesRead: 0, durationMs: 2000 }; };
-    f.host.recentRequests = () => { f.advance(300); return ['original constraint']; };
-    const fetchImpl = vi.fn(async () => { f.advance(2000); return f.reply('needs_context'); });
+  it('counts preparation against the single request deadline', async () => {
+    const f = fixture(); f.host.depth = () => { f.advance(2500); return { ok: true, tokens: 500000, model: null, modelSwitched: false, bytesRead: 0, durationMs: 2500 }; };
+    const fetchImpl = vi.fn(async () => { f.advance(2100); return f.reply('needs_context'); });
     expect((await f.run(fetchImpl as typeof fetch)).code).toBe('deadline_exhausted');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
-  it.each(['cancel', 'supersede'])('emits no old guidance after %s during context preparation', async action => {
+  it.each(['cancel', 'supersede'])('emits no old guidance after %s during the request', async action => {
     const f = fixture();
-    f.host.recentRequests = () => { if (action === 'cancel') f.controller.abort(); else updateJob(f.env, 's', p => newGeneration(p, 's', 'new', 'direct').state); return ['old constraint']; };
-    const fetchImpl = vi.fn(async () => f.reply('needs_context'));
+    const fetchImpl = vi.fn(async () => {
+      if (action === 'cancel') f.controller.abort();
+      else updateJob(f.env, 's', p => newGeneration(p, 's', 'new', 'direct').state);
+      return f.reply();
+    });
     expect((await f.run(fetchImpl as typeof fetch)).stdout).toBeNull();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -71,12 +73,6 @@ describe('Gate A single hook deadline (#138)', () => {
     expect(readJob(f.env, 's')).toMatchObject({ ok: true, value: { current: { shape: 'direct' } } });
   });
 
-  it('does not read recent context when less than the minimum HTTP budget remains', async () => {
-    const f = fixture(); const recent = vi.fn(() => ['prior']); f.host.recentRequests = recent;
-    const fetchImpl = vi.fn(async () => { f.advance(4300); return f.reply('needs_context'); });
-    expect((await f.run(fetchImpl as typeof fetch)).code).toBe('deadline_exhausted');
-    expect(recent).not.toHaveBeenCalled(); expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
   it.each(['cancel', 'deadline'])('rechecks %s inside the final commit lock', async action => {
     const f = fixture(); const lock = jobPath(f.env, 's') + '.lock'; let acquired = false;
     const fetchImpl = vi.fn(async () => {

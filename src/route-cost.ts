@@ -29,9 +29,11 @@ export const routeCost = (host: 'claude' | 'codex', from: string, to: string, ca
   // #274: the switched request reads the target only within reach of the target's last request, whatever its TTL.
   const since = target?.seq !== undefined && latest?.seq !== undefined ? latest.seq - target.seq : 0;
   const targetCache = since >= CACHE_GONE ? 'cold' : since > CACHE_REACH && cacheState(target, now) === 'warm' ? 'unknown' : cacheState(target, now);
+  // Claude's latest observed write TTL supplies the active context's write policy for a model not yet seen. Cache
+  // expiry still uses each model's own observation; absent TTL retains the conservative price range.
   return { ...switchCost({ prefix, targetHeld: size(target) ?? 0, baseline: fromPrice, target: toPrice, baselineCache: cacheState(baseline, now), targetCache,
-    baselineWrite: writeRate(fromPrice, ttl(baseline)), targetWrite: writeRate(toPrice, ttl(target)), outputRange: latest?.output != null ? [horizon > 1 ? latest.output : 0, latest.output] : null, returns: cache !== undefined, horizon }),
-    evidence: { baseline: seen(baseline), target: seen(target), prefix_source: prefix === null ? 'unobserved' : latest === baseline ? 'baseline' : latest === target ? 'target' : latest!.model },
+    baselineWrite: writeRate(fromPrice, ttl(baseline) ?? (host === 'claude' ? ttl(latest) : null)), targetWrite: writeRate(toPrice, ttl(target) ?? (host === 'claude' ? ttl(latest) : null)), outputRange: latest?.output != null ? [horizon > 1 ? latest.output : 0, latest.output] : null, returns: cache !== undefined, horizon }),
+    evidence: { baseline: seen(baseline), target: seen(target), write_ttl_source: host === 'claude' && ttl(latest) !== null ? 'observed_context' : 'per_model_or_unknown', prefix_source: prefix === null ? 'unobserved' : latest === baseline ? 'baseline' : latest === target ? 'target' : latest!.model },
     output_basis: horizon > 1 ? 'previous_output' : 'scenario_zero_to_previous_output', future_output: 'unknown', new_content: added > 1 ? 'price_band_only' : 'unobserved_not_counted', jev_cost: 'separate_observed_usage',
     scope: horizon > 1 ? 'turn_horizon' : 'next_request_scenario', horizon, return_horizon: 'request_after_horizon_may_return_to_baseline', return_cost: 'in_delta_usd', handoff_cost: 'unknown', whole_session_cost: 'unknown' };
 };

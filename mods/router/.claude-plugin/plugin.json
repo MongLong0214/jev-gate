@@ -1,6 +1,7 @@
 {
   "name": "jev-gate-router",
-  "version": "0.8.31",
+  "version": "0.8.32",
+  "license": "MIT",
   "description": "Routes the main thread's effort and each subagent's model and effort with one TypeSafe Jev assessment; on by default, native on any doubt.",
   "author": {
     "name": "MongLong0214",
@@ -107,7 +108,7 @@
     "allowFable": {
       "type": "boolean",
       "title": "Router: Allow automatic Fable selection",
-      "description": "Opt in to new automatic Fable model targets, including owned planners and workers. A manually selected root remains usable when off.",
+      "description": "Opt in to new automatic Fable model targets, including owned workers. A manually selected root remains usable when off.",
       "default": false
     }
   }

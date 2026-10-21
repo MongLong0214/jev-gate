@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
+import { loadActivity } from '../src/activity.js';
+import { buildOperations } from '../src/operations.js';
 import { TraceDirectoryReader, allocatedTraceRecords, EXPLAIN_CAVEATS, explainDir, explainRecords, readTraceRecords, type TraceCache } from '../src/explain.js';
 
 // What the gate did was already recorded; only reading it was missing. These drive the real reader over real record
@@ -25,6 +27,41 @@ const post = (at: number, toolUseId: string, resolvedModel: string | null, extra
 const render = (records: Rec[]): string => explainRecords({ records, unreadable: 0 }).join('\n');
 
 describe('explain (2026-09-20)', () => {
+  it('C4: projects legacy disk records before reader caches, dashboard data, operations and explain', async () => {
+    const dir = mkdtempSync(join(tmp, 'legacy-worker-')), canary = 'sessionid=canary123';
+    writeFileSync(join(dir, 'post-legacy.json'), JSON.stringify(post(1, 'call', canary, { verdict: 'invalid',
+      verdict_reason: `check curl --cookie ${canary}: result malformed`, tool_response: { content: canary, output: canary, status: canary },
+      verification: { transcript: canary, contradicted: [canary], unobserved: [], stale: [] }, legacy_free_text: canary })));
+    writeFileSync(join(dir, 'failure-legacy.json'), JSON.stringify(base('failure', 2, { error_first_line: canary, failure_category: canary })));
+    const sync = readTraceRecords(dir), reader = new TraceDirectoryReader();
+    await reader.prepare(dir);
+    const asyncRead = reader.read(dir);
+    for (const read of [sync, asyncRead]) {
+      expect(JSON.stringify(read)).not.toContain(canary);
+      expect(render(read.records)).not.toContain(canary);
+      expect(JSON.stringify(buildOperations(read.records, [], new Date(iso(3)), { trace: true }))).not.toContain(canary);
+    }
+    expect(JSON.stringify(loadActivity({ traceDir: dir, env: { HOME: tmp }, now: new Date(iso(3)) }))).not.toContain(canary);
+  });
+
+  it('C4: renders legacy failure prose, rejected commands and verification IDs only as categories or counts', () => {
+    const canary = 'sessionid=canary123';
+    const out = render([post(1, 'call', null, { verdict: 'invalid', verdict_reason: `check curl --cookie ${canary}: result malformed`, verification: { transcript: 'read', contradicted: [`curl --cookie ${canary}`] } }),
+      base('failure', 2, { error_first_line: `native failure ${canary}` })]);
+    expect(out).not.toContain(canary); expect(out).toContain('invalid_reply'); expect(out).toContain('1 check(s)');
+  });
+
+  it('B2: screens credentials in legacy failure prose before rendering', () => {
+    const sentinel = 'B2_SYNTHETIC_LEGACY_FAILURE_SENTINEL';
+    const out = render([base('failure', 1, { error_first_line: `echo ${sentinel}; Bearer synthetic-${sentinel}` })]);
+    expect(out).not.toContain(sentinel);
+    expect(out).toContain('no message recorded');
+  });
+
+  it.each(['none', 'worktree'])('B1: reports the configured %s isolation on dispatch', worker_isolation => {
+    expect(render([dispatch(1, 'tool', { worker_isolation })])).toContain(`isolation ${worker_isolation}`);
+  });
+
   it('reuses unchanged records while noticing replacements, deletion, malformed writes and symlink substitution', () => {
     const dir = mkdtempSync(join(tmp, 'cached-')), path = join(dir, 'event.json'), cache: TraceCache = new Map();
     writeFileSync(path, JSON.stringify(base('admission_intent', 1)));
@@ -73,46 +110,6 @@ describe('explain (2026-09-20)', () => {
     expect(out).toContain('ran claude-sonnet-5, which is not the opus it asked for');
   });
 
-  it('names only the plan clauses a reader would act on', () => {
-    const out = render([
-      base('plan', 1, {
-        tool_use_id: 'toolu_p',
-        status: 'completed',
-        outcome: 'ready',
-        rev: 1,
-        tasks: 3,
-        interpretation: {
-          clauses: [
-            { id: 'c0', verdict: 'supported' },
-            { id: 'c1', verdict: 'contradicted' },
-            { id: 'c2', verdict: 'omitted' },
-            { id: 'c3', verdict: 'unknown' },
-          ],
-          unasked: 2,
-          applied: false,
-        },
-      }),
-    ]);
-    expect(out).toContain('1 clause(s) read as contradicting the request (c1)');
-    expect(out).toContain('1 the request does not mention (c2)');
-    expect(out).toContain('2 not asked about');
-    // `supported` is the expected answer, and an `unknown` asks for nothing; printing either buries the one clause
-    // that disagrees under the ones that do not.
-    expect(out).not.toContain('c0');
-    expect(out).not.toContain('c3');
-  });
-
-  it('says the comparison happened even when it flagged nothing', () => {
-    const out = render([base('plan', 1, { status: 'completed', outcome: 'ready', rev: 1, tasks: 1, interpretation: { clauses: [{ id: 'c0', verdict: 'supported' }], unasked: 0, applied: false } })]);
-    expect(out).toContain('plan checked against the request: nothing flagged');
-  });
-
-  it('says nothing about a plan recorded before the comparison existed', () => {
-    const out = render([base('plan', 1, { status: 'completed', outcome: 'ready', rev: 1, tasks: 1 })]);
-    // A record with no `interpretation` is a plan nothing checked, which is not the same claim as one checked clean.
-    expect(out).not.toContain('plan checked against the request');
-  });
-
   it('leaves a dispatch with no result unanswered rather than borrowing another dispatch result', () => {
     const out = render([
       dispatch(1, 'toolu_a', { decision: { action: 'patch', tier: 'deep', reason: null, changed_default: true, model: 'opus' } }),
@@ -132,22 +129,6 @@ describe('explain (2026-09-20)', () => {
     expect(out).not.toContain('which is not the');
   });
 
-  it('reads a planner observed model out of the plan record, which is where its reply is parsed', () => {
-    const out = render([
-      base('pre_result', 1, { role: 'planner', default_tier: 'deep', attempted: true, tool_use_id: 'toolu_p', http: { status: 200, code: null, duration_ms: 653, request_bytes: 700 }, decision: { action: 'patch', tier: 'deep', reason: null, changed_default: false, model: 'opus' } }),
-      base('plan', 2, { tool_use_id: 'toolu_p', status: 'completed', outcome: 'ready', rev: 1, tasks: 3, planner_model: { requested: 'opus', observed: 'claude-opus-5[1m]', agreement: 'match' } }),
-    ]);
-    expect(out).toContain('dispatch planner');
-    expect(out).toContain('ran claude-opus-5[1m]');
-    expect(out).toContain('plan     completed');
-    expect(out).toContain('rev 1, 3 task(s)');
-  });
-
-  it('reports a planner that did not run on the model it was given', () => {
-    const out = render([base('plan', 1, { tool_use_id: 'toolu_p', status: 'completed', outcome: 'ready', rev: 1, tasks: 1, planner_model: { requested: 'opus', observed: 'claude-sonnet-5', agreement: 'mismatch' } })]);
-    expect(out).toContain('asked for opus (mismatch)');
-  });
-
   it('a record written before the model field existed says so rather than guessing one from the tier', () => {
     const out = render([dispatch(1, 'toolu_a', { decision: { action: 'patch', tier: 'deep', reason: null, changed_default: true } })]);
     expect(out).toContain('patch deep (model not recorded)');
@@ -163,7 +144,7 @@ describe('explain (2026-09-20)', () => {
 
   it('prints what the worker transcript showed about each reported pass', () => {
     const out = render([post(1, 'toolu_a', 'claude-sonnet-5', { verdict: 'incomplete', verification: { transcript: 'read', contradicted: ['npm test'], unobserved: ['c2'], stale: [] } })]);
-    expect(out).toContain('transcript read, contradicted npm test, unobserved c2');
+    expect(out).toContain('transcript read, contradicted 1 check(s), unobserved 1 check(s)');
     expect(out).not.toContain('stale');
   });
 
@@ -193,7 +174,7 @@ describe('explain (2026-09-20)', () => {
 
   it('names the subagent and the requested → resolved models on a PostToolUseFailure', () => {
     const out = render([base('failure', 1, { subagent_type: 'jev-gate:worker-frontier', requested_model: 'opus', resolved_model: null, error_first_line: 'boom', duration_ms: 40 })]);
-    expect(out).toContain('failure  boom  after 40ms  (jev-gate:worker-frontier)');
+    expect(out).toContain('failure  no message recorded  after 40ms  (jev-gate:worker-frontier)');
     expect(out).toContain('opus → unrecorded');
   });
 
@@ -252,13 +233,11 @@ describe('final host allocation diagnostics', () => {
     const records = [dispatch(1, 'tool', { host, allocation: { selected_model: selected, effort_edit: { kind: 'set', value: 'high' } }, decision: { tier: 'deep', model: 'opus', action: 'patch' } }),
       base('post', 2, { host, tool_use_id: 'tool', requested_model: 'opus', resolved_model: selected }),
       base('failure', 3, { host, tool_use_id: 'tool', requested_model: 'opus' }),
-      base('plan', 4, { host, tool_use_id: 'tool', planner_model: { requested: 'opus', observed: selected, agreement: 'mismatch' } }),
-      base('post', 5, { host, session_id: 'other', tool_use_id: 'tool', requested_model: 'opus' })];
+      base('post', 4, { host, session_id: 'other', tool_use_id: 'tool', requested_model: 'opus' })];
     const joined = allocatedTraceRecords(records);
     expect(joined[1]?.requested_model).toBe(selected);
     expect(joined[2]?.requested_model).toBe(selected);
-    expect(joined[3]?.planner_model).toEqual({ requested: selected, observed: selected, agreement: 'match' });
-    expect(joined[4]?.requested_model).toBe('opus');
+    expect(joined[3]?.requested_model).toBe('opus');
     expect(records[1]?.requested_model).toBe('opus');
     const out = render(records);
     expect(out).toContain(`selected ${selected} / high`);
@@ -267,6 +246,17 @@ describe('final host allocation diagnostics', () => {
 });
 
 describe('incremental directory reconciliation', () => {
+  it('uses named watch additions directly and reconciles an unnotified name at the fallback deadline', async () => {
+    const dir = mkdtempSync(join(tmp, 'named-')), reader = new TraceDirectoryReader(100);
+    writeFileSync(join(dir, 'a.json'), JSON.stringify(base('post', 1)));
+    reader.read(dir, 1000);
+    writeFileSync(join(dir, 'b.json'), JSON.stringify(base('post', 2))); reader.invalidate(dir, 'b.json');
+    writeFileSync(join(dir, 'missed.json'), JSON.stringify(base('failure', 3)));
+    utimesSync(dir, new Date(), new Date(Date.now() + 1000));
+    await reader.prepare(dir, 1001);
+    expect(reader.read(dir, 1001).records.map(r => r['phase'])).toEqual(['post', 'post']);
+    expect(reader.read(dir, 1100).records.map(r => r['phase'])).toEqual(['post', 'post', 'failure']);
+  });
   it('reuses idle results, reads changed names, and recovers missed additions, deletions and replacements', () => {
     const dir = mkdtempSync(join(tmp, 'incremental-')), reader = new TraceDirectoryReader(100), file = join(dir, 'event.json');
     writeFileSync(file, JSON.stringify(base('pre_result', 1)));
@@ -275,8 +265,11 @@ describe('incremental directory reconciliation', () => {
     writeFileSync(file, JSON.stringify(base('post', 2))); reader.invalidate(dir, 'event.json');
     expect(reader.read(dir, 1002).records[0]?.phase).toBe('post');
     writeFileSync(join(dir, 'missed.json'), JSON.stringify(base('failure', 3)));
-    expect(reader.read(dir, 1003).records).toHaveLength(1);
-    expect(reader.read(dir, 1100).records).toHaveLength(2);
+    utimesSync(dir, new Date(), new Date(Date.now() + 1000));
+    // A changed directory timestamp recovers an append before the periodic reconciliation, even without fs.watch.
+    const appended = reader.read(dir, 1003);
+    expect(appended.records).toHaveLength(2);
+    expect(reader.read(dir, 1100)).toBe(appended);
     rmSync(file); reader.invalidate(dir, 'event.json');
     expect(reader.read(dir, 1101).records).toHaveLength(1);
     writeFileSync(join(dir, 'missed.json'), '{'); reader.invalidate(dir, 'missed.json');
@@ -311,10 +304,10 @@ describe('incremental directory reconciliation', () => {
     writeFileSync(join(dir, 'b.json'), JSON.stringify(base('post', 2)));
     reader.read(dir, 1000);
     for (const [name, at] of [['a.json', 3], ['c.json', 1], ['d.json', 3]] as const) {
-      writeFileSync(join(dir, name), JSON.stringify(base('post', at, { name }))); reader.invalidate(dir, name);
+      writeFileSync(join(dir, name), JSON.stringify(base('post', at, { request_id: name }))); reader.invalidate(dir, name);
       expect(reader.read(dir, 1001)).toEqual(readTraceRecords(dir));
     }
-    expect(reader.read(dir, 1001).records.map(r => r['name'] ?? 'b.json')).toEqual(['c.json', 'b.json', 'a.json', 'd.json']);
+    expect(reader.read(dir, 1001).records.map(r => r['request_id'] ?? 'b.json')).toEqual(['c.json', 'b.json', 'a.json', 'd.json']);
   });
   it('rejects substituted file and directory symlinks and oversized records, and discovers a newly created directory', () => {
     const dir = join(tmp, 'later-reader'), outside = mkdtempSync(join(tmp, 'outside-reader-')), reader = new TraceDirectoryReader(100);

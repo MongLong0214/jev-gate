@@ -7,6 +7,7 @@ import { codexCompatibility, codexModelInventory, type CodexInventory } from '..
 import { claudeDoctor } from '../src/cli.js';
 import { parseFrontmatter } from '../src/claude-models.js';
 import { codexDoctor } from '../src/codex/cli.js';
+import { loadCodexPolicy } from '../src/codex/config.js';
 import { storageIssue, moduleIssues, renderDoctor } from '../src/doctor.js';
 
 const dirs: string[] = [];
@@ -132,9 +133,33 @@ describe('Doctor reports', () => {
     expect(rows.find(c => c.model === 'gpt-6-luna')?.state).toBe('compatible');
     expect(rows.find(c => c.model === 'unavailable-legacy-fast')?.state).toBe('incompatible');
   });
-  it.each(['hooks/register.ts', 'mods/router/hooks/config.ts', 'src/provider-prices-data.ts', 'plugins/evidence/dist/server.mjs', 'plugins/evidence/skills/evidence/SKILL.md'])('rejects a missing declared package dependency: %s', async missing => {
+  it.each([
+    ['maxParallelWorkers', 3], ['plannerDefaultTier', 'fast'],
+    ['guardAllowTools', []], ['maxParallelWorkers', 'many'], ['plannerDefaultTier', false], ['guardAllowTools', 'invalid'],
+  ])('reports withdrawn Codex Gate key %s even when its value is malformed', async (key, value) => {
+    const fake = fixture('codex', [codexModel()]), config = join(fake.dir, 'codex.json');
+    writeFileSync(config, JSON.stringify({ gate: { [key]: value } }));
+    const env = { ...fake.env, JEV_CODEX_CONFIG: config };
+    const result = await codexDoctor(join(__dirname, '../plugins/codex'), env, fake.dir);
+    const notice = result.report.checks.find(c => c.group === 'configuration' && c.level === 'info' && c.message.includes(key) && c.message.includes('withdrawn key'));
+    expect(notice).toBeDefined();
+    expect(result.lines).toContain(`[info] ${notice!.message}`);
+    expect(renderDoctor(result.report, true)).toContain(`[info] ${notice!.message}`);
+    expect(result.report.checks.some(c => c.group === 'configuration' && c.level === 'ok' && c.message.startsWith('policy: Gate'))).toBe(true);
+    expect(loadCodexPolicy(env).gate).not.toHaveProperty(key);
+  });
+  it.each(['home', 'xdg'])('reports withdrawn Codex Gate keys from the default %s config path', async location => {
+    const fake = fixture('codex', [codexModel()]), base = location === 'home' ? join(fake.dir, '.config') : join(fake.dir, 'xdg');
+    const dir = join(base, 'jev-gate'); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'codex.json'), JSON.stringify({ gate: { workerIsolation: 'worktree', guardAllowTools: [] } }));
+    const result = await codexDoctor(join(__dirname, '../plugins/codex'), { ...fake.env, ...(location === 'xdg' ? { XDG_CONFIG_HOME: base } : {}) }, fake.dir);
+    expect(result.lines.some(line => line.startsWith('[info]') && line.includes('guardAllowTools is a withdrawn key'))).toBe(true);
+    expect(result.lines).toContain('[info] workerIsolation=worktree: workers use a snapshot worktree; integrate their diff before final checks');
+    expect(result.lines.some(line => line.includes('workerIsolation') && line.includes('withdrawn key'))).toBe(false);
+  });
+  it.each(['hooks/register.ts', 'mods/router/hooks/config.ts', 'src/provider-prices-data.ts', 'plugins/evidence/dist/server.mjs'])('rejects a missing declared package dependency: %s', async missing => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);
-    for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
+    for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
     mkdirSync(join(root, 'dist')); for (const file of ['entry.js', 'hook.js', 'compact-hook.js']) writeFileSync(join(root, 'dist', file), '');
     mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
     writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
@@ -153,19 +178,18 @@ describe('Doctor reports', () => {
     expect(report.models?.complete).toBe(true);
     expect(report.models?.compatibility.find(c => c.model === 'gpt-6-luna')?.state).toBe('compatible');
   });
-  it.each(['missing-server', 'wrong-command', 'wrong-skills'])('rejects a broken Evidence discovery declaration: %s', async broken => {
+  it.each(['missing-server', 'wrong-command'])('rejects a broken MCP discovery declaration: %s', async broken => {
     const dir = temporary(), root = join(dir, 'plugin'); mkdirSync(root);
-    for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
+    for (const file of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src']) cpSync(join(__dirname, '..', file), join(root, file), { recursive: true });
     mkdirSync(join(root, 'dist')); for (const file of ['entry.js', 'hook.js', 'compact-hook.js']) writeFileSync(join(root, 'dist', file), '');
     mkdirSync(join(root, 'plugins/evidence/dist'), { recursive: true });
     writeFileSync(join(root, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
     const path = join(root, '.claude-plugin/plugin.json'), manifest = JSON.parse(readFileSync(path, 'utf8'));
     if (broken === 'missing-server') delete manifest.mcpServers.evidence;
-    else if (broken === 'wrong-command') manifest.mcpServers.evidence.command = 'missing-runtime';
-    else manifest.skills = './missing-skills/';
+    else manifest.mcpServers.evidence.command = 'missing-runtime';
     writeFileSync(path, JSON.stringify(manifest));
     const report = await claudeDoctor(root, { HOME: dir, PATH: '/nonexistent', XDG_STATE_HOME: join(dir, 'state') }, dir);
-    expect(report.checks.some(c => c.group === 'package' && c.level === 'fail' && c.message.includes(broken === 'wrong-skills' ? 'Evidence skill' : 'Evidence MCP'))).toBe(true);
+    expect(report.checks.some(c => c.group === 'package' && c.level === 'fail' && c.message.includes('Plugin MCP'))).toBe(true);
   });
   it('diagnoses invalid explicit keys on both hosts without printing them', async () => {
     const dir = temporary(), env = { HOME: dir, PATH: '/nonexistent', XDG_STATE_HOME: join(dir, 'state'), TYPESAFE_API_KEY: 'bad\nsecret', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '0' };

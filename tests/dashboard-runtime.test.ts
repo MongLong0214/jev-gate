@@ -51,7 +51,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_E2E'] !== '1')('packaged automatic da
     const opened = join(temp, 'opened.txt');
     for (const name of ['open', 'xdg-open']) writeFileSync(join(bin, name), `#!/bin/sh\nprintf '%s\\n' "$1" >> '${opened}'\n`, { mode: 0o700 });
     const env = { HOME: home, PATH: bin + ':' + process.env.PATH, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'),
-      TYPESAFE_API_KEY: 'local-test-key', CLAUDE_PLUGIN_ROOT: plugin, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_WORKSPACE: root };
+      TYPESAFE_API_KEY: 'local-test-key', CLAUDE_PLUGIN_ROOT: plugin, JEV_CODEX_AUTO_CONNECT: '0' };
     const runtime = join(credentialsDir(env), 'dashboard-runtime.json');
     const client = new Client({ name: 'dashboard-runtime-test', version: '1' });
     try {

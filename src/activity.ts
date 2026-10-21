@@ -1,11 +1,16 @@
 import { lstatSync, opendirSync, statSync } from 'node:fs';
+import { codexFailureReason, verdictReason } from './worker-record.js';
 
 import type { Env } from './config.js';
 import { readTraceRecords, type TraceDirectoryReader, type TraceCache } from './explain.js';
 import { readLiveness } from './liveness.js';
-import { buildOperations, type ModRecord, type OperationsView } from './operations.js';
+import { buildOperations, traceFeature, type ModRecord, type OperationStep, type OperationsView } from './operations.js';
 import type { Host } from './host-support.js';
+import { looksSecret } from './outbound-text.js';
 import { memo, memoGeneration } from './memo.js';
+import { activityChecks, type ActivityCheck, type ActivityInput } from './doctor-activity.js';
+import { recordingStatus } from './recording.js';
+import { resolveApiKey } from './credentials.js';
 
 /**
  * A local view of calls the gate and the router already recorded. It whitelists short tokens from those records.
@@ -17,6 +22,10 @@ const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 const REASON: Record<string, string> = {
+  admission_context_unclear: '요청 문맥 불명확',
+  admission_context_low_confidence: '독립 요청 근거 부족',
+  route_not_fast: '빠른 등급 요건 불충족',
+
   admission_not_worth: '위임해도 계산상 이득이 없어 이 세션이 직접 처리합니다',
   admission_forbids_delegation: '요청이 위임을 금해서 직접 처리합니다',
   task_notification: '백그라운드 완료 알림이라 묻지 않습니다',
@@ -71,6 +80,8 @@ export interface ActivitySnapshot {
   routerChanges: number;
   events: ActivityEvent[];
   operations: OperationsView;
+  /** Doctor is the sole authority; no prose or free-form trace fields leave these checks. */
+  activity24h: Record<Host | 'all', Array<Pick<ActivityCheck, 'feature' | 'level' | 'metrics'> & { current?: Pick<OperationStep, 'model' | 'receipt'> }>>;
   /** The turn on screen. An intent with no result yet is `working` until the result file appears. */
   live: LiveBoard;
   notes: string[];
@@ -107,7 +118,8 @@ const sub = (r: Rec, k: string): Rec | null => (isRecord(r[k]) ? r[k] : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /** A recorded token. Spaces and long text stay out, so a prompt cannot ride along in a reason field. */
-const safeToken = memo((v: string): string | null => TOKEN.test(v) && !v.toLowerCase().includes('sk-') ? v : null);
+// Metadata identifiers reject even truncated/embedded sk- fragments. Prose screening keeps prefix mentions and task-id usable.
+const safeToken = memo((v: string): string | null => TOKEN.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null);
 const token = (v: unknown): string | null => typeof v === 'string' ? safeToken(v) : null;
 
 const iso = (v: unknown): string => (typeof v === 'string' && ISO.test(v) ? v : '');
@@ -179,7 +191,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     const decision = sub(r, 'decision');
     const shape = decision ? token(decision['shape']) : null;
     const why = decision ? reasonText(decision['reason']) : null;
-    const shapeText = shape === 'orchestrated' ? '플래너에게 작업을 나눠 맡깁니다' : shape === 'direct' ? '이 세션이 이어서 처리합니다' : null;
+    const shapeText = shape === 'orchestrated' ? '워커에게 작업을 맡깁니다' : shape === 'direct' ? '이 세션이 이어서 처리합니다' : null;
     const price = priceText(r);
     // The skip line already carries the reason, so the second line only says what the session did.
     const used = call.kind === 'skipped' ? '원래 호출을 유지합니다' : [why ?? shapeText, why && shape === 'orchestrated' ? shapeText : null, price].filter((x): x is string => x !== null).join(' · ');
@@ -192,7 +204,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     const tier = decision ? token(decision['tier']) : null;
     const model = decision ? token(decision['model']) : null;
     const called = token(r['called_tier']);
-    const role = token(r['role']) === 'planner' ? '플래너' : `작업 ${token(r['task_id']) ?? '?'}`;
+    const role = `작업 ${token(r['task_id']) ?? '?'}`;
     const why = decision ? reasonText(decision['reason']) : null;
     let used: string;
     const allocation = sub(r, 'allocation');
@@ -206,23 +218,11 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     else if (action === 'patch') used = `${role}: ${tier ?? '?'} 등급으로 호출합니다${model ? ` (${model})` : ''}`;
     else used = `${role}: ${action ?? '결정 없음'} ${tier ?? ''}`.trim();
     if (why) used = `${used}. ${why}`;
-    return { at, kind: call.kind, title: token(r['role']) === 'planner' ? '플래너 등급' : '워커 등급', call: call.call, used };
-  }
-  if (phase === 'plan') {
-    const outcome = token(r['outcome']);
-    const tasks = num(r['tasks']);
-    const pm = sub(r, 'planner_model');
-    const observed = pm ? token(pm['observed']) : null;
-    return {
-      at,
-      kind: 'follow',
-      title: '계획',
-      call: 'Jev 호출이 아닙니다. 플래너가 끝난 뒤의 기록입니다',
-      used: `계획 ${token(r['status']) ?? '?'}${outcome ? ` → ${outcome}` : ''}${tasks === null ? '' : `, 작업 ${tasks}개`}${observed ? `. 플래너 모델 ${observed}` : ''}`,
-    };
+    return { at, kind: call.kind, title: '워커 등급', call: call.call, used };
   }
   if (phase === 'post') {
     const verdict = token(r['verdict']) ?? '판정 없음';
+    const why = verdictReason(verdict, r['verdict_reason'])?.[1];
     const resolved = token(r['resolved_model']);
     const v = sub(r, 'verification');
     const transcript = v ? token(v['transcript']) : null;
@@ -232,7 +232,7 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
       kind: 'follow',
       title: '워커 결과',
       call: 'Jev 호출이 아닙니다. 워커가 끝난 뒤의 기록입니다',
-      used: `워커 보고 ${verdict}${resolved ? `. 호스트 모델 ${resolved}` : ''}${transcript ? `. 검사 기록 ${transcript}` : ''}${blocks.length ? `. 막힌 검사 ${blocks.join(', ')}` : ''}`,
+      used: `워커 보고 ${verdict}${why ? `. ${why}` : ''}${resolved ? `. 호스트 모델 ${resolved}` : ''}${transcript ? `. 검사 기록 ${transcript}` : ''}${blocks.length ? `. 막힌 검사 ${blocks.join(', ')}` : ''}`,
     };
   }
   if (phase === 'stop') {
@@ -242,11 +242,8 @@ const gateEvent = (r: Rec): ActivityEvent | null => {
     return { at, kind: 'follow', title: '턴 종료', call: 'Jev 호출이 아닙니다', used: `게이트가 이 턴을 끝내지 못했습니다 (${outcome})` };
   }
   if (phase === 'failure') {
-    const line = token(r['error_first_line']);
+    const line = codexFailureReason(r) ?? verdictReason('', r['verdict_reason'])?.[1];
     return { at, kind: 'follow', title: '실패', call: 'Jev 호출이 아닙니다', used: line ? `호스트가 실패를 보고했습니다 (${line})` : '호스트가 실패를 보고했습니다' };
-  }
-  if (phase === 'guard' && r['allow'] === false) {
-    return { at, kind: 'follow', title: '도구 거절', call: 'Jev 호출이 아닙니다', used: `${token(r['tool_name']) ?? '도구'} 호출을 거절했습니다` };
   }
   return null;
 };
@@ -329,7 +326,7 @@ const routerChanged = (r: Rec): boolean => {
 const NOTES = [
   '프롬프트 원문, API 키, 작업 파일은 읽지 않습니다.',
   '가격의 토큰 수는 게이트가 위임을 고를 때 쓴 계산이고, 측정된 절감이나 청구액이 아닙니다.',
-  'Evidence·Compact·Router는 기본 로컬 기록을 사용합니다.',
+  'Compact·Router는 기본 로컬 기록을 사용합니다.',
 ];
 
 /** A result file is written after the HTTP call. Past this, an intent with no result is not still in flight. */
@@ -338,7 +335,6 @@ const OPEN_FOR_MS = 8_000;
 const INTENT_RESULT: Record<string, string> = {
   admission_intent: 'admission_result',
   pre_intent: 'pre_result',
-  interpretation_intent: 'interpretation_result',
 };
 
 const ROUTER_OPEN = new Set(['root', 'child', 'spawn']);
@@ -356,8 +352,7 @@ const turnKey = (r: Rec): string => {
 const phaseTitle = (r: Rec): string => {
   const phase = token(r['phase']);
   if (phase === 'admission_intent' || phase === 'admission_result') return '게이트 A';
-  if (phase === 'pre_intent' || phase === 'pre_result') return token(r['role']) === 'planner' ? '플래너 등급' : '워커 등급';
-  if (phase?.startsWith('interpretation')) return '계획 해석';
+  if (phase === 'pre_intent' || phase === 'pre_result') return '워커 등급';
   return phase ?? '기록';
 };
 
@@ -384,7 +379,7 @@ const buildLive = (records: Rec[], routerRows: Array<{ at: string; rec: Rec }>, 
   const steps: Array<LiveStep & { turn: string }> = [];
   for (const r of records) {
     const phase = token(r['phase']);
-    if (!phase || INTENT_RESULT[phase]) continue;
+    if (!phase || !traceFeature(phase) || INTENT_RESULT[phase]) continue;
     const ev = gateEvent(r);
     const at = ev?.at || iso(r['written_at']);
     if (ev) {
@@ -550,6 +545,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
   const sources: SourceRows[] = [];
   let traceFiles = 0;
   let unreadable = 0;
+  const traces: ActivityInput['traces'] = {};
   const traceDirs = opts.traceDirs ?? (opts.traceDir ? [{ host: opts.host ?? 'claude', dir: opts.traceDir }] : []);
   const traceAvailable = traceDirs.some(source => readableDir(source.dir));
 
@@ -564,6 +560,11 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     const rows = deriveRows(read.records, source.host, opts.host, feed, known?.get(source.dir));
     known?.set(source.dir, rows);
     sources.push(rows);
+    for (const r of read.records) {
+      const host = r['host'] === 'codex' || r['host'] === 'claude' ? r['host'] : source.host;
+      (traces[host] ??= { records: [], unreadable: 0 }).records.push(r);
+    }
+    (traces[source.host] ??= { records: [], unreadable: 0 }).unreadable += read.unreadable;
   }
   // concat sizes each list once; the history is copied on every rebuild.
   const gateRecords = ([] as Rec[]).concat(...sources.map(rows => rows.gate)), modRecords = ([] as ModRecord[]).concat(...sources.map(rows => rows.mods));
@@ -587,6 +588,18 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     trace: traceAvailable,
     ...(host === 'codex' ? { host } : {}),
   });
+  const recording = recordingStatus(opts.env).enabled, keyPresent = !!resolveApiKey(opts.env);
+  const currentRouter = (only?: Host): Pick<OperationStep, 'model' | 'receipt'> | undefined => {
+    const step = operations.feed.find(s => s.feature === 'router' && s.routing?.scope === 'root' && (s.model || s.receipt?.choice) && (!only || s.host === only));
+    return step ? { ...(step.model ? { model: step.model } : {}), ...(step.receipt ? { receipt: step.receipt } : {}) } : undefined;
+  };
+  const check = (only?: Host): ActivitySnapshot['activity24h']['all'] => activityChecks({ traces: only ? { [only]: traces[only] } : traces,
+    now: now.getTime(), installed: null, recording, keyPresent, codexOwner: null, liveness: only === 'codex' ? null : liveness })
+    .filter(c => c.feature && c.metrics).map(c => {
+      const current = c.feature === 'router' ? currentRouter(only) : undefined;
+      return { feature: c.feature!, level: c.level, metrics: c.metrics!, ...(current ? { current } : {}) };
+    });
+  const claudeActivity = check('claude'), codexActivity = check('codex');
   return {
     host,
     at: now.toISOString(),
@@ -601,6 +614,7 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     routerChanges,
     events: events.slice(0, MAX_EVENTS),
     operations,
+    activity24h: { all: !traces.codex?.records.length ? claudeActivity : !traces.claude?.records.length ? codexActivity : check(), claude: claudeActivity, codex: codexActivity },
     live: feed ? buildLive(gateRecords, modRecords.flatMap(row => row.component === 'router' ? [{ at: row.at, rec: row.rec }] : []), now.getTime()) : buildLive([], [], now.getTime()),
     notes,
   };

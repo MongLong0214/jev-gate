@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import type { AdmissionQuestionShape, AdmittedShape, ConfigV5, Mode, PlannerTier, RouteQuestionShape, Tier, WorkerIsolation } from './types.js';
+import type { AdmissionQuestionShape, ConfigV5, Mode, RouteQuestionShape, Tier, WorkerIsolation } from './types.js';
 import { costModelFloor, delegationModel } from './admission.js';
-import { ADMITTED_SHAPES, MODES, PLANNER_TIERS, ROUTE_QUESTION_SHAPES, TIERS, WORKER_ISOLATIONS } from './types.js';
+import { MODES, ROUTE_QUESTION_SHAPES, TIERS, WORKER_ISOLATIONS } from './types.js';
 import { frontierConfigPath } from './frontier-routing.js';
 
 export const DEFAULT_CONFIG: ConfigV5 = {
@@ -14,13 +14,9 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   requestDeadlineMs: 3000,
   admissionConfidenceFloor: 0.8,
   routeConfidenceFloor: 0.8,
-  plannerDefaultTier: 'deep',
   // The owner requested all routing tiers enabled, including the known frontier profile.
   models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-1' },
-  // Enabled by default; the adapter snapshots the current checkout into each isolated worker.
-  maxParallelWorkers: 16,
-  guardAllowTools: ['*'],
-  workerIsolation: 'worktree',
+  workerIsolation: 'none',
   // Atomic since 0.4.0: the composite question's 0.8 confidence floor never cleared in real use (0.78, 0.35), so Gate B
   // was asked and then ignored. The atomic path composes read-off facts in code with no floor, so its tier is applied.
   routeQuestionShape: 'atomic',
@@ -37,20 +33,11 @@ export const DEFAULT_CONFIG: ConfigV5 = {
    * which is a property of the gate; it was never that the admissions it makes are cheaper by a known amount.
    */
   admissionQuestionShape: 'atomic',
-  // Enable the supported plan size; the planner still chooses how many tasks the request needs.
-  maxTasksPerPlan: 64,
-  // Auto since 0.4.0 (owner's choice, 2026-09-28): single passed 6/6 and hierarchy 4/6 on this repository's two jobs
-  // (DECISION-admitted-shape-2026-09-19.md), and a planner for a one-task request is a planner run for nothing.
-  admittedShape: 'auto',
   // The jev_single bench's coordinator took 11-17 root turns at depth; 11 is the low end, so a delegated turn is not
   // credited with removing turns it never measured removing. 40,000 is a declared worker context, not a fit.
   delegationCoordinatorTurns: 11,
   delegationWorkerTokensPerCall: 40_000,
-  // Root guard policy only; workers inherit whatever connected tools the host provides.
-  guardAllowMcp: true,
   verifyWorkerChecks: true,
-  // Classify plan clauses by default; this advisory request does not own plan acceptance.
-  planInterpretation: true,
 };
 
 /**
@@ -74,12 +61,8 @@ export const LEGACY_DEPTH_FLOOR = 300_000;
  */
 export const MIN_DEPTH_FRACTION = 0.25;
 export const MAX_DEPTH_FRACTION = 0.95;
-export const MAX_PARALLEL_WORKERS_LIMIT = 16;
-/** A plan larger than this is a runaway whatever the config says; MAX_COMPOSED_BYTES bounds each task, this bounds the count. */
-export const MAX_TASKS_PER_PLAN_LIMIT = 64;
 /** Trusted model identifiers only: no whitespace, shell characters or free text reach the host or the API. */
 export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-export const TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_:-]{0,63}$/;
 
 const V5_KEYS = new Set<string>([
   'version',
@@ -89,26 +72,31 @@ const V5_KEYS = new Set<string>([
   'requestDeadlineMs',
   'admissionConfidenceFloor',
   'routeConfidenceFloor',
-  'plannerDefaultTier',
   'models',
-  'maxParallelWorkers',
-  'guardAllowTools',
   'workerIsolation',
   'routeQuestionShape',
   'delegationDepthFloor',
   'delegationDepthFraction',
   'admissionQuestionShape',
-  'maxTasksPerPlan',
-  'admittedShape',
-  'planInterpretation',
   'delegationCoordinatorTurns',
   'delegationWorkerTokensPerCall',
-  'guardAllowMcp',
   'verifyWorkerChecks',
 ]);
 const LEGACY_MARKERS = ['uncertainTier', 'opusModel', 'frontierModel', 'confidenceFloor'];
-/** #213: the withdrawn Gate C floor. A deployed file may still set it, so it loads and is dropped unread; remove at the next config version. */
-const IGNORED_KEY = 'resultConfidenceFloor';
+/**
+ * Withdrawn keys a deployed file may still set, so it loads and they are dropped unread; remove at the next config
+ * version. #213: the Gate C floor. #289: the planner and the root tool guard.
+ */
+export const IGNORED_KEYS: ReadonlySet<string> = new Set([
+  'resultConfidenceFloor',
+  'plannerDefaultTier',
+  'maxParallelWorkers',
+  'guardAllowTools',
+  'guardAllowMcp',
+  'maxTasksPerPlan',
+  'admittedShape',
+  'planInterpretation',
+]);
 const FLOOR_KEYS = ['admissionConfidenceFloor', 'routeConfidenceFloor'] as const;
 
 export const MIGRATION_SAMPLE = `{
@@ -118,11 +106,7 @@ export const MIGRATION_SAMPLE = `{
   "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8,
   "routeConfidenceFloor": 0.8,
-  "plannerDefaultTier": "deep",
-  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "claude-fable-5-1" },
-  "maxParallelWorkers": 16,
-  "workerIsolation": "worktree",
-  "guardAllowTools": ["*"]
+  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "claude-fable-5-1" }
 }`;
 
 export type Env = Record<string, string | undefined>;
@@ -145,11 +129,9 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     };
   }
   if (raw['version'] !== 5) return { ok: false, error: `config version must be 5 (got ${String(raw['version'])}). Sample:\n${MIGRATION_SAMPLE}` };
-  const unknown = Object.keys(raw).filter((k) => !V5_KEYS.has(k) && k !== IGNORED_KEY);
+  const unknown = Object.keys(raw).filter((k) => !V5_KEYS.has(k) && !IGNORED_KEYS.has(k));
   if (unknown.length) return { ok: false, error: `unknown config keys: ${unknown.join(',')}` };
   const c: Record<string, unknown> = { ...DEFAULT_CONFIG, ...raw };
-  // An explicitly serial deployed file keeps its shared checkout; a fresh/minimal file gets the open defaults.
-  if (raw['maxParallelWorkers'] === 1 && !('workerIsolation' in raw)) c['workerIsolation'] = 'none';
   const mode = c['mode'];
   if (typeof mode !== 'string' || !MODES.includes(mode as Mode)) return { ok: false, error: 'mode must be off|native|auto (the `context` search filter was withdrawn and its code removed; see bench/results/v5-context-viability-2026-09-18)' };
   const jevModel = c['jevModel'];
@@ -164,10 +146,6 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 1) return { ok: false, error: `${key} must be a finite number in (0, 1]` };
     floors[key] = v;
   }
-  const plannerDefaultTier = c['plannerDefaultTier'];
-  if (typeof plannerDefaultTier !== 'string' || !PLANNER_TIERS.includes(plannerDefaultTier as PlannerTier)) {
-    return { ok: false, error: 'plannerDefaultTier must be deep|frontier' };
-  }
   const modelsRaw = c['models'];
   if (!isRecord(modelsRaw)) return { ok: false, error: 'models must be an object with fast/standard/deep/frontier' };
   const extra = Object.keys(modelsRaw).filter((k) => !(TIERS as readonly string[]).includes(k));
@@ -178,10 +156,6 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     const id = modelsRaw[tier];
     if (typeof id !== 'string' || !MODEL_NAME_RE.test(id)) return { ok: false, error: `models.${tier} must match ${MODEL_NAME_RE.source}` };
     models[tier] = id;
-  }
-  const cap = c['maxParallelWorkers'];
-  if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1 || cap > MAX_PARALLEL_WORKERS_LIMIT) {
-    return { ok: false, error: `maxParallelWorkers must be an integer in [1, ${MAX_PARALLEL_WORKERS_LIMIT}]` };
   }
   // Absent means composite, so a deployed V5 file keeps its behaviour without being edited (§4).
   // Absence defaults; an explicit wrong value is an error. `??` would have turned a null in the file into composite.
@@ -211,21 +185,6 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
     return { ok: false, error: `admissionQuestionShape must be one of ${ROUTE_QUESTION_SHAPES.join(', ')}` };
   }
 
-  const maxTasks = c['maxTasksPerPlan'];
-  if (typeof maxTasks !== 'number' || !Number.isInteger(maxTasks) || maxTasks < 1 || maxTasks > MAX_TASKS_PER_PLAN_LIMIT) {
-    return { ok: false, error: `maxTasksPerPlan must be an integer in [1, ${MAX_TASKS_PER_PLAN_LIMIT}]` };
-  }
-
-  // Same rule again: absence defaults, an explicit wrong value is an error.
-  const admittedShape = c['admittedShape'];
-  if (typeof admittedShape !== 'string' || !ADMITTED_SHAPES.includes(admittedShape as AdmittedShape)) {
-    return { ok: false, error: `admittedShape must be one of ${ADMITTED_SHAPES.join(', ')}` };
-  }
-
-  // Absence inherits the enabled default; an explicit non-boolean is an error.
-  const planInterpretation = 'planInterpretation' in c ? c['planInterpretation'] : false;
-  if (typeof planInterpretation !== 'boolean') return { ok: false, error: 'planInterpretation must be a boolean' };
-
   const coordinatorTurns = c['delegationCoordinatorTurns'];
   if (typeof coordinatorTurns !== 'number' || !Number.isInteger(coordinatorTurns) || coordinatorTurns < 1 || coordinatorTurns > 1000) {
     return { ok: false, error: 'delegationCoordinatorTurns must be an integer in [1, 1000]' };
@@ -234,26 +193,15 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
   if (typeof workerTokens !== 'number' || !Number.isInteger(workerTokens) || workerTokens < 1 || workerTokens > 1_000_000) {
     return { ok: false, error: 'delegationWorkerTokensPerCall must be an integer in [1, 1000000]' };
   }
-  for (const key of ['guardAllowMcp', 'verifyWorkerChecks', 'frontierEnabled'] as const) {
+  for (const key of ['verifyWorkerChecks', 'frontierEnabled'] as const) {
     if (typeof c[key] !== 'boolean') return { ok: false, error: `${key} must be a boolean` };
   }
 
-  const allow = c['guardAllowTools'];
-  if (!Array.isArray(allow) || allow.some((t) => typeof t !== 'string' || (t !== '*' && !TOOL_NAME_RE.test(t)))) {
-    return { ok: false, error: `guardAllowTools must be an array of "*" or tool names matching ${TOOL_NAME_RE.source}` };
-  }
-
-  // Absent inherits worktree isolation; an explicit serial policy must select none.
-  const isolation = 'workerIsolation' in c ? c['workerIsolation'] : 'none';
+  const isolation = c['workerIsolation'];
   if (typeof isolation !== 'string' || !WORKER_ISOLATIONS.includes(isolation as WorkerIsolation)) {
     return { ok: false, error: `workerIsolation must be one of ${WORKER_ISOLATIONS.join(', ')}` };
   }
-  if (cap > 1 && isolation !== 'worktree') {
-    return { ok: false, error: 'maxParallelWorkers > 1 requires workerIsolation: "worktree": a declared deliverable is the planner\'s claim, a worktree is a boundary' };
-  }
-  if (isolation === 'worktree' && !(allow as string[]).some(t => t === 'Bash' || t === '*')) {
-    return { ok: false, error: 'workerIsolation: "worktree" requires "Bash" in guardAllowTools: the root must merge each worker\'s branch while the guard is active' };
-  }
+
   return {
     ok: true,
     config: {
@@ -264,21 +212,14 @@ export const validateConfig = (raw: unknown): { ok: true; config: ConfigV5 } | {
       requestDeadlineMs: deadline,
       admissionConfidenceFloor: floors['admissionConfidenceFloor'] as number,
       routeConfidenceFloor: floors['routeConfidenceFloor'] as number,
-      plannerDefaultTier: plannerDefaultTier as PlannerTier,
       models,
-      maxParallelWorkers: cap,
-      guardAllowTools: allow as string[],
       workerIsolation: isolation as WorkerIsolation,
       routeQuestionShape: shape as RouteQuestionShape,
       delegationDepthFloor: floor,
       delegationDepthFraction: fraction,
       admissionQuestionShape: admissionShape as AdmissionQuestionShape,
-      maxTasksPerPlan: maxTasks,
-      admittedShape: admittedShape as AdmittedShape,
-      planInterpretation,
       delegationCoordinatorTurns: coordinatorTurns,
       delegationWorkerTokensPerCall: workerTokens,
-      guardAllowMcp: c['guardAllowMcp'] as boolean,
       verifyWorkerChecks: c['verifyWorkerChecks'] as boolean,
     },
   };

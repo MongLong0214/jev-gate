@@ -1,10 +1,38 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import type { Env } from './config.js';
 import type { ExecutionShape, JobGeneration, JobState, OwnedRole, Reservation, StateCode, Tier } from './types.js';
+import { workerReceipt } from './plan.js';
+import { renderWorkerDelivery } from './coordinator.js';
+import { workerTraceData } from './worker-record.js';
+
+// Retired state layouts can carry whole reports outside receipts. Keep only the supported generation/reservation fields.
+const GENERATION_FIELDS = new Set(['prompt_id', 'generation_id', 'request', 'created_at', 'shape', 'attempts', 'outcome', 'forced',
+  'execution', 'root_fallback', 'root_fallback_reason', 'admission_revision', 'background_job', 'interactive_prompt_id',
+  'background_idle_since', 'background_delivery', 'background_stopped', 'notices_taken']);
+const RESERVATION_FIELDS = new Set(['role', 'task_id', 'contract_hash', 'rev', 'tier', 'attempt', 'deliverables', 'started_at',
+  'orphaned', 'codex_execution', 'allocation_pair', 'background_execution']);
+
+/** Stored free-form context from older versions is never trusted as coordinator input. Rebuild from receipts. */
+const projectGeneration = (gen: JobGeneration): JobGeneration => {
+  const { background_context: _legacy } = gen;
+  const rest = Object.fromEntries(Object.entries(gen).filter(([key]) => GENERATION_FIELDS.has(key))) as unknown as JobGeneration;
+  const receipts = (gen.receipts ?? []).map(workerReceipt), receipt = receipts.at(-1);
+  const background_context = receipt ? renderWorkerDelivery(receipt, { single: gen.execution === 'single', rootFallback: !!gen.root_fallback,
+    ...(gen.root_fallback_reason === 'accepted' || gen.root_fallback_reason === 'attempt_cap' ? { rootFallbackReason: gen.root_fallback_reason } : {}) })
+    : gen.root_fallback_reason === 'delivery_failed' ? 'No eligible automatic child model. Continue in the main session; no child started.' : '';
+  const active = Object.fromEntries(Object.entries(gen.active).map(([id, raw]) => {
+    const reservation = Object.fromEntries(Object.entries(raw).filter(([key]) => RESERVATION_FIELDS.has(key))) as unknown as Reservation;
+    return [id, reservation.background_execution ? { ...reservation,
+      background_execution: workerTraceData('background_launch', reservation.background_execution) as unknown as NonNullable<typeof reservation.background_execution>,
+    } : reservation];
+  }));
+  return { ...rest, active, receipts, ...(_legacy !== undefined || gen.background_job && receipt ? { background_context } : {}) };
+};
+const projectState = (state: JobState): JobState => ({ ...state, current: projectGeneration(state.current), history: state.history.map(projectGeneration) });
 
 /** D7/A7: one private JSON file per session, never a database; bounds are enforced, never truncated. */
 export const STATE_MAX_BYTES = 1024 * 1024;
@@ -12,8 +40,6 @@ export const LOCK_DEADLINE_MS = 300;
 export const LOCK_POLL_MS = 10;
 export const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const ACTIVE_GRACE_MS = 24 * 60 * 60 * 1000;
-export const MAX_PLANNER_ATTEMPTS = 2;
-export const MAX_REPLANS = 2;
 export const MAX_TASK_ATTEMPTS = 2;
 export const MAX_HISTORY = 8;
 /** A new execution or terminal policy must be delivered before the idle generation can close. */
@@ -125,8 +151,8 @@ const parseState = (text: string, sessionId: string): JobState | null => {
     version: 5,
     session_id: sessionId,
     updated_at: typeof parsed['updated_at'] === 'string' ? parsed['updated_at'] : '',
-    current,
-    history,
+    current: projectGeneration(current),
+    history: history.map(projectGeneration),
   };
 };
 
@@ -147,7 +173,7 @@ const readRaw = (file: string, sessionId: string): JobResult<JobState | null> =>
 };
 
 const writeAtomic = (file: string, state: JobState): JobResult<JobState> => {
-  const body = JSON.stringify({ ...state, updated_at: new Date().toISOString() });
+  const body = JSON.stringify({ ...projectState(state), updated_at: new Date().toISOString() });
   if (Buffer.byteLength(body, 'utf8') > STATE_MAX_BYTES) return { ok: false, code: 'state_too_large' };
   if (isSymlink(file)) return { ok: false, code: 'state_symlink' };
   const tmp = `${file}.${process.pid}.tmp`;
@@ -176,7 +202,7 @@ export const readJob = (env: Env, sessionId: string): JobResult<JobState | null>
 /**
  * Read-modify-write under the lock; the lock is never held across an HTTP call. A null return leaves the file untouched.
  * An unreadable file reaches `fn` as null, so an orchestration turn can recover it, unless `refuseUnreadable` is set.
- * Refusing it for every writer was rejected: the orchestration guard is required to recover a corrupt state.
+ * Refusing it for every writer was rejected: a new prompt's generation is what recovers a corrupt state.
  */
 export const updateJob = (
   env: Env,
@@ -206,17 +232,13 @@ export const updateJob = (
 
 export const emptyGeneration = (promptId: string | null, shape: ExecutionShape, now = new Date()): JobGeneration => ({
   prompt_id: promptId,
+  generation_id: randomUUID(),
   request: null,
   created_at: now.toISOString(),
   shape,
-  phase: 'admitted',
-  planner_tier: null,
-  planner_model: null,
-  plan: null,
   active: emptyMap(),
   receipts: [],
-  denials: 0,
-  attempts: { planner: 0, replans: 0, tasks: emptyMap() },
+  attempts: { tasks: emptyMap() },
   outcome: null,
 });
 
@@ -231,7 +253,11 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
   const current = emptyGeneration(promptId, shape, now);
   if (!prev) return { state: { version: 5, session_id: sessionId, updated_at: now.toISOString(), current, history: [] }, superseded: false };
   const old = prev.current;
-  const unfinished = old.outcome === null && (Object.keys(old.active).length > 0 || old.phase === 'planning' || old.phase === 'planned');
+  // #281: history eviction must not make a consumed pre-flush notice eligible again. Carry the bounded session claims
+  // forward; once full the notice classifier refuses new unproven claims rather than dropping old ones.
+  const claims = [...new Set([old, ...prev.history].flatMap(gen => gen.notices_taken ?? []))];
+  if (claims.length) current.notices_taken = claims.slice(0, 256);
+  const unfinished = old.outcome === null && Object.keys(old.active).length > 0;
   const retired: JobGeneration = {
     ...old,
     outcome: old.outcome ?? 'superseded',
@@ -242,6 +268,9 @@ export const newGeneration = (prev: JobState | null, sessionId: string, promptId
     superseded: unfinished,
   };
 };
+
+/** #284: a prompt ID can be registered again as a new generation, so only the pair names the one a result belongs to. */
+export const sameGeneration = (a: JobGeneration, b: JobGeneration): boolean => a.prompt_id === b.prompt_id && a.generation_id === b.generation_id;
 
 /** Unsettled native executions are never evicted to satisfy a history count; the existing byte cap still applies. */
 export const retainHistory = (history: JobGeneration[]): JobGeneration[] => {
@@ -273,7 +302,7 @@ export const hostExited = (r: Reservation): boolean => r.codex_execution?.host_p
 export interface ReservationInput {
   role: OwnedRole;
   taskId: string | null;
-  /** A4/T1: the contract hash the dispatch is made under; `null` for a planner, `''` where there is no contract. */
+  /** A4/T1: the contract hash the dispatch is made under; `''` where there is no contract. */
   contractHash: string | null;
   rev: number | null;
   tier: Tier | null;
@@ -305,38 +334,16 @@ export const release = (gen: JobGeneration, toolUseId: string): JobGeneration =>
 
 export const activeWorkers = (gen: JobGeneration): Reservation[] => Object.values(gen.active).filter((r) => r.role === 'worker');
 
-/**
- * T1/T2: the tasks a writer is running right now. Deleting a reservation is not observing a termination, so this is
- * the only thing that says a task is in flight; a task in it has no settled result, whatever its last receipt says.
- */
-export const activeTaskIds = (gen: JobGeneration): Set<string> =>
-  new Set(activeWorkers(gen).flatMap((r) => (r.task_id === null ? [] : [r.task_id])));
-
-export const activePlanners = (gen: JobGeneration): Reservation[] => Object.values(gen.active).filter((r) => r.role === 'planner');
-
-export const activeDeliverables = (gen: JobGeneration, exceptTaskId: string | null): string[] =>
-  activeWorkers(gen)
-    .filter((r) => r.task_id !== exceptTaskId)
-    .flatMap((r) => r.deliverables);
-
-export type BoundKind = 'planner' | 'replan' | 'task';
-
-/** A7: per-job bounds. Beyond them dispatch is denied with a terminal explanation instead of looping. */
-export const boundExhausted = (gen: JobGeneration, kind: BoundKind, taskId: string | null): boolean => {
-  if (kind === 'planner') return gen.attempts.planner >= MAX_PLANNER_ATTEMPTS;
-  if (kind === 'replan') return gen.attempts.replans >= MAX_REPLANS;
-  const id = taskId ?? '';
-  // At most one evidence-format-only single dispatch is free. The attempt number stays monotonic so receipts and
-  // markers remain unambiguous, while the paid attempt cap still bounds the job.
-  const waiver = gen.execution === 'single' && gen.receipts.some((r) => r.task_id === id && r.evidence_format_only === true) ? 1 : 0;
-  return (own(gen.attempts.tasks, id) ?? 0) >= MAX_TASK_ATTEMPTS + waiver;
+/** A7: the per-job task bound. Beyond it dispatch is denied with a terminal explanation instead of looping. */
+export const boundExhausted = (gen: JobGeneration, taskId: string): boolean => {
+  // At most one evidence-format-only single dispatch is free. The attempt number stays monotonic so receipts
+  // remain unambiguous, while the paid attempt cap still bounds the job.
+  const waiver = gen.execution === 'single' && gen.receipts.some((r) => r.task_id === taskId && r.evidence_format_only === true) ? 1 : 0;
+  return (own(gen.attempts.tasks, taskId) ?? 0) >= MAX_TASK_ATTEMPTS + waiver;
 };
 
-export const countAttempt = (gen: JobGeneration, kind: BoundKind, taskId: string | null): JobGeneration => {
-  if (kind === 'planner') return { ...gen, attempts: { ...gen.attempts, planner: gen.attempts.planner + 1 } };
-  if (kind === 'replan') return { ...gen, attempts: { ...gen.attempts, replans: gen.attempts.replans + 1 } };
-  const id = taskId ?? '';
-  const tasks = Object.assign(emptyMap<number>(), gen.attempts.tasks, { [id]: (own(gen.attempts.tasks, id) ?? 0) + 1 });
+export const countAttempt = (gen: JobGeneration, taskId: string): JobGeneration => {
+  const tasks = Object.assign(emptyMap<number>(), gen.attempts.tasks, { [taskId]: (own(gen.attempts.tasks, taskId) ?? 0) + 1 });
   return { ...gen, attempts: { ...gen.attempts, tasks } };
 };
 

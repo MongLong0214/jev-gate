@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildPlannerRouteRequest, buildWorkerRouteRequest, decidePlannerRoute, decideWorkerRoute, PLANNER_TIER_QUESTION, ROUTE_QUESTION, UPGRADE_BASIS_QUESTION } from '../src/allocation.js';
+import { buildWorkerRouteRequest, decideWorkerRoute, ROUTE_QUESTION, UPGRADE_BASIS_QUESTION } from '../src/allocation.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { contractHash, ROUTING_TARGET_MARK, type PriorAttemptSummary } from '../src/plan.js';
-import { PLANNER_ROUTE_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type PlannedTask, type PlannerRouteAnswer, type RouteAnswer, type UpgradeBasis } from '../src/types.js';
+import { ROUTING_TARGET_MARK, type PriorAttemptSummary } from '../src/plan.js';
+import { ROUTE_ANSWERS, UPGRADE_BASES, type PlannedTask, type RouteAnswer, type UpgradeBasis } from '../src/types.js';
 
 const pick = <K extends string>(keys: readonly K[], winner: K, p = 0.9, confidence = p): Record<string, unknown> => ({
   type: 'choice',
@@ -13,7 +13,6 @@ const pick = <K extends string>(keys: readonly K[], winner: K, p = 0.9, confiden
 });
 const route = (winner: RouteAnswer, p?: number, c?: number): Record<string, unknown> => pick(ROUTE_ANSWERS, winner, p, c);
 const basis = (winner: UpgradeBasis, p?: number, c?: number): Record<string, unknown> => pick(UPGRADE_BASES, winner, p, c);
-const planning = (winner: PlannerRouteAnswer, p?: number, c?: number): Record<string, unknown> => pick(PLANNER_ROUTE_ANSWERS, winner, p, c);
 
 const bare = {
   id: 't1',
@@ -24,15 +23,8 @@ const bare = {
   deliverables: ['src/store.ts'],
   checks: [{ id: 'c1', description: 'unit tests pass', required: true, command: 'npm test' }],
   replan_if: [],
-  spec: { interfaces: ['createStore(): Store'], data_shapes: ['Store = { get(key: string): string | null }'], invariants: ['reads never throw'], files: ['src/store-types.ts'] },
-  uncertainty: { unresolved: [], interacts_with: [], prior_failure: null },
-  fully_specified: false,
 };
-const task: PlannedTask = { ...bare, contract_hash: contractHash(bare) };
-const withEvidence = (over: Partial<PlannedTask>): PlannedTask => {
-  const raw = { ...bare, ...over };
-  return { ...raw, contract_hash: contractHash(raw) };
-};
+const task: PlannedTask = { ...bare, contract_hash: 'h-t1' };
 
 describe('requests', () => {
   it('builds the worker request from fields, sending the contract content once rather than twice', () => {
@@ -74,18 +66,13 @@ describe('requests', () => {
   });
 
   /**
-   * #33/A18: the tier gate reads the plan with routing targets removed, so planner text cannot read as a route
-   * request. `ROUTE_QUESTION` also instructs the model to ignore such text; this does not depend on it obeying.
-   * Before A18 the same text was rejected at parse time, which rejected the whole plan.
+   * #33/A18: the tier gate reads the task with routing targets removed, so its text cannot read as a route request.
+   * `ROUTE_QUESTION` also instructs the model to ignore such text; this does not depend on it obeying.
    */
-  it('removes tier and model names from the plan text the gate reads, and only from that copy (#33/A18)', () => {
-    const asking = withEvidence({
-      constraints: ['serialize must deep-copy the state', 'run this on opus'],
-      uncertainty: { unresolved: ['needs the frontier tier'], interacts_with: [], prior_failure: null },
-    });
+  it('removes tier and model names from the task text the gate reads, and only from that copy (#33/A18)', () => {
+    const asking: PlannedTask = { ...task, constraints: ['serialize must deep-copy the state', 'run this on opus'] };
     const request = buildWorkerRouteRequest(asking, ['prefer the deep tier'], [], 'p', 'standard', DEFAULT_CONFIG);
     expect(request.state.task.constraints).toEqual(['serialize must deep-copy the state', `run this on ${ROUTING_TARGET_MARK}`]);
-    expect(request.state.task.uncertainty?.unresolved).toEqual([`needs the ${ROUTING_TARGET_MARK} tier`]);
     expect(request.state.global_constraints).toEqual([`prefer the ${ROUTING_TARGET_MARK} tier`]);
     // The contract the worker implements is untouched, and the hash the receipt is matched on does not move.
     expect(asking.constraints).toEqual(['serialize must deep-copy the state', 'run this on opus']);
@@ -95,13 +82,6 @@ describe('requests', () => {
     // could still match "opus" are renamed here, not just deep.
     const renamed = { ...DEFAULT_CONFIG, models: { ...DEFAULT_CONFIG.models, deep: 'some-other-model', frontier: 'yet-another-model' } };
     expect(buildWorkerRouteRequest(asking, [], [], 'p', 'standard', renamed).state.task.constraints[1]).toBe('run this on opus');
-  });
-
-  it('builds the planner request with the configured default tier', () => {
-    const planner = buildPlannerRouteRequest('plan this', { ...DEFAULT_CONFIG, plannerDefaultTier: 'frontier' });
-    expect(planner.state).toMatchObject({ role: 'planner', default_tier: 'frontier', request: 'plan this' });
-    expect(Object.keys(planner.questions)).toEqual(['planning_tier']);
-    expect(Object.keys(PLANNER_TIER_QUESTION.criteria)).toEqual([...PLANNER_ROUTE_ANSWERS]);
   });
 
   /** T11: the result gate is gone from the module, so nothing here can build a Gate C request at all. */
@@ -147,16 +127,7 @@ describe('decideWorkerRoute', () => {
 });
 
 describe('routing evidence reaches the route question (#33)', () => {
-  const unresolvedTask = withEvidence({
-    uncertainty: { unresolved: ['whether writes go through the cache'], interacts_with: ['the persistence layer', 'the public API'], prior_failure: 'attempt 1 lost the ordering invariant' },
-  });
-  const mechanicalTask = withEvidence({ fully_specified: true, uncertainty: { unresolved: [], interacts_with: [], prior_failure: null } });
-
-  it('sends uncertainty and fully_specified inside the task, once', () => {
-    const request = buildWorkerRouteRequest(unresolvedTask, [], [], 'p', 'standard', DEFAULT_CONFIG);
-    expect(request.state.task.uncertainty).toEqual(unresolvedTask.uncertainty);
-    expect(request.state.task.fully_specified).toBe(false);
-    expect(JSON.stringify(request).split('the ordering invariant')).toHaveLength(2);
+  it('keeps the route criteria that read the residual', () => {
     expect(ROUTE_QUESTION.criteria.fast).toContain('fully specified');
     expect(ROUTE_QUESTION.criteria.deep).toContain('residual uncertainty');
     expect(ROUTE_QUESTION.criteria.frontier).toContain('previous attempt');
@@ -167,8 +138,7 @@ describe('routing evidence reaches the route question (#33)', () => {
     expect(decideWorkerRoute({ route: route('frontier'), upgrade_basis: basis('observed_reasoning_failure') }, 0.8, 'standard')).toMatchObject({ action: 'patch', tier: 'frontier' });
   });
 
-  it('routes a fully specified task to fast when Jev answers fast with sufficient confidence', () => {
-    expect(buildWorkerRouteRequest(mechanicalTask, [], [], 'p', 'standard', DEFAULT_CONFIG).state.task.fully_specified).toBe(true);
+  it('routes to fast when Jev answers fast with sufficient confidence', () => {
     expect(decideWorkerRoute({ route: route('fast'), upgrade_basis: basis('no_specific_basis') }, 0.8, 'standard')).toMatchObject({ action: 'patch', tier: 'fast', reason: null });
     expect(decideWorkerRoute({ route: route('fast', 0.9, 0.79), upgrade_basis: basis('no_specific_basis') }, 0.8, 'standard')).toMatchObject({ action: 'preserve', reason: 'route_low_confidence' });
   });
@@ -185,8 +155,8 @@ describe('routing evidence reaches the route question (#33)', () => {
       observed_model_confirmed: true,
       provenance: 'worker_reported',
     };
-    const first = buildWorkerRouteRequest(mechanicalTask, [], [], 'p', 'standard', DEFAULT_CONFIG);
-    const second = buildWorkerRouteRequest(mechanicalTask, [], [], 'p', 'standard', DEFAULT_CONFIG, prior);
+    const first = buildWorkerRouteRequest(task, [], [], 'p', 'standard', DEFAULT_CONFIG);
+    const second = buildWorkerRouteRequest(task, [], [], 'p', 'standard', DEFAULT_CONFIG, prior);
     expect(first.state.prior_attempt).toBeNull();
     expect(second.state.prior_attempt).toMatchObject({ attempt: 1, failed_checks: ['c1'] });
     expect(JSON.stringify(second).length).toBeGreaterThan(JSON.stringify(first).length);
@@ -197,27 +167,9 @@ describe('routing evidence reaches the route question (#33)', () => {
   });
 
   /** Document §7: an absent field is unknown, not a claim that the work is mechanical. */
-  it('sends a task with no evidence fields as it is, and says so in the question text', () => {
-    const bare: PlannedTask = { ...task };
-    delete bare.spec;
-    delete bare.uncertainty;
-    delete bare.fully_specified;
-    const request = buildWorkerRouteRequest(bare, [], [], 'p', 'standard', DEFAULT_CONFIG);
-    expect(request.state.task).not.toHaveProperty('spec');
-    expect(request.state.task).not.toHaveProperty('uncertainty');
-    expect(request.state.task).not.toHaveProperty('fully_specified');
+  it('says in the question text that absent evidence is unknown', () => {
     expect(ROUTE_QUESTION.instructions).toContain('absent evidence is unknown, not a claim that the work is mechanical');
     // T9/T10: a malformed report is not evidence that a stronger model is needed.
     expect(UPGRADE_BASIS_QUESTION.instructions).toContain('the format of its report');
-  });
-});
-
-describe('decidePlannerRoute', () => {
-  it('upgrades to frontier only on a confident unique answer, and otherwise patches the configured default', () => {
-    expect(decidePlannerRoute({ planning_tier: planning('frontier') }, 0.8, 'deep')).toMatchObject({ action: 'patch', tier: 'frontier', reason: null });
-    expect(decidePlannerRoute({ planning_tier: planning('deep') }, 0.8, 'deep')).toMatchObject({ tier: 'deep', reason: null });
-    expect(decidePlannerRoute({ planning_tier: planning('abstain') }, 0.8, 'frontier')).toMatchObject({ action: 'patch', tier: 'frontier', reason: 'route_abstain' });
-    expect(decidePlannerRoute({ planning_tier: planning('frontier', 0.82, 0.77) }, 0.8, 'deep')).toMatchObject({ tier: 'deep', reason: 'route_low_confidence' });
-    expect(decidePlannerRoute({}, 0.8, 'deep')).toMatchObject({ tier: 'deep', reason: 'route_invalid' });
   });
 });

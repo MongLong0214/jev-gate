@@ -8,6 +8,7 @@ import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import { dispatchMarker } from '../../src/claude-background.js';
 import { newGeneration, readJob, reserve, updateJob } from '../../src/job.js';
 import { OWNED_AGENTS } from '../../src/types.js';
+import { rowOf, type CellResult } from '../../src/bench/ab.js';
 import { answering, CLEAR, choice, drain, FAKE_KEY, score } from './fake-engine.ts';
 
 /**
@@ -44,7 +45,7 @@ const fakeHost = (world: World = {}) => {
       },
       write: async (_path: string, text: string) => {
         // The Mod's records reach the trace as files; each one is read back as the line the Mod emitted.
-        const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = JSON.parse(text) as Record<string, unknown>;
+        const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, recording_id: _recording, loss_marker: _marker, ...fields } = JSON.parse(text) as Record<string, unknown>;
         logs.push(`jev-${String(phase).slice(4)} ${JSON.stringify(fields)}`);
       },
       stat: async (path: string) => {
@@ -115,6 +116,27 @@ const spawnThrough = async (hooks: Map<string, Hook>, host: ReturnType<typeof fa
 };
 
 describe('register', () => {
+  it('keeps a confirmed fake Jev send unknown when every record write fails before any file exists', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-router-loss-'));
+    try {
+      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, JEV_GATE_TRACE_DIR: dir } });
+      const stat = host.$.fs.stat;
+      host.$.fs.stat = async path => path === dir ? { kind: 'dir', isLink: false, size: 0 } : stat(path);
+      host.$.fs.write = async () => { throw new Error('EMFILE'); };
+      const hooks = await registered({ enabled: true });
+      await spawnThrough(hooks, host);
+      expect(host.requests).toHaveLength(1); expect(host.logs).toEqual([]);
+      const cell = { cond: 'D', sid: 'session', recording_version: 1, trace_complete: true, prime: {}, harness: {} } as CellResult;
+      expect(rowOf(cell, null, null, dir).jev_cost).toBeNull();
+      const receipts: Record<string, unknown>[] = [];
+      host.$.fs.write = async (path, text) => { receipts.push(JSON.parse(text)); writeFileSync(path, text); };
+      await hooks.get('session.end')!(host.$, {}, async () => ({}));
+      const receipt = receipts.find(r => r['phase'] === 'mod_recording')!;
+      expect(receipt).toMatchObject({ complete: false });
+      expect(Number(receipt['attempted'])).toBeGreaterThan(Number(receipt['written']));
+      expect(rowOf(cell, null, null, dir).jev_cost).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it('registers nothing when off, or when every switch is off', async () => {
     expect([...(await registered({ enabled: false })).keys()]).toEqual([]);
     expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false, routeMainEffort: false, routeMainModel: false })).keys()]).toEqual([]);
@@ -125,12 +147,12 @@ describe('register', () => {
   });
 
   it('registers the root hooks and the spawn hooks their switches ask for', async () => {
-    expect([...(await registered({ enabled: true })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
+    expect([...(await registered({ enabled: true })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'classic.SessionStart', 'classic.UserPromptSubmit', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
     // A subagent's effort is set on its own loop's steps, so turn.step stays without the root switches.
-    expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.step']);
-    expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.step']);
-    expect([...(await registered({ enabled: true, routeSubagentModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
-    expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'classic.SessionStart', 'classic.UserPromptSubmit', 'session.compact', 'session.end', 'turn.complete', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'classic.SessionStart', 'classic.UserPromptSubmit', 'session.compact', 'session.end', 'turn.complete', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeSubagentModel: false })).keys()].sort()).toEqual(['agent.offer', 'agent.spawn', 'classic.SessionStart', 'classic.UserPromptSubmit', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
+    expect([...(await registered({ enabled: true, routeSubagentModel: false, routeSubagentEffort: false })).keys()].sort()).toEqual(['classic.SessionStart', 'classic.UserPromptSubmit', 'session.compact', 'session.end', 'turn.complete', 'turn.start', 'turn.step']);
   });
 
   it.each([false, true])('reads the common frontier switch through Function Hooks: %s', async enabled => {
@@ -262,15 +284,25 @@ describe('register', () => {
   });
 
   it('keeps model pins independent from effort, and resolves aliases without treating them as pins', async () => {
-    for (const name of ['CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE']) {
-      const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), host)).toBeUndefined();
-      expect(host.requests).toHaveLength(0);
-      const effort = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
-      expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), effort)).toBeUndefined();
-      expect(effort.requests).toHaveLength(1);
-      expect(effort.logs.join('\n')).toContain('"effort_asked":true');
-    }
+    const forced = { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' };
+    const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, ...forced } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), host)).toBeUndefined();
+    expect(host.requests).toHaveLength(0);
+    const effort = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, ...forced } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), effort)).toBeUndefined();
+    expect(effort.requests).toHaveLength(1);
+    expect(effort.logs.join('\n')).toContain('"effort_asked":true');
+    // Without _FORCE the value is a default a routed spawn's model outranks, not a pin (Claude Code 2.1.251+).
+    const fallback = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5' } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), fallback)).toBe('claude-haiku-5-5');
+    expect(fallback.logs.join('\n')).toContain('"model_asked":true');
+    // _FORCE is read as Claude Code reads a boolean: `0` is off like unset, `true` is on like `1`.
+    const off = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '0' } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), off)).toBe('claude-haiku-5-5');
+    expect(off.requests).toHaveLength(1);
+    const on = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: 'true' } });
+    expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false, routeSubagentEffort: false }), on)).toBeUndefined();
+    expect(on.requests).toHaveLength(0);
     for (const name of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) {
       const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY, [name]: 'claude-sonnet-5-5' } });
       expect(await spawnThrough(await registered({ enabled: true, routeMainEffort: false, routeMainModel: false }), host)).toBe('claude-haiku-5-5');
@@ -376,9 +408,15 @@ describe('owned dispatch through the packaged policy process (#211)', () => {
     // 0.8.14 let this throw past its cleanup and named it "could not be verified"; the reservation stays protected.
     ['times out', 'timeout' as const, 'Automatic child unavailable; continue in the main session.', true],
   ])('keeps a user subagent pin and releases once when the cleanup %s', async (_, failure, deny, kept) => {
-    const r = await dispatch({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5' }, fail: eligible => eligible ? undefined : failure });
+    const r = await dispatch({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' }, fail: eligible => eligible ? undefined : failure });
     expect(r.out).toEqual({ deny });
     expect([r.calls, r.runs, r.denials, r.kept]).toEqual([[], [true, false], denial('subagent_model_pinned'), kept]);
+  });
+
+  it('delivers an owned dispatch under a default subagent model, which its own model outranks', async () => {
+    const r = await dispatch({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sonnet-5-5' } });
+    expect(r.out).toEqual({ model: 'claude-haiku-5-5', agentId: 'child' });
+    expect([r.calls, r.runs, r.denials, r.kept]).toEqual([['claude-haiku-5-5'], [true], [], true]);
   });
 
   it.each([false, true])('keeps the frontier opt-in for an owned frontier pair: %s', async enabled => {

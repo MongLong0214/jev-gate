@@ -1,4 +1,3 @@
-import { dependencyFact } from '../fixtures/compact-dependencies.ts';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -52,7 +51,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const staged = join(tmp, 'source');
     const stagedPlugin = join(staged, 'plugins/codex');
     cpSync(join(root, 'plugins/codex'), stagedPlugin, { recursive: true, filter: p => !p.includes('/dist/') && !p.endsWith('/dist') });
-    // MCP server names are global in the host. A user's installed Evidence server must not shadow this fixture,
+    // MCP server names are global in the host. A user's installed Jev Gate server must not shadow this fixture,
     // or be re-enabled by it. Keep the packaged manifest path and loader, with only a disposable server name.
     const mcpFile = join(stagedPlugin, '.mcp.json');
     const mcp = JSON.parse(readFileSync(mcpFile, 'utf8')) as { mcpServers: Record<string, unknown> };
@@ -71,7 +70,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     expect(spawnSync('unzip', ['-q', join(tmp, 'archives', archive), '-d', plugin]).status).toBe(0);
     mkdirSync(workspace); mkdirSync(join(workspace, '.bin'));
     expect(spawnSync('git', ['init', '-q'], { cwd: workspace }).status).toBe(0);
-    writeFileSync(join(workspace, 'source.ts'), 'export const runtimeEvidenceNeedle = 42;\n');
+    writeFileSync(join(workspace, 'source.ts'), 'export const runtimeNeedle = 42;\n');
     writeFileSync(join(workspace, '.bin/vitest'), `#!${process.execPath}\nconst text = ${JSON.stringify(log)}; const fail = process.argv.includes("fail"); process.stdout.write(fail ? text.replaceAll("1 passed", "1 failed") : text); process.exitCode = fail ? 1 : 0;\n`, { mode: 0o755 });
     const marketplace = JSON.parse(readFileSync(join(plugin, '.agents/plugins/marketplace.json'), 'utf8')) as Rec;
     marketplace['name'] = market;
@@ -86,10 +85,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     installed = true;
   }, 60_000);
 
-  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'worktree', 'hierarchy', 'cancelled', 'budget', 'compact-manual', 'compact-auto', 'compact-semantic', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
-    const semanticBatches: Rec[] = [];
-    const semantic = scenario === 'compact-semantic';
-    if (semantic) for (let i = 1; i <= 20; i++) writeFileSync(join(workspace, `compact-note${i}.txt`), i === 3 ? dependencyFact : (`Unrelated completed archive ${i}. `).repeat(100));
+  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'cancelled', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
     const routing = scenario.startsWith('routing-');
     const rootPair = scenario.startsWith('routing-root-');
     const baselineEffort = rootPair ? 'high' : 'medium';
@@ -109,17 +105,17 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       const index=requests.length;
       const final=(text:string):Rec=>({id:`msg_${index}`,type:'message',role:'assistant',phase:'final_answer',content:[{type:'output_text',text,annotations:[]}]});
       const fn=(name:string,args:Rec):Rec=>requestFunctions(request).some(t=>t['name']===name) ? {id:`fc_${index}`,type:'function_call',call_id:`call_${index}`,name,arguments:JSON.stringify(name==='jev_agent' && scenario!=='background'?{...args,run_in_background:false}:args)} : {id:`fc_${index}`,type:'custom_tool_call',call_id:`call_${index}`,name:'exec',input:`const result = await tools.${name}(${JSON.stringify(name==='jev_agent' && scenario!=='background'?{...args,run_in_background:false}:args)}); text(result);`};
-      let item = index===2 ? fn('exec_command',{cmd:'touch guard-must-not-exist',login:false}) : index===3 ? fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'Investigate the fixture and run vitest run.'}) : index===4 ? fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000}) : index===5 ? final('```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:'vitest run',result:'pass',note:'actual run'}],blockers:[]})+'\n```') : final('managed native complete');
+      let item = index===2 ? fn('exec_command',{cmd:'echo rootToolUnguarded',login:false}) : index===3 ? fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'Investigate the fixture and run vitest run.'}) : index===4 ? fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000}) : index===5 ? final('```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:'vitest run',result:'pass',note:'actual run'}],blockers:[]})+'\n```') : final('managed native complete');
       const report=(check:string):string=>'```json\n'+JSON.stringify({status:'done',summary:'Fixture checked',changed_files:[],interfaces:[],checks:[{check_id:check,result:'pass',note:'actual run'}],blockers:[]})+'\n```';
       if (scenario === 'bounded-lookup') {
-        if (index === 3) item = fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeEvidenceNeedle in source.ts and return its exact line. Run rg -n runtimeEvidenceNeedle source.ts.' });
-        if (index === 4) item = fn('exec_command', { cmd: 'rg -n runtimeEvidenceNeedle source.ts', login: false });
-        if (index === 5) item = final(report('rg -n runtimeEvidenceNeedle source.ts'));
+        if (index === 3) item = fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeNeedle in source.ts and return its exact line. Run rg -n runtimeNeedle source.ts.' });
+        if (index === 4) item = fn('exec_command', { cmd: 'rg -n runtimeNeedle source.ts', login: false });
+        if (index === 5) item = final(report('rg -n runtimeNeedle source.ts'));
       }
       if (scenario === 'direct-lookup') {
-        item = index === 2 ? fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeEvidenceNeedle in source.ts and run rg -n runtimeEvidenceNeedle source.ts.' })
-          : index === 3 ? fn('exec_command', { cmd: 'rg -n runtimeEvidenceNeedle source.ts', login: false })
-          : index === 4 ? final(report('rg -n runtimeEvidenceNeedle source.ts')) : final('managed native complete');
+        item = index === 2 ? fn('jev_agent', { subagent_type: 'jev-gate:worker-fast', prompt: 'Find runtimeNeedle in source.ts and run rg -n runtimeNeedle source.ts.' })
+          : index === 3 ? fn('exec_command', { cmd: 'rg -n runtimeNeedle source.ts', login: false })
+          : index === 4 ? final(report('rg -n runtimeNeedle source.ts')) : final('managed native complete');
       }
       if (scenario === 'background') {
         const worker = Array.isArray(request['input']) && request['input'].some(i => (i as Rec)?.['role'] === 'user' && JSON.stringify(i).includes('JEV_BG_NATIVE_WORKER'));
@@ -129,7 +125,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
           else item = final(report('vitest run'));
         } else {
           backgroundRootRequests++;
-          item = backgroundRootRequests === 2 ? fn('exec_command', { cmd: 'touch guard-must-not-exist', login: false })
+          item = backgroundRootRequests === 2 ? fn('exec_command', { cmd: 'echo rootToolUnguarded', login: false })
             : backgroundRootRequests === 3 ? fn('jev_agent', { subagent_type: 'jev-gate:worker', prompt: 'JEV_BG_NATIVE_WORKER Investigate the fixture and run vitest run.' })
             : backgroundRootRequests === 6 ? fn('jev_agent', { action: 'status', agent_id: backgroundWorkerId })
             : final(backgroundRootRequests === 5 ? 'The main answered the new question while the worker is still active.' : 'managed native complete');
@@ -151,46 +147,26 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       if(scenario==='cancelled' && index===4) item=fn('exec_command',{cmd:'sleep 30',login:false,yield_time_ms:1000});
       if(scenario==='cancelled' && index>=5) { res.writeHead(200,{'content-type':'text/event-stream'}); res.flushHeaders(); return; }
-      if(scenario==='budget' && index>=2) item=fn('exec_command',{cmd:'touch guard-must-not-exist',login:false});
-      if(scenario==='hierarchy'||scenario==='worktree') {
-        const task=(id:string,deps:string[])=>({id,outcome:'Check the fixture',depends_on:deps,deliverables:['source.ts'],constraints:[],checks:[{id:'c1',description:'Check fixture',required:true,command:'vitest run'}]});
-        const plan={status:'ready',goal:'Check two dependent outcomes',constraints:[],tasks:[task('t1',[]),task('t2',['t1'])]};
-        if(index===3) item=fn('jev_agent',{subagent_type:'jev-gate:planner',prompt:'Plan the two fixture outcomes.'});
-        else if(index===4) item=final('```json\n'+JSON.stringify(plan)+'\n```');
-        else if(index===5 || index===9) item=fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'[JEV_TASK rev=1 id=t2]\nCheck t2.'});
-        else if(index===6) item=fn('jev_agent',{subagent_type:'jev-gate:worker',prompt:'[JEV_TASK rev=1 id=t1]\nCheck t1.'});
-        else if(index===7 || index===10) item=fn('exec_command',{cmd:'vitest run',login:false,max_output_tokens:8000});
-        else if(index===8 || index===11) item=final(report('c1'));
-      }
-      if(scenario.startsWith('compact')) item=semantic && index <= 20 ? fn('exec_command', { cmd: `cat compact-note${index}.txt`, login: false, max_output_tokens: 4000 }) : final(index === (semantic ? 21 : 1) ? 'Old unrelated narrative. '.repeat(6000) : 'managed native complete');
-      const response = { id: `resp_${requests.length}`, status: 'completed', output: [item], usage: { input_tokens: scenario === 'bounded-lookup' ? 10 : scenario==='compact-auto' && index===2 ? 300000 : 150000, output_tokens: 1, total_tokens: scenario === 'bounded-lookup' ? 11 : scenario==='compact-auto' && index===2 ? 300001 : 150001 } };
+      const response = { id: `resp_${requests.length}`, status: 'completed', output: [item], usage: { input_tokens: scenario === 'bounded-lookup' ? 10 : 150000, output_tokens: 1, total_tokens: scenario === 'bounded-lookup' ? 11 : 150001 } };
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const event of [{ type: 'response.created', response: { ...response, status: 'in_progress', output: [] } }, { type: 'response.output_item.done', output_index: 0, item }, { type: 'response.completed', response }]) res.write(`data: ${JSON.stringify(event)}\n\n`);
       res.end();
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const config = [...isolation, 'features.plugins=true', 'features.hooks=true', `model=${JSON.stringify(baselineModel)}`, `model_reasoning_effort=${JSON.stringify(baselineEffort)}`, 'model_context_window=1000000', `model_auto_compact_token_limit=${scenario === 'compact-auto' ? 200000 : 900000}`, `marketplaces.${market}.source_type="local"`, `marketplaces.${market}.source=${JSON.stringify(plugin)}`, `plugins.jev-gate@${market}.enabled=true`, 'shell_environment_policy.inherit="all"'];
-    if(scenario==='worktree') {
-      expect(spawnSync('git',['add','source.ts'],{cwd:workspace}).status).toBe(0);
-      expect(spawnSync('git',['-c','user.name=Jev fixture','-c','user.email=fixture@example.invalid','commit','-qm','Fixture'],{cwd:workspace}).status).toBe(0);
-    }
-    // Serial and restrictive scenarios explicitly select that policy; worktree and automatic-model cases exercise the new defaults.
+    const config = [...isolation, 'features.plugins=true', 'features.hooks=true', `model=${JSON.stringify(baselineModel)}`, `model_reasoning_effort=${JSON.stringify(baselineEffort)}`, 'model_context_window=1000000', 'model_auto_compact_token_limit=900000', `marketplaces.${market}.source_type="local"`, `marketplaces.${market}.source=${JSON.stringify(plugin)}`, `plugins.jev-gate@${market}.enabled=true`, 'shell_environment_policy.inherit="all"'];
     const policyFile = join(tmp, `policy ${scenario}.json`);
     writeFileSync(policyFile, JSON.stringify({
-      gate: { mode: scenario.startsWith('compact') || routing ? 'off' : 'auto',
+      gate: { mode: routing ? 'off' : 'auto',
         ...(scenario === 'direct-lookup' ? { delegationDepthFloor: 999999 } : {}),
-        admittedShape: scenario === 'hierarchy' || scenario === 'worktree' ? 'hierarchy' : 'auto',
-        ...(scenario === 'worktree' ? {} : { workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [], planInterpretation: false }),
         ...(scenario === 'routing-model-luna' ? { models: { fast: 'gpt-6-luna', standard: 'gpt-6-luna', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' } } : {}) },
       router: { model: rootPair || ['routing-model-luna', 'routing-auto-model'].includes(scenario), ...(scenario === 'routing-auto-model' ? { allowAstra: true } : {}) },
-      compact: { manual: scenario === 'compact-manual' || semantic, ...(semantic ? { budgetChars: 8000 } : {}) },
     }));
-    const profiles=Object.fromEntries(['planner','planner-frontier','worker-fast','worker','worker-deep','worker-frontier'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
+    const profiles=Object.fromEntries(['worker-fast','worker','worker-deep','worker-frontier'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
     const session = await startCodexSession({ cwd: workspace, env: { ...runtimeEnv, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
       fetchImpl: (async (_url, init) => {
-        const parsed=JSON.parse(String(init?.body)); const q = parsed.questions; if (semantic && Object.keys(q).some(k => /^m\d+t\d+$/.test(k))) semanticBatches.push(parsed);
-        const bounded = scenario === 'bounded-lookup' && JSON.stringify(parsed.state).includes('runtimeEvidenceNeedle');
-        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k.startsWith('effort_')?rootPair?q[k].criteria.findIndex((v:string)=>v.startsWith(targetEffort==='max'?'Maximum':targetEffort==='low'?'Light':'Strong')):q[k].criteria.length-1:k==='tool_calls'?(scenario==='bounded-lookup'?(bounded?1:0):4):k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=/^m\d+t\d+$/.test(k) ? (parsed.state.candidates.find((c:Rec)=>c['id']===k)?.result.includes(dependencyFact) ? 'required' : 'unrelated') : k==='bounded_tool_work'?(bounded?'bounded':'other'):k.startsWith('relation_')?'omit':k==='capability' && (['bounded-lookup','direct-lookup','routing-model-luna'].includes(scenario) || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))) ? 'mechanical' : k==='model' && ['bounded-lookup','direct-lookup'].includes(scenario) ? 'gpt-6-luna' : k==='model' && routing ? scenario==='routing-auto-model'?'gpt-6-astra':scenario==='routing-model-luna' || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))?'gpt-6-luna':'__keep__' : picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
+        const parsed=JSON.parse(String(init?.body)); const q = parsed.questions;
+        const bounded = scenario === 'bounded-lookup' && JSON.stringify(parsed.state).includes('runtimeNeedle');
+        return new Response(JSON.stringify({ model: parsed.model, answers: Object.fromEntries(Object.keys(q).map(k => { const score=routing && k.startsWith('effort_')?rootPair?q[k].criteria.findIndex((v:string)=>v.startsWith(targetEffort==='max'?'Maximum':targetEffort==='low'?'Light':'Strong')):q[k].criteria.length-1:k==='tool_calls'?(scenario==='bounded-lookup'?(bounded?1:0):4):k==='size'?2:0; const picks:Record<string,string>={work_shape:'sustained_task',handoff_scope:'self_contained'}; const pick=k==='bounded_tool_work'?(bounded?'bounded':'other'):k.startsWith('relation_')?'omit':k==='capability' && (['bounded-lookup','direct-lookup','routing-model-luna'].includes(scenario) || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))) ? 'mechanical' : k==='model' && ['bounded-lookup','direct-lookup'].includes(scenario) ? 'gpt-6-luna' : k==='model' && routing ? scenario==='routing-auto-model'?'gpt-6-astra':scenario==='routing-model-luna' || rootPair && (scenario.endsWith('model') || scenario.endsWith('both'))?'gpt-6-luna':'__keep__' : picks[k] ?? Object.keys(q[k].criteria ?? {})[0]; return [k, q[k].type === 'score' ? { type: 'score', score, confidence:1, probabilities: Object.fromEntries(q[k].criteria.map((_:unknown,i:number)=>[i,i===score?1:0])) } : q[k].type === 'noul' ? { type:'noul',noul:0 } : { type: 'choice', choice: pick, confidence: 1, probabilities: Object.fromEntries(Object.keys(q[k].criteria).map(v=>[v,v===pick?1:0])) }]; })) }), { headers: { 'content-type': 'application/json' } });
       }) as typeof fetch });
     const socket = new WebSocket(session.url, { headers: { Authorization: `Bearer ${session.token}` } });
     const opened = new Promise<void>((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);});
@@ -210,36 +186,10 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:baselineEffort,developer_instructions:null}},input:[{type:'text',text:'Explain the fixture. Preserve the userConstraintNeedle verbatim.',text_elements:[]}]});
       const until=Date.now()+20000; while(!messages.some(m=>m['method']==='turn/completed') && Date.now()<until) await new Promise(r=>setTimeout(r,20));
       expect(messages.some(m=>m['method']==='turn/completed'),JSON.stringify(messages)).toBe(true);
-      expect(requests.length).toBe(semantic ? 21 : 1);
+      expect(requests.length).toBe(1);
       expect(JSON.stringify(requests[0])).toContain('jev_agent');
       expect(JSON.stringify(requests[0])).toContain('Jev Gate');
       const rows=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
-      if(scenario.startsWith('compact')) {
-        const waitTurn=async(at:number)=>{ const end=Date.now()+15000; while(!messages.slice(at).some(m=>m['method']==='turn/completed' && (m['params'] as Rec)['threadId']===id) && Date.now()<end) await new Promise(r=>setTimeout(r,20)); };
-        const second=messages.length;
-        await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:'medium',developer_instructions:null}},input:[{type:'text',text:'Give a short second answer.',text_elements:[]}]}); await waitTurn(second);
-        if(scenario==='compact-manual' || semantic) {
-          const compactStart=messages.length;
-          await call('thread/compact/start',{threadId:id});
-          const end=Date.now()+15000; while(!readdirSync(trace).some(f=>f.startsWith('codex_compact') && JSON.parse(readFileSync(join(trace,f),'utf8')).stage==='installed') && Date.now()<end) await new Promise(r=>setTimeout(r,20));
-          await waitTurn(compactStart);
-        }
-        const third=messages.length;
-        await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:'medium',developer_instructions:null}},input:[{type:'text',text:'Continue and preserve the original user constraints.',text_elements:[]}]}); await waitTurn(third);
-        const all=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
-        expect(all.some(r=>r['phase']==='codex_compact' && r['stage']==='installed' && r['applied']===true),JSON.stringify({all:all.filter(r => r['phase']==='codex_compact'),count:requests.length,items: (requests.at(-2)?.['input'] as Rec[] | undefined)?.filter(i => String(i['type']).includes('call')).slice(0,4)}).slice(0,4000)).toBe(true);
-        expect(requests.length).toBe(semantic ? 23 : 3);
-        expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).toContain('[jev-gate compact]');
-        expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).toContain('userConstraintNeedle');
-        expect(JSON.stringify(all)).not.toContain('userConstraintNeedle');
-        if (semantic) {
-          expect(semanticBatches).toHaveLength(1);
-          expect(JSON.stringify(requests[22]!['input'])).toContain(dependencyFact);
-          expect(all.some(r => r['phase'] === 'codex_compact' && r['jev_sent'] === true && r['dependencies'] === 1)).toBe(true);
-          expect(JSON.stringify(all)).not.toContain(dependencyFact);
-        }
-        return;
-      }
       if (rootPair) {
         // A downgrade on a thread with no observed usage is held: its prefix may cost more than the cheaper model saves.
         const downgrade=scenario.endsWith('model') || scenario.endsWith('both');
@@ -264,7 +214,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       expect(rows.some(r=>r['phase']==='codex_router_result'),JSON.stringify(rows)).toBe(true);
       expect(rows.some(r=>r['phase']==='codex_route_applied' && r['request_kind']==='root_response' && r['applied']===true),JSON.stringify({rows,headerKeys,hookCount:(hookList['data'] as Rec[]).length})).toBe(true);
       const before=messages.length;
-      await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:'medium',developer_instructions:null}},input:[{type:'text',text:scenario === 'bounded-lookup' ? 'Find runtimeEvidenceNeedle in source.ts and return the exact line. Do not edit.' : 'Investigate the repository fixture and check it using vitest run.',text_elements:[]}]});
+      await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:'medium',developer_instructions:null}},input:[{type:'text',text:scenario === 'bounded-lookup' ? 'Find runtimeNeedle in source.ts and return the exact line. Do not edit.' : 'Investigate the repository fixture and check it using vitest run.',text_elements:[]}]});
       if(scenario==='cancelled') {
         const deadline=Date.now()+15000;
         while(!messages.slice(before).some(m=>m['method']==='item/started' && (m['params'] as Rec)['threadId']!==id && ((m['params'] as Rec)['item'] as Rec)['type']==='commandExecution') && Date.now()<deadline) await new Promise(r=>setTimeout(r,20));
@@ -283,7 +233,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       const all=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
       if (scenario === 'direct-lookup') {
         expect(requests).toHaveLength(5); expect(requests[2]!['model']).toBe('gpt-6-luna');
-        expect(JSON.stringify(requests[3]!['input'])).toContain('1:export const runtimeEvidenceNeedle = 42;');
+        expect(JSON.stringify(requests[3]!['input'])).toContain('1:export const runtimeNeedle = 42;');
         expect(all.some(r => r['phase'] === 'post' && r['verdict'] === 'accept' && r['root_fallback'] === false)).toBe(true);
         const job = readJob({ JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`, 'codex') }, id);
         expect(job.ok && job.value?.current.shape).toBe('direct'); expect(job.ok && job.value?.current.active).toEqual({});
@@ -324,37 +274,22 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         expect(requests.length).toBe(10);
         return;
       }
-      if(scenario==='budget') {
-        expect(requests.length,JSON.stringify(all)).toBe(13);
-        expect(all.some(r=>r['phase']==='guard' && r['stopped']===true)).toBe(true);
-        expect(existsSync(join(workspace,'guard-must-not-exist'))).toBe(false);
-        expect(messages.slice(before).some(m=>m['method']==='turn/completed' && ((m['params'] as Rec)['turn'] as Rec)['status']==='interrupted')).toBe(true);
-        return;
-      }
-      expect(requests.length,JSON.stringify({all,turns:messages.slice(before).filter(m=>m['method']==='turn/completed')})).toBe(scenario==='hierarchy'||scenario==='worktree'?12:6);
-      expect(existsSync(join(workspace,'guard-must-not-exist'))).toBe(false);
-      if(scenario!=='worktree') expect(JSON.stringify(requests[semantic ? 22 : 2]!['input'])).toContain('denied');
+      expect(requests.length,JSON.stringify({all,turns:messages.slice(before).filter(m=>m['method']==='turn/completed')})).toBe(6);
+      // #289: no root tool guard, so the root's own call runs and its output comes back unchanged.
+      const rootOutput = JSON.stringify((requests[2]!['input'] as Rec[]).filter(i => String(i['type']).endsWith('_output')));
+      expect(rootOutput).toContain('rootToolUnguarded');
+      expect(rootOutput).not.toContain('denied');
       if (scenario === 'bounded-lookup') {
         expect(requests[3]!['model']).toBe('gpt-6-luna');
-        expect(JSON.stringify(requests[4]!['input'])).toContain('1:export const runtimeEvidenceNeedle = 42;');
+        expect(JSON.stringify(requests[4]!['input'])).toContain('1:export const runtimeNeedle = 42;');
         const admissions = all.filter(r => r['phase'] === 'admission_result' && r['attempted'] === true);
         expect(admissions).toHaveLength(2); // one batch for each of the two native root prompts, never per tool step
         expect(new Set(admissions.map(r => r['prompt_id'])).size).toBe(2);
         expect(all.some(r => r['phase'] === 'admission_result' && r['policy_basis'] === 'bounded_tool_worker' && ((r['estimate'] as Rec)['saving_tokens'] as number) < 0)).toBe(true);
       }
       if(scenario==='permission-boundary') expect(existsSync(join(workspace,'worker-must-not-exist'))).toBe(false);
-      if(scenario==='worktree') {
-        expect(JSON.stringify(requests[6]!['input'])).toContain('worktrees/jev-worker-');
-        expect(all.some(r=>r['phase']==='post' && r['verdict']==='accept'),JSON.stringify(all)).toBe(true);
-      }
       expect(all.some(r=>r['phase']==='admission_result' && (r['decision'] as Rec)?.['shape']==='orchestrated'),JSON.stringify(all)).toBe(true);
       expect(all.some(r=>r['phase']==='post' && r['verdict']===(['failed','permission-boundary'].includes(scenario)?'incomplete':'accept')),JSON.stringify(all.filter(r=>r['phase']==='post'))).toBe(true);
-      if(scenario==='hierarchy'||scenario==='worktree') {
-        expect(all.filter(r=>r['phase']==='dispatch' && r['role']==='worker').length).toBe(2);
-        expect(all.some(r=>r['phase']==='post' && r['plan_complete']===true),JSON.stringify(all)).toBe(true);
-        await vi.waitFor(() => expect(session.policy.sessions.size).toBe(1), { timeout: 3000 });
-        expect(JSON.stringify(requests[6]!['input'])).toContain('[Jev Gate task contract]');
-      }
     } finally { releaseBackground(); socket.terminate(); await session.close(); server.closeAllConnections(); await new Promise<void>(r=>server.close(()=>r())); }
   }, 60000);
 
@@ -373,13 +308,10 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       const request = JSON.parse(body.toString()) as Rec;
       requests.push(request);
-      const tool = requestFunctions(request).find(t => String(t['name']).endsWith('jev_evidence'));
       const index = requests.length;
       const item: Rec = index === 1
         ? { id: `fc_${index}`, type: 'function_call', call_id: `call_${index}`, name: 'exec_command', arguments: JSON.stringify({ cmd: scenario === 'failed' ? 'vitest run fail' : 'vitest run', login: false, max_output_tokens: 8000 }) }
-        : index === 2 && tool
-          ? { id: `fc_${index}`, type: 'function_call', call_id: `call_${index}`, name: tool['name'], ...(tool['namespace'] ? { namespace: tool['namespace'] } : {}), arguments: JSON.stringify({ goal: 'Locate fixture evidence', exactSymbols: ['runtimeEvidenceNeedle'] }) }
-          : { id: 'msg_final', type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] };
+        : { id: 'msg_final', type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] };
       const response = { id: `resp_${index}`, object: 'response', created_at: 1, model: 'jev-test-model', status: 'completed', output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const event of [
@@ -406,7 +338,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     ];
     const args = ['--no-daemon', ...(trust ? ['--dangerously-bypass-hook-trust'] : []), 'exec', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', workspace, ...config.flatMap(c => ['-c', c]), 'Run the local fixture tools, then finish.'];
     let output = '';
-    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, ...(scenario === 'missing-workspace' ? {} : { JEV_CODEX_WORKSPACE: workspace }), JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
+    const child = spawn('codex', args, { cwd: workspace, env: { HOME: runtimeEnv.HOME, XDG_CONFIG_HOME: runtimeEnv.XDG_CONFIG_HOME, XDG_STATE_HOME: runtimeEnv.XDG_STATE_HOME, JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CODEX_HOME: runtimeEnv.CODEX_HOME, PATH: `${join(workspace, '.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_AUTO_CONNECT: '0', JEV_CODEX_TRACE_DIR: trace, JEV_CODEX_ENABLED: scenario === 'hooks-disabled' ? '0' : '1', CLAUDE_PROJECT_DIR: '/wrong-workspace', PWD: '/wrong-workspace' } });
     child.stdin.end(); child.stdout.on('data', b => { output += String(b); }); child.stderr.on('data', b => { output += String(b); });
     const timer = setTimeout(() => child.kill('SIGTERM'), 40_000);
     try {
@@ -415,25 +347,18 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     } finally { clearTimeout(timer); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   };
 
-  it('loads plugin MCP and trusted hooks, leaves the model-visible result native and records both paths', async () => {
+  it('loads trusted hooks, leaves the model-visible result native and records the hook path', async () => {
     const result = await run(true);
     expect(result.code, result.output).toBe(0);
-    expect(result.requests.length, result.output).toBeGreaterThanOrEqual(3);
-    expect(functions(result.requests[0]!['tools']).some(t => String(t['name']).endsWith('jev_evidence')), result.output).toBe(true);
-    expect(JSON.stringify(result.requests[0])).toContain('Read-only source evidence from the one project this server was configured for');
+    expect(result.requests.length, result.output).toBeGreaterThanOrEqual(2);
     const second = JSON.stringify(result.requests[1]!['input']);
     expect(second).not.toContain('[jev-gate output]');
     expect(second.split('fixture repeat detail').length - 1).toBe(100);
-    const last = JSON.stringify(result.requests.at(-1)!['input']);
-    expect(last).toContain('runtimeEvidenceNeedle');
-    expect(last).not.toContain('/wrong-workspace');
+    expect(JSON.stringify(result.requests.at(-1)!['input'])).not.toContain('/wrong-workspace');
     const records = readdirSync(result.trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
-    expect(records.some(r => r['phase'] === 'evidence_result')).toBe(true);
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) expect(records.some(r => r['event'] === event), event).toBe(true);
     const snapshot = loadActivity({ traceDir: result.trace, env: {}, host: 'codex' });
-    expect(snapshot.operations.features.find(f => f.id === 'evidence')?.state).toBe('observed');
     expect(snapshot.operations.features.find(f => f.id === 'admission')?.capability?.mode).toBe('connect');
-    expect(JSON.stringify(records)).not.toContain('runtimeEvidenceNeedle');
     expect(JSON.stringify(snapshot)).not.toContain('fixture repeat detail');
   }, 60_000);
 
@@ -456,30 +381,15 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     expect(snapshot.operations.feed.some(s => s.lifecycle)).toBe(true);
   }, 60_000);
 
-  it('binds Evidence to the actual native workspace with no environment setting or launcher', async () => {
-    const result = await run(true, 'missing-workspace');
-    expect(result.code, result.output).toBe(0);
-    const last = JSON.stringify(result.requests.at(-1)?.['input']);
-    expect(last).not.toContain('unavailable_config');
-    expect(last).toContain('export const runtimeEvidenceNeedle');
-    expect(last).toContain(workspace);
-    expect(last).not.toContain('/wrong-workspace');
-    const rows = readdirSync(result.trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
-    expect(rows.some(r => r['phase'] === 'evidence_result')).toBe(true);
-    expect(rows.find(r => r['phase'] === 'evidence_result')?.['session_id']).toBeTypeOf('string');
-  }, 60_000);
-
   it.each(['recording-unavailable', 'hooks-disabled'])('preserves native output and the separate MCP when %s', async scenario => {
     const result = await run(true, scenario);
     expect(result.code, result.output).toBe(0);
     const input = JSON.stringify(result.requests[1]?.['input']);
     expect(input).not.toContain('[jev-gate output]');
     expect(input.split('fixture repeat detail').length - 1).toBe(100);
-    expect(JSON.stringify(result.requests.at(-1)?.['input'])).toContain('runtimeEvidenceNeedle');
     if (scenario === 'recording-unavailable') expect(readFileSync(result.trace, 'utf8')).toBe('not a directory');
     else {
       const rows = readdirSync(result.trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(result.trace, f), 'utf8')) as Rec);
-      expect(rows.some(r => r['phase'] === 'evidence_result')).toBe(true);
       expect(rows.some(r => String(r['phase']).startsWith('codex_'))).toBe(false);
     }
   }, 60_000);

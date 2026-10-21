@@ -75,6 +75,10 @@ describe('dashboard rebuild sharing (#210)', () => {
     const changed = await handler.load();
     expect(loads.count).toBe(2);
     expect(changed.base).toBe(first.key);
+    writeFileSync(join(trace, 'c.json'), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+    // Directory mtime also discovers a new filename when a watch notification has not arrived yet.
+    expect((await handler.load()).base).toBe(changed.key);
+    expect(loads.count).toBe(3);
   });
 
   it('rebuilds when only the liveness ring changed', async () => {
@@ -86,6 +90,26 @@ describe('dashboard rebuild sharing (#210)', () => {
     const changed = await handler.load();
     expect(changed.base).toBe(first.key);
     expect(changed.patch).toContain('"recorded":1');
+  });
+
+  it('refreshes doctor facts at the 24-hour boundary and Compact grace edge without a new trace', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const now = new Date('2026-10-20T06:00:00.000Z'); vi.setSystemTime(now);
+      const trace = make(), handler = activityHandler({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } });
+      writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'admission_result', session_id: 's', written_at: new Date(+now - 86_400_000 + 1000).toISOString(), decision: { shape: 'orchestrated' } }));
+      writeFileSync(join(trace, 'c.json'), JSON.stringify({ phase: 'mod_compact', stage: 'pre', mode: 'active', session_id: 'c', written_at: now.toISOString() }));
+      const facts = () => (JSON.parse(handler.full()!.json) as { activity24h: { all: Array<{ feature: string; level: string; metrics: { fired: number } }> } }).activity24h.all;
+      const first = await handler.load();
+      expect(facts().find(c => c.feature === 'admission')?.metrics.fired).toBe(1);
+      expect(facts().find(c => c.feature === 'compact')?.level).toBe('ok');
+      vi.setSystemTime(+now + 1000);
+      expect((await handler.load()).base).toBe(first.key);
+      expect(facts().find(c => c.feature === 'admission')?.metrics.fired).toBe(0);
+      vi.setSystemTime(+now + 600_001);
+      await handler.load();
+      expect(facts().find(c => c.feature === 'compact')?.level).toBe('fail');
+    } finally { vi.useRealTimers(); }
   });
 });
 
@@ -169,14 +193,14 @@ describe('dashboard snapshot latency (#215)', () => {
 describe('dashboard rebuild pacing', () => {
   const record = (dir: string, name: string): void => writeFileSync(join(dir, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
 
-  it('waits four times the last rebuild from its start, between one and four seconds', () => {
-    expect([0, 100, 400, 1000, 9000].map(rebuildWait)).toEqual([1000, 1000, 1600, 4000, 4000]);
+  it('coalesces fast bursts within one frame and never adds more than 100 ms of pacing', () => {
+    expect([0, 100, 400, 1000, 9000].map(rebuildWait)).toEqual([16, 100, 100, 100, 100]);
   });
 
   it('starts the first load at once, then keeps each pause and still shows a new record within seconds', async () => {
     const trace = make();
     record(trace, 'r0.json');
-    gate.ms = 400; // 1.6 seconds from one rebuild's start to the next
+    gate.ms = 400; // A slow rebuild is shared; arrivals never queue another load behind it.
     const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
     const opened = Date.now();
     const reader = (await fetch(`${server.url}api/live`)).body!.getReader();
@@ -203,7 +227,7 @@ describe('dashboard rebuild pacing', () => {
     }
   }, 15_000);
 
-  it('starts the rebuild for a record written after a slow one a second after that one started, not a second after it ended', async () => {
+  it('starts the rebuild for a record written after a slow one as soon as that one has ended without another long pause', async () => {
     // The pause once counted from the end of a rebuild, so a record waited its whole length on top of the pause.
     const trace = make();
     record(trace, 'r0.json');

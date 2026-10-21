@@ -12,7 +12,7 @@ const step = (id: string, feature: OperationStep['feature'], lane: OperationStep
 const run = (id: string, host: 'claude' | 'codex', steps: OperationStep[], extra: Partial<OperationRun> = {}): OperationRun => ({ id, host, title: `${host} execution`, source: 'gate', mode: 'auto', firstAt: stamp, lastAt: stamp, state: 'done', steps, ...extra });
 const snapshot = (runs: OperationRun[]) => {
   const all = runs.flatMap(r => r.steps.map(s => ({ ...s, host: r.host, runId: r.id, runTitle: r.title })));
-  const ids = ['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence'] as const;
+  const ids = ['admission', 'allocation', 'workers', 'router', 'compact'] as const;
   const values = all.filter(s => s.lane === 'jev' && s.durationMs !== undefined).map(s => ({ at: s.at, ms: s.durationMs! }));
   // The frame key replaced the operations signature; Omit keeps this fixture valid with or without the field.
   const operations: OperationsView = { runs, feed: all.slice().reverse(), active: 0, attention: 0, requests: values.length,
@@ -38,6 +38,42 @@ const opened = (p: ReturnType<typeof page>) => p.w.document.querySelector('#trac
 const rows = (p: ReturnType<typeof page>) => p.get('runs').querySelectorAll('button[data-run]');
 const node = (p: ReturnType<typeof page>, id: string) => p.w.document.querySelector(`#pipeline .node[data-feature="${id}"]`)! as HTMLElement;
 const filled = (p: ReturnType<typeof page>) => [...p.get('rc').querySelectorAll('li button')];
+
+it('keeps worker cards without a contract verdict honest in both languages', () => {
+  const p = page();
+  for (const outcome of [undefined, 'host_ended'] as const) {
+    p.push(snapshot([run('native', 'claude', [step('native', 'workers', 'host', outcome ? { outcome } : {})])]));
+    expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('판정 없음');
+  }
+  p.click('#language'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('No verdict');
+});
+
+it('renders doctor activity facts and unknown measurements in existing node lines and inspector', () => {
+  const p = page(), s = snapshot([run('r', 'claude', [step('x', 'router', 'host')])]);
+  const facts = [{ feature: 'router', level: 'warn', metrics: { fired: 9, applied: 3, effect: null, regression: 1 }, current: { model: { selected: 'sonnet', selectedEffort: 'high', observed: null } } }];
+  p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
+  expect(node(p, 'router').querySelector('.ds')!.textContent).toContain('발화 9 · 적용 3 · 회귀 1');
+  p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('효과 (루트 비용 추정) 미확인');
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('루트 · 선택 · sonnet · high');
+  p.click('#language'); expect(text(p, 'circuit-inspector')).toContain('effect (root cost estimate) unknown');
+  p.click('[data-host=codex]'); expect(node(p, 'router').querySelector('.ds')!.textContent).toBe('24h untrackable');
+});
+
+it.each([[0, '+$0.00'], [-.67486, '−$0.67'], [[-.1, .2], '−$0.10 / +$0.20']])('renders Router net %j without cache-price assumptions', (effect, expected) => {
+  const p = page(), s = snapshot([]), facts = [{ feature: 'router', level: 'ok', metrics: { fired: 1, applied: 1, regression: 0, effect } }];
+  p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain(expected);
+  p.click('.node[data-feature=router]');
+  expect(text(p, 'circuit-inspector')).toContain(expected);
+});
+
+it.each(['tool_editing_floor', 'tool_read_only', 'tool_editing', 'not_checked', 'upgrade_allowed', 'cost_allows', 'basis_absent', 'child_pair_changed_before_submission', 'ok', 'invalid', 'unknown_model', 'ambiguous'])('labels emitted reason %s and preserves future codes in either language', reason => {
+  const p = page(), s = (code: string) => snapshot([run('r', 'claude', [step('x', 'router', 'host', { routing: { scope: 'root', baseline: 'opus', modelReason: code, effortReason: code } })])]);
+  p.push(s(reason)); expect(node(p, 'router').querySelector('.nt')!.textContent).not.toContain(reason);
+  p.click('#language'); expect(node(p, 'router').querySelector('.nt')!.textContent).not.toContain(reason);
+  p.push(s('future_reason_987')); expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('future_reason_987');
+  p.click('#language'); expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('future_reason_987');
+});
 
 describe('dashboard live interactions', () => {
   it('shows the running version and honest latest-release status only when a version is known, in both languages', () => {
@@ -80,9 +116,20 @@ describe('dashboard live interactions', () => {
     expect(opened(p)).toContain('후보 8/16 · 필수 근거 3'); expect(text(p, 'trace')).not.toContain('호스트 훅에서 결과 이벤트가 빠진');
     p.click('.node[data-feature=compact]'); expect(text(p, 'circuit-inspector')).toContain('220ms');
   });
-  it('renders all eight real feature states and never invents traffic on first load', () => {
+  it.each([
+    ['no_current_task', '사람이 입력한 현재 작업 없음', 'No current human task'],
+    ['no_prior_assistant', '이전 assistant 메시지 없음', 'No prior assistant message'],
+  ] as const)('renders classic Compact reason %s in both languages', (selection, ko, en) => {
+    const p = page();
+    const operations = buildOperations([], [{ at: stamp, component: 'compact', rec: { event: 'compact', path: 'classic', session_id: 's', stage: 'pre', guided: true, selection } }], new Date(stamp), { trace: true });
+    p.push({ ...snapshot([]), operations });
+    expect(opened(p)).toContain(ko);
+    p.click('#language');
+    expect(opened(p)).toContain(`Jev selection · ${en}`);
+  });
+  it('renders all five real feature states and never invents traffic on first load', () => {
     const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 70 })]), run('x', 'codex', [step('l', 'workers', 'host', { lifecycle: true })])]));
-    expect(p.w.document.querySelectorAll('#pipeline .node')).toHaveLength(8);
+    expect(p.w.document.querySelectorAll('#pipeline .node')).toHaveLength(5);
     expect(node(p, 'workers').classList.contains('idle')).toBe(true); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('–');
     expect(node(p, 'admission').classList.contains('idle')).toBe(false);
     expect(p.w.document.querySelectorAll('.trip,.node.zap,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(1);
@@ -97,7 +144,7 @@ describe('dashboard live interactions', () => {
     expect(p.w.document.querySelector('[data-host="codex"]')?.getAttribute('aria-pressed')).toBe('true');
   });
   it('searches feature names, exposes filter state and never leaves an empty highlighted run', () => {
-    const p = page(); p.push(snapshot([run('searchable', 'claude', [step('allocation', 'allocation', 'jev')]), run('other', 'codex', [step('g', 'guard', 'policy')])]));
+    const p = page(); p.push(snapshot([run('searchable', 'claude', [step('allocation', 'allocation', 'jev')]), run('other', 'codex', [step('g', 'workers', 'policy')])]));
     const search = p.get('search') as unknown as { value: string; dispatchEvent(e: unknown): void }; search.value = 'Gate B'; search.dispatchEvent(new p.w.Event('input'));
     expect(rows(p)).toHaveLength(1); expect(text(p, 'runs')).toContain('claude execution');
     p.click('[data-state=unconfirmed]'); expect(p.w.document.querySelector('[data-state=unconfirmed]')?.getAttribute('aria-pressed')).toBe('true');
@@ -105,10 +152,10 @@ describe('dashboard live interactions', () => {
     for (const li of p.get('runs').querySelectorAll('li')) expect(li.textContent?.trim()).not.toBe('');
     expect(text(p, 'rd-name')).toBe(''); expect(p.get('trace').querySelector('li.empty')).not.toBeNull();
   });
-  it('plays one round trip per new record and updates the node and the call log only on arrival', async () => {
+  it('updates values and the call log immediately, independently of round-trip motion', async () => {
     const p = page(), a = step('a', 'admission', 'jev', { durationMs: 60 }); p.push(snapshot([run('one', 'claude', [a])])); p.push(snapshot([run('one', 'claude', [a])]));
     p.push(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80, at: new Date().toISOString() })]), run('other', 'codex', [step('w', 'workers', 'host', { at: new Date().toISOString() })])]));
-    expect(node(p, 'allocation').querySelector('.dec b')!.textContent).toBe('–'); expect(filled(p)).toHaveLength(1);
+    expect(node(p, 'allocation').querySelector('.dec b')!.textContent).not.toBe('–'); expect(filled(p)).toHaveLength(2);
     await vi.waitFor(() => expect(filled(p)).toHaveLength(2), { timeout: 5000 });
     expect(node(p, 'allocation').querySelector('.dec b')!.textContent).not.toBe('–'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).not.toBe('–');
     expect(text(p, 'rc')).not.toContain('workers');
@@ -140,9 +187,10 @@ describe('dashboard live interactions', () => {
     })], { title: 'Codex 실행' }); p.push(snapshot([r])); p.click('#language'); p.click('.node[data-feature=router]');
     const all = ['runs', 'trace', 'rd-meta', 'circuit-inspector', 'rc', 'pipeline'].map(id => text(p, id)).join(' ');
     expect(all).not.toMatch(/[가-힣]/); expect(all).toContain('Selected and observed models match');
-    expect(all).toContain('Decision evidence'); expect(all).toContain('gpt-6.1-sol');
+    expect(all).toContain('Decision basis'); expect(all).toContain('gpt-6.1-sol');
   });
-  it.each([['실행 전 점검 충돌', 'Preflight conflict'], ['실행 예약 기록 불가', 'Reservation unavailable'], ['Codex 워커 시작 거부', 'Codex worker start rejected'], ['Codex 워커 턴 실패', 'Codex worker turn failed'], ['워커 중단', 'Worker interrupted'], ['워커 종료 미확인 · 예약 유지', 'Worker termination unconfirmed · reservation kept']])('translates the Codex dispatch failure reason %s (#233)', (ko, en) => {
+  it.each([['실행 전 점검 충돌', 'Preflight conflict'], ['실행 예약 기록 불가', 'Reservation unavailable'], ['Codex 워커 시작 거부', 'Codex worker start rejected'], ['Codex 워커 턴 실패', 'Codex worker turn failed'], ['워커 중단', 'Worker interrupted'], ['워커 종료 미확인 · 예약 유지', 'Worker termination unconfirmed · reservation kept'],
+    ['부모 권한 전달 불가', 'Parent permissions unavailable'], ['Worktree 생성 불가', 'Worktree unavailable'], ['배정 모델·effort 사용 불가', 'Allocated model or effort unavailable'], ['시작 전 취소', 'Cancelled before start']])('translates the Codex dispatch failure reason %s (#233, #287)', (ko, en) => {
     const p = page(); p.push(snapshot([run('failed', 'codex', [step('f', 'workers', 'host', { title: '호스트 호출 실패', state: 'error', summary: `${ko} · jev-gate:worker`, details: ['워커 미실행 · 완료 주장 없음'] })], { title: 'Codex 실행' })]));
     p.click('#language'); p.click('.node[data-feature=workers]');
     const all = ['trace', 'circuit-inspector'].map(id => text(p, id)).join(' ');
@@ -201,7 +249,7 @@ describe('dashboard live interactions', () => {
     const p = page(); p.push(snapshot([run('r', 'claude', [step('w', 'admission', 'jev', { state: 'active', at }), step('d', 'router', 'jev', { durationMs: 80, receipt: { status: 200, code: null, model: 'jev-1.14.0', input: 10, output: 1, costUsd: null, choice: 'claude-sonnet-5 · high', confidence: .9, threshold: .6, direction: null } })])]));
     const wait = p.w.document.querySelector('#rc button[data-call=w]')!;
     expect(wait.textContent).toContain('응답 대기'); expect(wait.querySelector('.run[data-since]')).not.toBeNull();
-    expect(p.w.document.querySelector('#pipeline .jb .v')?.textContent).toBe('1.14'); expect(p.w.document.querySelector('#pipeline .rail')?.classList.contains('wait')).toBe(true);
+    expect(p.w.document.querySelector('#pipeline .jb .v')?.textContent).toContain('p50 80ms'); expect(p.w.document.querySelector('#pipeline .rail')?.classList.contains('wait')).toBe(true);
     const first = wait.querySelector('.run')!.textContent; await vi.waitFor(() => expect(wait.querySelector('.run')!.textContent).not.toBe(first), { timeout: 3000 });
   });
   it('estimates today cost from recorded tokens only and labels it as an estimate', () => {
@@ -345,6 +393,14 @@ it('names the reason under each circuit card and draws its recorded confidence a
   expect(node(p, 'router').querySelector('.nt')!.textContent).toBe(''); expect(node(p, 'router').querySelector('.pb i')!.getAttribute('style')).toContain('width: 0%');
 });
 
+it('names the scope on the Router card when its last routing step is not the root turn (#290)', () => {
+  const later = new Date(Date.parse(stamp) + 1000).toISOString(), routing = (scope: 'root' | 'child') => ({ scope, baseline: 'claude-opus-5-5', modelReason: 'same_value', effortReason: 'selected' });
+  const p = page(); p.push(snapshot([run('scoped', 'claude', [step('root', 'router', 'host', { routing: routing('root') }), step('child', 'router', 'host', { at: later, routing: routing('child') })])]));
+  const nt = () => node(p, 'router').querySelector('.nt')!.textContent!;
+  expect(nt()).toMatch(/^하위 단계 · \S/); p.click('#language'); expect(nt()).toMatch(/^Child step · \S/);
+  p.push(snapshot([run('rooted', 'claude', [step('root', 'router', 'host', { routing: routing('root') })])])); expect(nt()).not.toMatch(/Child step|Root turn/);
+});
+
 it('makes connection loss explicit and freezes the displayed clock at disconnect', async () => {
   const p = page(); p.push(snapshot([run('r', 'claude', [step('r', 'router', 'jev', { state: 'active' })], { state: 'active', firstAt: new Date(Date.now() - 5000).toISOString() })]));
   const since = () => p.get('runs').querySelector('[data-since]')!.textContent;
@@ -366,7 +422,7 @@ it('shows a ten-thousand-step execution in a bounded timeline with one record li
   await vi.waitFor(() => expect(p.get('trace').children).toHaveLength(100)); expect(p.get('trace').querySelectorAll('[aria-expanded="true"]')).toHaveLength(1);
   // A patch that arrives before that draw applies to the frame it follows and is drawn; the frame is not drawn over it later.
   const next = frames(), q = page(), large = run('large', 'codex', steps), streams = q.streams();
-  q.push(next(snapshot([large]))); q.patch(next(snapshot([large, run('small', 'claude', [step('g', 'guard', 'policy')])])));
+  q.push(next(snapshot([large]))); q.patch(next(snapshot([large, run('small', 'claude', [step('g', 'workers', 'policy')])])));
   expect(rows(q)).toHaveLength(2);
   await new Promise(resolve => setTimeout(resolve, 50));
   expect(rows(q)).toHaveLength(2); expect(q.streams()).toBe(streams);
@@ -381,18 +437,18 @@ it('fills the first rows of a long list at once and the rest in later tasks, cou
   await vi.waitFor(() => expect(shown().every(Boolean)).toBe(true));
 });
 
-it('draws one strip tick per record of the last minute, caps a burst of trips and shows no per-minute rate', () => {
+it('draws every recent strip tick and updates a burst immediately alongside the live rate and rolling median', () => {
   const old = step('old', 'router', 'jev', { at: new Date(Date.now() - 90_000).toISOString(), durationMs: 40 });
   const base = Date.now(), records = (n: number) => Array.from({ length: n }, (_, i) => step(`r${i}`, 'router', 'jev', { durationMs: 50 + i, at: new Date(base + i).toISOString() }));
   const p = page(); p.push(snapshot([run('r', 'claude', [old, ...records(3)])]));
   expect(node(p, 'router').querySelectorAll('.strip .tr i')).toHaveLength(3); expect(node(p, 'router').querySelector('.strip')!.getAttribute('aria-hidden')).toBe('true');
   expect(filled(p)).toHaveLength(4);
   const rate = /\/분|분당|최근 1분|처리량|per minute|\/min/;
-  expect(p.w.document.body.textContent).not.toMatch(rate); p.click('#language'); expect(p.w.document.body.textContent).not.toMatch(rate);
+  expect(p.w.document.body.textContent).toMatch(rate); expect(p.w.document.querySelector('.jb .v')?.textContent).toContain('p50 50ms'); p.click('#language'); expect(p.w.document.body.textContent).toMatch(rate);
   const burst = page(); burst.push(snapshot([run('r', 'claude', records(1))])); burst.push(snapshot([run('r', 'claude', records(1))]));
   burst.push(snapshot([run('r', 'claude', records(40))]));
-  // The newest 24 wait for their trips; the older backlog shows at once.
-  expect(burst.get('rc').querySelector('button')!.textContent).toContain('65ms');
+  // Even a burst larger than the particle budget shows its newest value immediately.
+  expect(burst.get('rc').querySelector('button')!.textContent).toContain('89ms');
 });
 
 it('marks selection with a tint or a border colour only, never an inset or left accent bar', () => {
@@ -409,7 +465,7 @@ const frames = () => {
 };
 
 it('applies live patches to the frame it holds, to the pending frame while paused, and reconnects on a gap', async () => {
-  const next = frames(), a = step('a', 'admission', 'jev', { durationMs: 60 }), other = run('other', 'codex', [step('g', 'guard', 'policy')]);
+  const next = frames(), a = step('a', 'admission', 'jev', { durationMs: 60 }), other = run('other', 'codex', [step('g', 'workers', 'policy')]);
   const p = page(); p.push(next(snapshot([run('one', 'claude', [a]), other])));
   p.patch(next(snapshot([run('one', 'claude', [a, step('b', 'allocation', 'jev', { durationMs: 80, at: new Date().toISOString() })]), other])));
   await vi.waitFor(() => expect(filled(p)).toHaveLength(2), { timeout: 5000 });
@@ -423,7 +479,7 @@ it('applies live patches to the frame it holds, to the pending frame while pause
 });
 
 it('keeps the row of an unchanged run as the same element when a patch changes another run', () => {
-  const next = frames(), other = run('other', 'codex', [step('g', 'guard', 'policy')]);
+  const next = frames(), other = run('other', 'codex', [step('g', 'workers', 'policy')]);
   const p = page(); p.push(next(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 60 })]), other])));
   const kept = p.get('runs').querySelector('[data-run="other"] .c-st'), changed = p.get('runs').querySelector('[data-run="one"] .c-st');
   p.patch(next(snapshot([run('one', 'claude', [step('a', 'admission', 'jev', { durationMs: 60 }), step('b', 'allocation', 'jev', { durationMs: 80 })], { state: 'active' }), other])));
@@ -463,7 +519,7 @@ it('fetches the detail fields a frame leaves out for the opened stage and the in
   // The inspector reads its card's stage (s1, the first of the latest records) and the run detail its opened stage.
   expect(fetch.mock.calls.map(c => c[0])).toEqual(['/api/step?run=r%2F1&step=s1', '/api/step?run=r%2F1&step=s2']);
   await vi.waitFor(() => expect(opened(p)).toContain('라우팅 대상메인 턴')); expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh');
-  p.patch(next(frame([run('other', 'claude', [step('g', 'guard', 'policy')])])));
+  p.patch(next(frame([run('other', 'claude', [step('g', 'workers', 'policy')])])));
   expect(opened(p)).toContain('baseline gpt-6.1-sol · xhigh'); expect(fetch).toHaveBeenCalledTimes(2);
   p.click('[data-step="s1"]'); await vi.waitFor(() => expect(opened(p)).toContain('first stage evidence'));
   expect(fetch).toHaveBeenCalledTimes(2);
@@ -474,27 +530,27 @@ it('lands a recorded host step on its node, strip and run row without a Jev roun
   const p = page(); p.push(snapshot([base])); p.push(snapshot([base]));
   const ticks = () => node(p, 'workers').querySelectorAll('.strip .tr i').length; expect(ticks()).toBe(1);
   p.push(snapshot([run('x', 'codex', [...base.steps, step('t1', 'workers', 'host', { lifecycle: true, title: 'Codex · 도구 결과', at: new Date().toISOString() })])]));
-  expect(ticks()).toBe(1);
+  expect(ticks()).toBe(2);
   await vi.waitFor(() => { expect(node(p, 'workers').classList.contains('zap')).toBe(true); expect(p.get('runs').querySelector('[data-run="x"]')!.classList.contains('zap')).toBe(true); }, { timeout: 3000, interval: 5 });
   expect(ticks()).toBe(2); expect(p.w.document.querySelectorAll('.trip,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(0);
 });
 
 it('counts only current failures at the top, keeps settled ones as past errors and redraws a reclassification from a patch (#223)', () => {
   const day = new Date(Date.now() - 86_400_000).toISOString(), next = frames();
-  const outage = (now: 'unknown' | 'later_ok') => run('outage', 'codex', [step('cfg', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'unavailable_config', sessionId: 'cx-session-1', title: 'Evidence · 근거 결과', impact: { now, lastAt: now === 'unknown' ? day : stamp, lastState: now === 'unknown' ? 'error' : 'done' } })], { state: now === 'unknown' ? 'attention' : 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
-  const refused = run('refused', 'codex', [step('bad', 'evidence', 'local', { at: day, state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 'cx-session-2', title: 'Evidence · 근거 결과', impact: { now: 'request_only', lastAt: stamp, lastState: 'done' } })], { state: 'past_error', title: 'Evidence 검색', source: 'evidence', firstAt: day, lastAt: day });
+  const outage = (now: 'unknown' | 'later_ok') => run('outage', 'codex', [step('cfg', 'admission', 'jev', { at: day, state: 'error', issue: 'jev', cause: 'network', sessionId: 'cx-session-1', title: 'Gate A · Jev 응답', impact: { now, lastAt: now === 'unknown' ? day : stamp, lastState: now === 'unknown' ? 'error' : 'done' } })], { state: now === 'unknown' ? 'attention' : 'past_error', firstAt: day, lastAt: day });
+  const refused = run('refused', 'codex', [step('bad', 'workers', 'host', { at: day, state: 'error', issue: 'host', sessionId: 'cx-session-2', title: 'Codex · 도구 결과', impact: { now: 'later_ok', lastAt: stamp, lastState: 'done' } })], { state: 'past_error', firstAt: day, lastAt: day });
   // #269: two mismatches in one run are one execution to check, so the diagnosis counts it once.
   const wrong = (id: string) => step(id, 'router', 'host', { state: 'error', model: { selected: 'claude-opus-5-5', observed: 'claude-sonnet-5', status: 'mismatch', selectedEffort: null, observedEffort: null }, impact: { now: 'unknown', lastAt: stamp, lastState: 'error' } });
   const mismatch = run('mismatch', 'claude', [wrong('m'), wrong('m2')], { state: 'attention', source: 'router' });
   // The filters carry labels only; a count lives once, at the top, and each row shows its own state.
   const p = page(), shown = (cls: string) => p.get('runs').querySelectorAll('.c-st.' + cls).length;
   p.push(next(snapshot([mismatch, outage('unknown'), refused])));
-  expect(text(p, 'k-att')).toBe('2'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건 · Evidence 사용 불가·오류 1건');
+  expect(text(p, 'k-att')).toBe('2'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건 · Jev 판정 오류 1건');
   expect([shown('er'), shown('past')]).toEqual([2, 1]); expect(p.w.document.querySelector('#state-filters em')).toBeNull();
   p.click('[data-run="outage"]');
-  for (const fact of ['원인unavailable_config', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
+  for (const fact of ['원인network', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
   p.click('[data-run="refused"]');
-  expect(opened(p)).toContain('원인invalid_input · 요청 인자·범위 오류'); expect(opened(p)).toContain('현재 영향이 요청만 실패 · 서비스 장애 아님'); expect(opened(p)).toContain('마지막 관측');
+  expect(opened(p)).toContain('현재 영향이후 같은 작업 정상 기록'); expect(opened(p)).toContain('마지막 관측');
   // A later success arrives as a patch: the same row is redrawn as a past error and leaves the current count.
   p.patch(next(snapshot([mismatch, outage('later_ok'), refused])));
   expect(text(p, 'k-att')).toBe('1'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건');

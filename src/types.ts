@@ -1,60 +1,27 @@
 /** V5 shared types (ADR #22 r1 + r2 amendments). V4 prompt-block and task-decision types were removed with the V4 runtime. */
 
 export type Tier = 'fast' | 'standard' | 'deep' | 'frontier';
-export type PlannerTier = 'deep' | 'frontier';
 export type Mode = 'off' | 'native' | 'auto';
 /** The two modes that reach V5 routing; routing-only types name these instead of excluding 'off'. */
 export type RoutingMode = 'native' | 'auto';
-export type OwnedRole = 'worker' | 'planner';
+export type OwnedRole = 'worker';
 export type ExecutionShape = 'direct' | 'orchestrated';
 export type RouteQuestionShape = 'composite' | 'atomic';
 /** Gate A asks the same way Gate B does, and the two are configured independently. */
 export type AdmissionQuestionShape = RouteQuestionShape;
 export const ROUTE_QUESTION_SHAPES: readonly RouteQuestionShape[] = ['composite', 'atomic'];
 
-/**
- * #48 P1-2: `worktree` is the only way `maxParallelWorkers > 1` is allowed. `none` is a planner's deliverable claim
- * with no enforced write boundary; a worktree is the boundary itself, not another claim about one.
- */
 export type WorkerIsolation = 'none' | 'worktree';
 export const WORKER_ISOLATIONS: readonly WorkerIsolation[] = ['none', 'worktree'];
 
-/**
- * #48 P2-1: what a main_session_steps entry needs when it genuinely requires the main session or user. A worker
- * can use connected host tools, including browser/MCP tools, so these names alone do not reserve a step for root.
- */
-export type Capability = 'os_permission' | 'live_app' | 'interactive_login' | 'device';
-export const CAPABILITIES: readonly Capability[] = ['os_permission', 'live_app', 'interactive_login', 'device'];
-
-/** #48 P2-1: one step a planner keeps for the main session instead of dispatching, and why. */
-export interface MainSessionStep {
-  step: string;
-  needs: Capability;
-}
-
-/**
- * A19: what an admitted turn is executed as. `hierarchy` is the shipped product -- planner, plan, several workers.
- * `single` dispatches one worker with the user's own request and no plan at all, to test whether the saving measured
- * at depth comes from starting in a fresh context or from splitting the work. It is a hypothesis under measurement,
- * not a recommendation.
- *
- * It is a separate shape rather than `maxTasksPerPlan: 1`: a one-task plan still pays for the planner, still carries a
- * contract and still has a replan path, so it would measure a small hierarchy rather than the absence of one.
- */
-export type AdmittedShape = 'hierarchy' | 'single' | 'auto';
-export const ADMITTED_SHAPES: readonly AdmittedShape[] = ['hierarchy', 'single', 'auto'];
-
 export type AdmissionAnswer = 'direct' | 'orchestrated' | 'needs_context' | 'abstain';
 export type RouteAnswer = Tier | 'abstain';
-export type PlannerRouteAnswer = PlannerTier | 'abstain';
 export type UpgradeBasis = 'unresolved_contract_reasoning' | 'observed_reasoning_failure' | 'no_specific_basis' | 'unknown';
 
 export const TIERS: readonly Tier[] = ['fast', 'standard', 'deep', 'frontier'];
-export const PLANNER_TIERS: readonly PlannerTier[] = ['deep', 'frontier'];
 export const MODES: readonly Mode[] = ['off', 'native', 'auto'];
 export const ADMISSION_ANSWERS: readonly AdmissionAnswer[] = ['direct', 'orchestrated', 'needs_context', 'abstain'];
 export const ROUTE_ANSWERS: readonly RouteAnswer[] = ['fast', 'standard', 'deep', 'frontier', 'abstain'];
-export const PLANNER_ROUTE_ANSWERS: readonly PlannerRouteAnswer[] = ['deep', 'frontier', 'abstain'];
 export const UPGRADE_BASES: readonly UpgradeBasis[] = ['unresolved_contract_reasoning', 'observed_reasoning_failure', 'no_specific_basis', 'unknown'];
 /** The two bases that can justify an above-default worker (#27); the other two never can. */
 export const UPGRADE_BASES_SUFFICIENT: readonly UpgradeBasis[] = ['unresolved_contract_reasoning', 'observed_reasoning_failure'];
@@ -70,16 +37,13 @@ export const OWNED_AGENTS: Record<string, OwnedAgent> = {
   'jev-gate:worker': { role: 'worker', tier: 'standard' },
   'jev-gate:worker-deep': { role: 'worker', tier: 'deep' },
   'jev-gate:worker-frontier': { role: 'worker', tier: 'frontier' },
-  'jev-gate:planner': { role: 'planner', tier: 'deep' },
-  'jev-gate:planner-frontier': { role: 'planner', tier: 'frontier' },
 };
 
 export const OWNED_AGENT_NAMES: readonly string[] = Object.keys(OWNED_AGENTS);
 
 export const agentForTier = (role: OwnedRole, tier: Tier): string => {
   const found = OWNED_AGENT_NAMES.find((name) => OWNED_AGENTS[name]?.role === role && OWNED_AGENTS[name]?.tier === tier);
-  // A planner has no fast/standard profile; the caller's tier decision is clamped to the strong profiles before this point.
-  return found ?? (role === 'planner' ? 'jev-gate:planner' : 'jev-gate:worker');
+  return found ?? 'jev-gate:worker';
 };
 
 export interface ConfigV5 {
@@ -91,15 +55,8 @@ export interface ConfigV5 {
   requestDeadlineMs: number;
   admissionConfidenceFloor: number;
   routeConfidenceFloor: number;
-  plannerDefaultTier: PlannerTier;
   models: Record<Tier, string>;
-  maxParallelWorkers: number;
-  guardAllowTools: string[];
-  /**
-   * #48 P1-2: absent means `none`, like the other optional keys. `maxParallelWorkers > 1` requires `worktree`: a
-   * declared deliverable is the planner's claim, a worktree is a boundary. `worktree` requires `Bash` in
-   * `guardAllowTools`, because the root has to merge each worker's branch while the guard is active.
-   */
+  /** Optional in a config file; absent means workers share the caller's checkout. */
   workerIsolation: WorkerIsolation;
   /**
    * How Gate B asks. `composite` is the shipped five-way choice; `atomic` fans the same judgement out into read-off
@@ -132,17 +89,6 @@ export interface ConfigV5 {
    */
   admissionQuestionShape: AdmissionQuestionShape;
   /**
-   * The most tasks an accepted plan may contain. A backstop against a runaway split, not a budget: worker count is
-   * the hidden cost axis here, and a plan of 13 cost +92.5 % where plans that worked ran 2 to 7.
-   */
-  maxTasksPerPlan: number;
-  /**
-   * A19: how an admitted turn is executed. `single` removes the planner, the plan, Gate B's contract and the replan
-   * path from the turn. `auto` (the default since 0.4.0) runs `single` unless Gate A read the request as naming
-   * separate outcomes or as a whole project (`resolveAdmittedShape` in src/admission.ts).
-   */
-  admittedShape: AdmittedShape;
-  /**
    * Gate A's cost model (`delegationSaving` in src/admission.ts): the root turns a delegated turn still takes at
    * depth, and what one worker turn reads. Declared, not fitted; the coordinator figure is the jev_single bench's
    * 11-17 root turns.
@@ -150,22 +96,10 @@ export interface ConfigV5 {
   delegationCoordinatorTurns: number;
   delegationWorkerTokensPerCall: number;
   /**
-   * Whether the coordinator may call MCP tools (`mcp__*`) while the guard is active. Workers inherit the connected
-   * tools provided by their host independently of this root guard option. On by default.
-   */
-  guardAllowMcp: boolean;
-  /**
    * Whether a worker's reported check results are compared with the commands its own transcript shows it ran
    * (src/verify.ts). A check reported as passing whose last run failed makes the task `incomplete`. On by default.
    */
   verifyWorkerChecks: boolean;
-  /**
-   * A23: whether a candidate plan is compared against the request before it is adopted. One extra HTTP call per
-   * candidate plan, and it changes nothing: the classification is recorded and no plan is ever rejected by it.
-   * Off by default and optional in a config file, because a call that costs money and decides nothing is not
-   * something a deployed file should start making without being edited.
-   */
-  planInterpretation: boolean;
 }
 
 export interface ChoiceAnswer<K extends string> {
@@ -184,8 +118,8 @@ export interface JevUsage {
  * #233: why an owned Codex dispatch ended without completion, and where. Closed, so no raw error text, prompt or
  * command reaches a trace or a tool result. `not_executed` is definite non-execution evidence, never a terminal.
  */
-export type CodexFailureCategory = 'preflight_conflict' | 'reservation_unavailable' | 'native_start_rejected' | 'native_failed_turn' | 'interrupted' | 'termination_unconfirmed';
-export const CODEX_FAILURE_CATEGORIES: readonly CodexFailureCategory[] = ['preflight_conflict', 'reservation_unavailable', 'native_start_rejected', 'native_failed_turn', 'interrupted', 'termination_unconfirmed'];
+export type CodexFailureCategory = 'preflight_conflict' | 'permissions_unavailable' | 'worktree_unavailable' | 'allocation_unavailable' | 'cancelled' | 'reservation_unavailable' | 'native_start_rejected' | 'native_failed_turn' | 'interrupted' | 'termination_unconfirmed';
+export const CODEX_FAILURE_CATEGORIES: readonly CodexFailureCategory[] = ['preflight_conflict', 'permissions_unavailable', 'worktree_unavailable', 'allocation_unavailable', 'cancelled', 'reservation_unavailable', 'native_start_rejected', 'native_failed_turn', 'interrupted', 'termination_unconfirmed'];
 export type CodexFailureStage = 'preflight' | 'reservation' | 'thread_start' | 'turn_start' | 'turn';
 export const CODEX_FAILURE_STAGES: readonly CodexFailureStage[] = ['preflight', 'reservation', 'thread_start', 'turn_start', 'turn'];
 export interface CodexFailure { category: CodexFailureCategory; stage: CodexFailureStage; not_executed: boolean }
@@ -226,24 +160,7 @@ export interface PlannedCheck {
   command: string | null;
 }
 
-/**
- * A17: the optional specification a planner may fix once, so a worker starts from its findings instead of re-deriving
- * them. `files` are the repository paths the planner actually inspected.
- */
-export interface TaskSpec {
-  interfaces: string[];
-  data_shapes: string[];
-  invariants: string[];
-  files: string[];
-}
-
-/** #33: optional routing evidence Gate B reads. An empty `unresolved` is a claim that the task is ordinary bounded work. */
-export interface TaskUncertainty {
-  unresolved: string[];
-  interacts_with: string[];
-  prior_failure: string | null;
-}
-
+/** The task Gate B routes on. A dispatch with no contract sends an empty one, so absent evidence reads as unknown. */
 export interface PlannedTask {
   id: string;
   outcome: string;
@@ -253,43 +170,8 @@ export interface PlannedTask {
   deliverables: string[];
   checks: PlannedCheck[];
   replan_if: string[];
-  /** Optional (document §7): an absent field is unknown, not "mechanical", so a plan that omits it is still valid. */
-  spec?: TaskSpec;
-  uncertainty?: TaskUncertainty;
-  /** #33/A17: every design decision is already made (a non-empty `spec.interfaces`, nothing unresolved). */
-  fully_specified?: boolean;
-  /** A3: sha256 over the scheduling-relevant contract; a receipt is accepted for (task_id, contract_hash). */
   contract_hash: string;
 }
-
-export interface Plan {
-  rev: number;
-  goal: string;
-  assumptions: string[];
-  constraints: string[];
-  tasks: PlannedTask[];
-  /** A17: the longest dependency path, computed from the graph. Wall-clock cannot fall below it. */
-  chain_depth: number;
-  /** T11: what the planner said its chain depth was. A claim the graph does not support is recorded, never rejected. */
-  chain_depth_claimed: number | null;
-  /** #48 P2-1: kept with the plan so the main session is reminded of them at admission and again at the last accept. */
-  main_session_steps: MainSessionStep[];
-}
-
-export type PlannerReply =
-  | {
-      status: 'ready';
-      goal: string;
-      assumptions: string[];
-      constraints: string[];
-      tasks: Array<Omit<PlannedTask, 'contract_hash'>>;
-      /** A17: what the planner says its chain depth is. The code computes the authoritative value from the graph. */
-      chain_depth_claimed: number | null;
-      /** #48 P2-1: absent reads as none. Never dispatched and never gates task readiness -- advisory only. */
-      main_session_steps?: MainSessionStep[];
-    }
-  | { status: 'needs_context'; questions: string[]; findings: string[] }
-  | { status: 'blocked'; reason: string; findings: string[] };
 
 export interface WorkerCheckResult {
   check_id: string;
@@ -298,7 +180,7 @@ export interface WorkerCheckResult {
 }
 
 export interface WorkerReply {
-  status: 'done' | 'blocked' | 'replan';
+  status: 'done' | 'blocked';
   summary: string;
   changed_files: string[];
   interfaces: string[];
@@ -306,14 +188,9 @@ export interface WorkerReply {
   blockers: string[];
 }
 
-/** T4: the pin that was requested and the model the host actually ran are different facts; an unknown id is neither. */
-export type ModelAgreement = 'match' | 'mismatch' | 'unverified';
-
-export type JobPhase = 'admitted' | 'planning' | 'planned' | 'blocked';
 export type JobOutcome = 'completed' | 'incomplete' | 'blocked' | 'superseded';
 export type DeterministicVerdict = 'accept' | 'incomplete';
-/** T11: rework and replan are reached from what the worker itself reported, never from a second model's judgement. */
-export type ReceiptVerdict = DeterministicVerdict | 'invalid' | 'unknown' | 'rework' | 'replan';
+export type ReceiptVerdict = DeterministicVerdict | 'invalid' | 'unknown';
 
 /** A4: one reservation per dispatched owned call, taken before any HTTP and released at Post. */
 export interface Reservation {
@@ -321,7 +198,7 @@ export interface Reservation {
   task_id: string | null;
   /**
    * A4/T1: the contract this dispatch was reserved under, so the receipt that closes it is selectable by the same key
-   * it was dispatched on. `null` on a planner and `''` on a single-executor dispatch, neither of which has a contract.
+   * it was dispatched on. `''` on a single-executor dispatch, which has no contract.
    * State written before this field existed carries none, so read it through `reservedContractHash`, never directly.
    */
   contract_hash: string | null;
@@ -353,6 +230,15 @@ export interface CheckVerification {
   stale: string[];
 }
 
+export interface WorkerReceiptReply {
+  status: WorkerReply['status'];
+  summary?: string;
+  changed_files?: string[];
+  interfaces?: string[];
+  blockers?: string[];
+  checks: Pick<WorkerCheckResult, 'check_id' | 'result'>[];
+}
+
 export interface Receipt {
   task_id: string;
   contract_hash: string;
@@ -360,7 +246,7 @@ export interface Receipt {
   attempt: number;
   tool_use_id: string;
   provenance: 'worker_reported';
-  reply: WorkerReply | null;
+  reply: WorkerReceiptReply | null;
   verdict: ReceiptVerdict;
   verdict_reason: string | null;
   observed_model: string | null;
@@ -372,38 +258,32 @@ export interface Receipt {
   evidence_format_only?: true;
   requested_tier?: Tier | null;
   requested_model?: string | null;
+  worker_worktree?: { path: string; branch: string; baseline: string };
 }
 
 export interface JobAttempts {
-  planner: number;
-  replans: number;
   tasks: Record<string, number>;
 }
 
 /** One generation = one (session_id, prompt_id) pair (A2). A new prompt supersedes the previous one into history. */
 export interface JobGeneration {
   prompt_id: string | null;
+  /** #284: the host reuses a prompt_id for queued prompts and notices, so a late answer is matched to this, not to it. Absent in older state. */
+  generation_id?: string;
   /**
-   * A17: the admitted request, verbatim. A plan is a paraphrase of it, and the worker is told the user's own words
-   * outrank the contract -- which is only true if they reach the worker at all. Null when the turn carried none, or
-   * when it was larger than REQUEST_MAX_BYTES: the absence is stated in the prompt, never truncated into a half-spec.
+   * A17: the admitted request, verbatim, carried to the worker as its task. Null when the turn carried none, or when
+   * it was larger than REQUEST_MAX_BYTES: the absence is stated in the prompt, never truncated into a half-spec.
    */
   request: string | null;
   created_at: string;
   shape: ExecutionShape;
-  phase: JobPhase;
-  planner_tier: PlannerTier | null;
-  /** T4: whether the host's resolvedModel agreed with the planner profile this job asked for. Unverified is not a match. */
-  planner_model: ModelAgreement | null;
-  plan: Plan | null;
   active: Record<string, Reservation>;
   receipts: Receipt[];
-  denials: number;
   attempts: JobAttempts;
   outcome: JobOutcome | null;
   /** A16: the generation was started by the bench control variable, not by a Gate A answer. */
   forced?: true;
-  /** A19: present only when the turn was admitted under `admittedShape: single`. Absent reads as `hierarchy`. */
+  /** A19: every admitted turn runs one worker. Absent only in state written by the removed planner path (#289). */
   execution?: 'single';
   /** The admitted job handed remaining work to the root: accepted terminal results, failed required delivery, or the single-attempt cap. */
   root_fallback?: true;
@@ -419,6 +299,10 @@ export interface JobGeneration {
   background_delivery?: { result: string; prompt_id: string; stalled_since: string };
   /** Terminal policy guidance delivered to the root, rather than to a SubagentStop child context. */
   background_context?: string;
+  /** #281: executions a native TaskStop ended, each awaiting the host's one killed notice (taken once, `notices_taken`). */
+  background_stopped?: Array<{ agent_id: string; tool_use_id: string }>;
+  /** #281: notices taken as the host's before their row was written (noticeClaim). A later copy is a person's. */
+  notices_taken?: string[];
 }
 
 export interface JobState {
@@ -452,7 +336,6 @@ export type SkipCode =
   | 'trace_intent_failed'
   | 'output_too_large'
   | 'no_state'
-  | 'shape_direct'
   | 'aborted'
   | 'host_unsupported'
   /** Local work left too little of the hook's own time for the provider call; nothing was sent. */
@@ -482,6 +365,8 @@ export type PreserveReason =
   | 'admission_invalid'
   | 'admission_tie'
   | 'admission_needs_context'
+  | 'admission_context_unclear'
+  | 'admission_context_low_confidence'
   | 'admission_abstain'
   | 'admission_low_confidence'
   | 'prompt_id_absent'
@@ -501,6 +386,7 @@ export type PreserveReason =
   | 'route_tie'
   | 'route_abstain'
   | 'route_low_confidence'
+  | 'route_not_fast'
   | 'basis_invalid'
   | 'basis_tie'
   | 'basis_absent'
@@ -508,29 +394,8 @@ export type PreserveReason =
   | 'generation_changed'
   | 'pinned';
 
-/** Reasons a dispatch or a root tool call was denied while orchestration is active. */
-export type DenyReason =
-  | 'guard_denied'
-  | 'dispatch_ineligible'
-  | 'task_active'
-  | 'task_accepted'
-  | 'attempt_mismatch'
-  | 'dependent_active'
-  | 'stale_generation'
-  | 'deliverable_overlap'
-  | 'parallel_cap'
-  | 'planner_pin_conflict'
-  | 'planner_active'
-  | 'workers_active'
-  | 'bounds_exhausted'
-  | 'composed_too_large'
-  | 'no_marker'
-  | 'unknown_task'
-  | 'stale_rev'
-  | 'deps_incomplete'
-  | 'phase_not_planned'
-  /** A19: the planner was called on a turn admitted as a single executor, which has no plan to make. */
-  | 'single_shape';
+/** Reasons an owned dispatch was denied. */
+export type DenyReason = 'dispatch_ineligible' | 'task_active' | 'attempt_mismatch' | 'stale_generation' | 'bounds_exhausted';
 
 export type StateCode = 'state_corrupt' | 'state_too_large' | 'state_locked' | 'state_symlink' | 'state_write_failed';
 

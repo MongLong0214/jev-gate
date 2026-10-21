@@ -11,3 +11,11 @@ export const codexTraceDir = (env: Readonly<Record<string, string | undefined>>)
   const state = env['XDG_STATE_HOME'];
   return join(state && isAbsolute(state) ? state : join(homedir(), '.local', 'state'), 'jev-gate', 'codex', 'traces');
 };
+
+export const codexHome = (env: Readonly<Record<string, string | undefined>>): string => {
+  const path = env['CODEX_HOME'] ?? join(env['HOME'] ?? homedir(), '.codex');
+  if (!isAbsolute(path)) throw new Error('Codex home must be absolute');
+  return path;
+};
+/** Here so doctor can find the connection owner without loading the connection module and its WebSocket server. */
+export const codexConnectionOwnerPath = (env: Readonly<Record<string, string | undefined>>): string => join(codexHome(env), 'jev-gate', 'connection', 'owner.json');

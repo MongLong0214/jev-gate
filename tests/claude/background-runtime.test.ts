@@ -20,7 +20,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
     const manifestPath = join(plugin, '.claude-plugin/plugin.json'); const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')); manifest.userConfig.routerEnabled.default = false; writeFileSync(manifestPath, JSON.stringify(manifest));
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' } }));
     const mode = functions ? 'auto' : 'native';
-    const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode, admittedShape: 'single', workerIsolation: 'none', maxParallelWorkers: 1, guardAllowTools: [] }));
+    const cfg = join(temp, 'config.json'); writeFileSync(cfg, JSON.stringify({ version: 5, mode }));
     const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CLAUDE_|ANTHROPIC_|TYPESAFE_|JEV_|XDG_)/.test(name)));
     Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), JEV_GATE_CONFIG: cfg, JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_MODE: mode, JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated', JEV_GATE_ONBOARDING: '0', JEV_DASHBOARD_NO_OPEN: '1', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: functions ? '1' : '0' });
     if (functions) saveApiKey(env, 'fake-local-background-jev-key');
@@ -92,7 +92,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('responsive installed Cla
       const state = readJob(env, session); expect(state.ok && state.value).toBeTruthy(); if (!state.ok || !state.value) throw new Error('state absent');
       expect(state.value.current.prompt_id).toBe(originalPrompt); expect(state.value.current.receipts, JSON.stringify({ state: state.value.current, output: output.slice(-18000) })).toHaveLength(1);
       if (scenario === 'cancel') {
-        expect(state.value.current.receipts[0]?.verdict).not.toBe('accept'); expect(state.value.current.active).toEqual({}); expect(state.value.current.outcome).toBe('incomplete'); return;
+        expect(state.value.current.receipts[0]).toMatchObject({ verdict: 'unknown', verdict_reason: 'worker_cancelled' }); expect(state.value.current.active).toEqual({}); expect(state.value.current.outcome).toBe('incomplete'); return;
       }
       expect(state.value.current.receipts[0], JSON.stringify({ receipt: state.value.current.receipts[0], output: output.slice(-18000) })).toMatchObject({ verdict: 'accept', verification: { transcript: 'read', contradicted: [], unobserved: [], stale: [] } });
       expect(state.value.current.active).toEqual({}); expect(state.value.current.outcome).toBe('completed');

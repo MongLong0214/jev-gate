@@ -1,7 +1,8 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, type Stats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
-import { sameModel } from './claude-models.js';
+import { looksSecret } from './outbound-text.js';
 import { dirname, join } from 'node:path';
+import { codexFailureReason, verdictReason, workerTraceData } from './worker-record.js';
 
 /**
  * Reads a `JEV_GATE_TRACE_DIR` and says what the gate did, in the order it did it.
@@ -14,7 +15,7 @@ import { dirname, join } from 'node:path';
 type Rec = Record<string, unknown>;
 
 const isRecord = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
-const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 && !looksSecret(v) ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const sub = (r: Rec, k: string): Rec | null => (isRecord(r[k]) ? (r[k] as Rec) : null);
 
@@ -43,12 +44,6 @@ export const allocatedTraceRecords = (records: Rec[]): Rec[] => {
   return records.map(r => {
     const identity = key(r), model = identity ? models.get(identity) : undefined;
     if (!model) return r;
-    const planner = sub(r, 'planner_model');
-    if (planner) {
-      const observed = str(planner['observed']);
-      const agreement = !observed ? 'unverified' : (r['host'] === 'codex' ? model === observed : sameModel(model, observed)) ? 'match' : 'mismatch';
-      return { ...r, planner_model: { ...planner, requested: model, agreement } };
-    }
     return r['phase'] === 'post' || r['phase'] === 'failure' || r['phase'] === 'background_launch' ? { ...r, requested_model: model } : r;
   });
 };
@@ -86,8 +81,9 @@ const readTraceFile = (path: string, cache?: TraceCache, existingStat?: Stats, k
     if (!stat.isFile() || stat.size > 512_000) return null;
     const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'));
     if (!isRecord(parsed)) return null;
-    cache?.set(key, { signature: signature(stat), record: parsed });
-    return parsed;
+    const record = workerTraceData(String(parsed['phase']), parsed);
+    cache?.set(key, { signature: signature(stat), record });
+    return record;
   } catch (err) { cache?.delete(key); return gone(err); }
   finally { if (fd !== undefined) closeSync(fd); }
 };
@@ -103,8 +99,9 @@ const readTraceFileAsync = async (path: string, cache: TraceCache, stat: Stats, 
     if (!opened.isFile() || opened.size > 512_000) return null;
     const parsed: unknown = JSON.parse(await handle.readFile('utf8'));
     if (!isRecord(parsed)) return null;
-    cache.set(key, { signature: signature(opened), record: parsed });
-    return parsed;
+    const record = workerTraceData(String(parsed['phase']), parsed);
+    cache.set(key, { signature: signature(opened), record });
+    return record;
   } catch (err) { cache.delete(key); return gone(err); }
   finally { await handle?.close().catch(() => undefined); }
 };
@@ -135,7 +132,7 @@ const NO_RECORDS: TraceRead = { records: [], unreadable: 0 };
 /** Watch notifications name changed files; a bounded full reconciliation recovers lost events.
  * Directory identity is checked on every read so replaced or symlinked roots cannot expose stale data. */
 /** `cache` is keyed by file name: the full paths of a long history would take more memory than its file signatures. */
-type DirectoryState = { identity: string; scanned: number; values: Map<string, Rec | null>; cache: TraceCache; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead; appended: string[]; replaced: boolean };
+type DirectoryState = { identity: string; modified: number; scanned: number; values: Map<string, Rec | null>; cache: TraceCache; dirty: Set<string>; full: boolean; stale: boolean; result: TraceRead; appended: string[]; replaced: boolean };
 export class TraceDirectoryReader {
   private dirs = new Map<string, DirectoryState>();
   constructor(private reconciliationMs = 30_000) {}
@@ -147,11 +144,12 @@ export class TraceDirectoryReader {
   }
   /** The current state of a directory, after its identity and a due reconciliation; null when it is not readable. */
   private open(key: string, now: number): DirectoryState | null {
-    let identity: string;
+    let identity: string, modified: number;
     try {
       const stat = lstatSync(key);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('not a directory');
       identity = traceDirectoryIdentity(stat);
+      modified = stat.mtimeMs;
     } catch {
       this.forget(key);
       return null;
@@ -159,12 +157,14 @@ export class TraceDirectoryReader {
     let state = this.dirs.get(key);
     if (!state || state.identity !== identity) {
       if (state) this.forget(key);
-      state = { identity, scanned: 0, values: new Map(), cache: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 }, appended: [], replaced: false };
+      state = { identity, modified, scanned: 0, values: new Map(), cache: new Map(), dirty: new Set(), full: true, stale: true, result: { records: [], unreadable: 0 }, appended: [], replaced: false };
       this.dirs.set(key, state);
     }
-    if (state.full || now - state.scanned >= this.reconciliationMs) {
+    // A named watch notification already supplies the changed path. Avoid enumerating the entire history for it;
+    // an unnotified directory change or the periodic reconciliation still discovers missed names.
+    if (state.full || state.modified !== modified && !state.dirty.size || now - state.scanned >= this.reconciliationMs) {
       let names: string[];
-      try { names = readdirSync(key).filter(traceName).sort(); }
+      try { names = readdirSync(key).filter(traceName); }
       catch { this.forget(key); return null; }
       const present = new Set(names);
       for (const name of state.values.keys()) if (!present.has(name)) { state.values.delete(name); state.cache.delete(name); state.stale = true; state.replaced = true; }
@@ -173,6 +173,7 @@ export class TraceDirectoryReader {
       for (const name of names) if (state.full || !state.values.get(name)) state.dirty.add(name);
       state.scanned = now; state.full = false;
     }
+    state.modified = modified;
     return state;
   }
   private forget(key: string): void { this.dirs.delete(key); }
@@ -271,8 +272,7 @@ const admissionLine = (r: Rec): string => {
 
 const dispatchLine = (r: Rec, post: Rec | null): string => {
   const d = sub(r, 'decision');
-  const role = str(r['role']) ?? 'worker';
-  const who = role === 'planner' ? 'planner' : `task ${str(r['task_id']) ?? '?'}`;
+  const who = `task ${str(r['task_id']) ?? '?'}`;
   const attempt = num(r['attempt']);
   const called = str(r['called_tier']) ?? str(r['default_tier']) ?? '?';
   const action = d ? (str(d['action']) ?? '?') : '?';
@@ -289,8 +289,8 @@ const dispatchLine = (r: Rec, post: Rec | null): string => {
     : action === 'preserve' ? `preserve ${tier} (the model the coordinator called)` : `${action} ${tier}${model ? ` (${model})` : ' (model not recorded)'}`;
   /**
    * Asked and ran are separate facts, and the alias the config names is not the id the host reports, so a bare string
-   * comparison would call every patch a disagreement. The requested id appearing inside the resolved one is the same
-   * test the hook applies to the planner; anything else is reported as the two strings rather than as a verdict.
+   * comparison would call every patch a disagreement. The requested id appearing inside the resolved one is a
+   * match; anything else is reported as the two strings rather than as a verdict.
    */
   const observed = ranOn(post);
   const ran =
@@ -301,19 +301,12 @@ const dispatchLine = (r: Rec, post: Rec | null): string => {
       : model !== null && !observed.toLowerCase().includes(model.toLowerCase())
         ? `  → ran ${observed}, which is not the ${model} it asked for`
         : `  → ran ${observed}`;
-  return `dispatch ${who}${attempt === null ? '' : ` attempt ${attempt}`}  called ${called} → ${target}  ${jevCall(r)}${because(reason)}${ran}`;
+  return `dispatch ${who}${attempt === null ? '' : ` attempt ${attempt}`}  called ${called} → ${target}  ${jevCall(r)}${because(reason)}${ran}${r['worker_isolation'] === 'worktree' || r['worker_isolation'] === 'none' ? `  isolation ${r['worker_isolation']}` : ''}`;
 };
 
-/**
- * The model the host resolved for a dispatch. A worker's result carries it verbatim from the tool response; a
- * planner's arrives in the plan record instead, because that is the phase its reply is parsed in.
- */
+/** The model the host resolved for a dispatch, carried verbatim from the worker's tool response. */
 const ranOn = (result: Rec | null): string | null => {
   if (result === null) return null;
-  if (str(result['phase']) === 'plan') {
-    const pm = sub(result, 'planner_model');
-    return pm ? str(pm['observed']) : null;
-  }
   const tr = sub(result, 'tool_response');
   return tr ? str(tr['resolvedModel']) : null;
 };
@@ -332,7 +325,7 @@ const requestedResolved = (r: Rec): string => {
 /** One named list from a check verification, left out when it is empty. */
 const checkList = (v: Rec, key: string): string => {
   const ids = Array.isArray(v[key]) ? (v[key] as unknown[]).filter((x): x is string => typeof x === 'string') : [];
-  return ids.length === 0 ? '' : `, ${key} ${ids.join(' ')}`;
+  return ids.length === 0 ? '' : `, ${key} ${ids.every(id => /^#[0-9]{1,4}$/.test(id)) ? ids.join(' ') : `${ids.length} check(s)`}`;
 };
 
 const resultLine = (r: Rec): string => {
@@ -343,7 +336,7 @@ const resultLine = (r: Rec): string => {
   }
   const attempt = num(r['attempt']);
   const verdict = str(r['verdict']) ?? 'no verdict';
-  const reason = str(r['verdict_reason']);
+  const reason = verdictReason(verdict, r['verdict_reason'])?.[0] ?? null;
   const tr = sub(r, 'tool_response');
   const ms = tr ? num(tr['totalDurationMs']) : null;
   const tools = tr ? num(tr['totalToolUseCount']) : null;
@@ -351,47 +344,6 @@ const resultLine = (r: Rec): string => {
   const v = sub(r, 'verification');
   const verified = v ? `  transcript ${str(v['transcript']) ?? '?'}${checkList(v, 'contradicted')}${checkList(v, 'unobserved')}${checkList(v, 'stale')}` : '';
   return `result   task ${str(r['task_id']) ?? '?'}${attempt === null ? '' : ` attempt ${attempt}`}  worker-reported ${verdict}${work ? `  (${work})` : ''}${verified}${because(reason)}`;
-};
-
-const planLine = (r: Rec): string => {
-  const status = str(r['status']) ?? '?';
-  const outcome = str(r['outcome']);
-  const rev = num(r['rev']);
-  const tasks = num(r['tasks']);
-  // The hook already settled this comparison when it wrote the record, so its own word is reported rather than redone.
-  const pm = sub(r, 'planner_model');
-  const agreement = pm ? str(pm['agreement']) : null;
-  const observed = pm ? str(pm['observed']) : null;
-  const requested = pm ? str(pm['requested']) : null;
-  const model =
-    observed === null
-      ? ''
-      : agreement === 'match'
-        ? `  planner ran on ${observed}`
-        : `  planner ran on ${observed}, asked for ${requested ?? 'an unrecorded model'} (${agreement ?? 'no agreement recorded'})`;
-  const failed = r['replan_failed'] === true ? '  replan failed' : '';
-  return `plan     ${status}${outcome ? ` → ${outcome}` : ''}${rev === null ? '' : ` rev ${rev}`}${tasks === null ? '' : `, ${tasks} task(s)`}${model}${failed}${interpretationLine(r)}`;
-};
-
-/**
- * A23: only the verdicts a reader would act on are named. `supported` is the expected answer for every clause a
- * planner derived honestly, so printing it would bury the one clause that disagrees under eleven that do not.
- */
-const interpretationLine = (r: Rec): string => {
-  const i = sub(r, 'interpretation');
-  if (i === null || !Array.isArray(i['clauses'])) return '';
-  const clauses = i['clauses'].filter(isRecord);
-  const named = (verdict: string): string[] => clauses.filter((c) => c['verdict'] === verdict).map((c) => str(c['id']) ?? '?');
-  const contradicted = named('contradicted');
-  const omitted = named('omitted');
-  const unasked = num(i['unasked']) ?? 0;
-  const parts = [
-    contradicted.length ? `${contradicted.length} clause(s) read as contradicting the request (${contradicted.join(', ')})` : '',
-    omitted.length ? `${omitted.length} the request does not mention (${omitted.join(', ')})` : '',
-    unasked > 0 ? `${unasked} not asked about` : '',
-  ].filter(Boolean);
-  // A plan with nothing to report still says the comparison happened, so a silent line is not read as no call.
-  return parts.length === 0 ? '\n  plan checked against the request: nothing flagged' : `\n  plan checked against the request: ${parts.join('; ')}`;
 };
 
 const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
@@ -402,12 +354,10 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
       return dispatchLine(r, posts.get(str(r['tool_use_id']) ?? '') ?? null);
     case 'post':
       return resultLine(r);
-    case 'plan':
-      return planLine(r);
     case 'failure': {
       const ms = num(r['duration_ms']);
       const subagent = str(r['subagent_type']);
-      return `failure  ${str(r['error_first_line']) ?? 'no message recorded'}${ms === null ? '' : `  after ${ms}ms`}${subagent ? `  (${subagent})` : ''}${requestedResolved(r)}`;
+      return `failure  ${codexFailureReason(r) ?? verdictReason('', r['verdict_reason'])?.[0] ?? 'no message recorded'}${ms === null ? '' : `  after ${ms}ms`}${subagent ? `  (${subagent})` : ''}${requestedResolved(r)}`;
     }
     case 'stop':
       return `stop     ${str(r['outcome']) ?? 'no outcome recorded'}`;
@@ -415,11 +365,6 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
       return `background stalled: no active worker; policy delivered, Gate A resumes after this turn (${str(r['reason']) ?? 'unknown'})`;
     case 'background_policy_delivery':
       return `background policy delivered: no active worker; next human prompt resumes Gate A (${str(r['reason']) ?? 'unknown'})`;
-    case 'guard': {
-      if (r['allow'] !== false) return null;
-      const denials = num(r['denials']);
-      return `denied   ${str(r['tool_name']) ?? 'tool'}${denials === null ? '' : `  (${denials} so far this generation)`}${r['stopped'] === true ? '  job stopped' : ''}`;
-    }
     default:
       // Intent records pair with a result that is rendered instead, so they are not lines of their own.
       return null;
@@ -441,7 +386,8 @@ export const explainRecords = (read: TraceRead): string[] => {
     return out;
   }
   const bySession = new Map<string, Rec[]>();
-  for (const r of allocatedTraceRecords(read.records)) {
+  for (const raw of allocatedTraceRecords(read.records)) {
+    const r = workerTraceData(String(raw['phase']), raw);
     const key = str(r['session_id']) ?? '(no session id)';
     const list = bySession.get(key);
     if (list) list.push(r);
@@ -455,7 +401,7 @@ export const explainRecords = (read: TraceRead): string[] => {
     const posts = new Map<string, Rec>();
     for (const r of records) {
       const phase = str(r['phase']);
-      if ((phase !== 'post' && phase !== 'plan') || r['matched'] === false) continue;
+      if (phase !== 'post' || r['matched'] === false) continue;
       const id = str(r['tool_use_id']);
       if (id !== null) posts.set(id, r);
     }

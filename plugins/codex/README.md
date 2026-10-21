@@ -1,6 +1,6 @@
 # Jev Gate for Codex
 
-Automatic Gate, Router and Compact connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, Evidence MCP and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
+Automatic Gate and Router connect to **ordinary native Codex** after the plugin starts. The plugin supplies hooks, an MCP server and an authenticated local connection. Your login, permissions, terminal and official execution engine stay in Codex.
 
 Requires **Node 22.15+**. Automatic connection was tested with **Codex CLI 0.160.0**. The optional managed terminal connection was also tested on 0.158.0. An already open session retains its original provider until a new session loads the automatic settings. Local Codex app/IDE sessions must use this Codex home and support the same native plugin, hook and provider APIs; a remote managed coding session is a separate host.
 
@@ -17,13 +17,13 @@ codex plugin add jev-gate@jev-gate-codex
 
 For the release archive, extract `jev-gate-codex-<version>.zip`, add that extracted directory as the marketplace, and install the same plugin name. The archive includes its dependencies; it needs no installed `node_modules`. A raw Git checkout must be built first.
 
-Open ordinary `codex` in the project. The installed MCP automatically opens a local **Jev API key** screen when no key is available. Enter the key once; Codex and Claude Code share `~/.config/jev-gate/auth/credentials.json` (or the XDG config location), protected by 0700/0600 permissions. No key is written into a project or Codex's config. Environment keys remain supported and authoritative. Evidence and the native connection read newly saved keys without restarting MCP.
+Open ordinary `codex` in the project. The installed MCP automatically opens a local **Jev API key** screen when no key is available. Enter the key once; Codex and Claude Code share `~/.config/jev-gate/auth/credentials.json` (or the XDG config location), protected by 0700/0600 permissions. No key is written into a project or Codex's config. Environment keys remain supported and authoritative. The native connection reads newly saved keys without restarting MCP.
 
-Codex supplies the calling thread’s workspace; **no shell export, `JEV_CODEX_WORKSPACE`, Jev launcher or policy file is needed**. Enable one Jev Gate installation in `/plugins` and review/trust hooks when the native host requests approval. Installation does not forge hook trust or authenticate the key's API access. A host already running during installation needs a fresh host to load its new provider.
+Codex supplies the calling thread’s workspace; **no shell export, Jev launcher or policy file is needed**. Enable one Jev Gate installation in `/plugins` and review/trust hooks when the native host requests approval. Installation does not forge hook trust or authenticate the key's API access. A host already running during installation needs a fresh host to load its new provider.
 
 ## Automatic connection
 
-The trusted startup hook and installed MCP start one local helper per Codex home. The helper uses the official App Server to execute owned workers and observes ordinary native Responses requests for Router, context usage and compaction. It automatically writes only its model-provider entry, provider selection and compaction marker through Codex’s revision-checked configuration API. Unrelated settings and comments are preserved; API keys are never written there. A custom provider is preserved and automatic connection is declined rather than redirected.
+The trusted startup hook and installed MCP start one local helper per Codex home. The helper uses the official App Server to execute owned workers and observes ordinary native Responses requests for Router and context usage. Codex’s own compaction runs unchanged, and the Router never rewrites its request. It automatically writes only its model-provider entry and provider selection through Codex’s revision-checked configuration API. A `compact_prompt` marker written by an earlier version is removed, or returned to the owner’s value from before it; any other `compact_prompt` is the owner’s and stays. Unrelated settings and comments are preserved; API keys are never written there. A custom provider is preserved and automatic connection is declined rather than redirected.
 
 Use Codex normally:
 
@@ -33,9 +33,9 @@ codex
 codex --model gpt-6.1-sol --sandbox workspace-write
 ```
 
-If a session was open before installation, start a new native session after connection readiness. The plugin cannot change a model provider already loaded by that host. `jev_agent` is installed as an MCP tool; only a current Gate dispatch can start an owned worker. Invalid judgments, missing keys, unsupported input and unknown depth preserve native execution.
+If a session was open before installation, start a new native session after connection readiness. The plugin cannot change a model provider already loaded by that host. A new session that starts on another provider, for example while the helper is down, keeps it: its start notice says Router does not apply, and its `SessionStart` record carries `routed: false` and the provider. A session that reports no start metadata (an ephemeral one has no transcript) is judged from the connection owner alone: with none it is recorded `routed: false` with a null provider and gets the same notice; with an unreadable or stopped owner it is recorded `routed: "unknown"` and its notice says so. A live owner is not proof that the session started connected. `jev_agent` is installed as an MCP tool; only a current Gate dispatch can start an owned worker. Invalid judgments, missing keys, unsupported input and unknown depth preserve native execution.
 
-Active plugin clients restart a failed helper. Disabling/removing the plugin restores only settings that still match Jev’s installed values; owner edits are retained. No OS login service is installed. To keep Evidence without automatic provider integration, use `JEV_CODEX_AUTO_CONNECT=0` before plugin startup. Existing native login and configured `openai_base_url` / `OPENAI_BASE_URL` are preserved in the forwarding path. `JEV_CODEX_UPSTREAM` is an explicit compatible endpoint override.
+Active plugin clients restart a failed helper. Disabling/removing the plugin restores only settings that still match Jev’s installed values; owner edits are retained. No OS login service is installed. To start without automatic provider integration, use `JEV_CODEX_AUTO_CONNECT=0` before plugin startup. Existing native login and configured `openai_base_url` / `OPENAI_BASE_URL` are preserved in the forwarding path. `JEV_CODEX_UPSTREAM` is an explicit compatible endpoint override.
 
 The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available for explicit connection and diagnostics. It is optional; ordinary use does not require it.
 
@@ -43,42 +43,37 @@ The older `node <plugin>/dist/cli.mjs codex` managed terminal remains available 
 
 | Feature | Automatic connected session |
 | --- | --- |
-| Gate A | Reads observed native context usage; Jev judges context, cost support and bounded tool work; code chooses direct, one fast worker or planned delegation and enforces the depth floor |
+| Gate A | Reads observed native context usage; Jev judges context, cost support and bounded tool work; code chooses direct or one worker and enforces the depth floor |
 | Gate B | Adds actual model/effort candidates to the existing Gate B batch; rechecks eligibility before owned dispatch |
-| Planning | Only on the planned path: runs the existing read-only planner instructions in a native Codex thread and validates the returned task graph |
 | Workers / acceptance | Runs real native Codex workers in the background by default; compares reports with observed command exits and edits. Acceptance is owned by code on both hosts. |
-| Root guard | Enforces the shared root allowlist while a job is admitted; never returns an allow decision |
 | Router | Uses a nominal actual-ID model choice and candidate-local ordered effort scores; routes the original root request and separates selection, submission and actual response observation |
-| Compact | Prioritizes current-task dependencies with a bounded Jev batch, then produces the shared extractive digest; Codex installs it through its own state machine; unsupported extraction falls back to native compaction |
-| Evidence | Same local search, Jev judgments, pagination, cache and exact source read-back as Claude Code |
 
-Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. Planners narrow those grants to reads and disable network. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Worktree isolation creates a separate branch and leaves it for inspection and integration; it does not silently merge changes.
+Native permissions remain authoritative for root and workers. Owned workers inherit the calling tool’s captured native filesystem grants and denies. An unrepresentable permission snapshot refuses dispatch instead of guessing broader access. Workers cannot create another coordinator. Workers run in the caller's working directory by default (`gate.workerIsolation: "none"`). Set `gate.workerIsolation: "worktree"` to run the single worker in a snapshot worktree under those same native permissions. Integrate only the diff from its reported snapshot baseline; do not merge the snapshot commit. Worktree creation failure refuses dispatch.
 
-The defaults enable up to 16 snapshot worktree workers, up to 64 planned tasks, no depth floor, and plan interpretation. Jev chooses single or planned delegation from the request. Each planned worker sees staged, unstaged and untracked working files; ignored files stay excluded. Code acceptance is followed by root integration and reporting. Apply only the diff from each returned snapshot baseline to the worker branch; the snapshot commit itself is not a root commit.
+The defaults run one worker per admitted request with no depth floor. Code acceptance is followed by root integration and reporting.
 
-A complete bounded lookup or mechanical edit can use one account-listed Luna worker without a planner even when the older delegation-cost estimate is negative. This preference shares Gate A's existing Jev request and respects missing context, explicit no-delegation, shape and depth constraints. Workers handle whole outcomes, not each individual file read; the main integrates the result.
+A complete bounded lookup or mechanical edit can use one account-listed Luna worker even when the older delegation-cost estimate is negative. This preference shares Gate A's existing Jev request and respects missing context, explicit no-delegation, shape and depth constraints. Workers handle whole outcomes, not each individual file read; the main integrates the result.
 
-Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events. Encrypted reasoning, media, pending calls or an oversized mandatory context cannot be guessed; these cases use native compaction/handoff behavior. Digest bytes are not measured token or billing savings. Manual and automatic Compact, including Jev dependency selection, are enabled by default. Selection uses at most 16 omitted older successful results and a 1,000ms wait without retry. No key, invalid/secret input, timeout and optional key-access errors retain local extraction. Cancellation and a superseded native generation never apply late results; usage can remain unknown after a timeout. The recent tail, mandatory user text and failure evidence keep their existing rules. Switch `compact.jevEnabled` off for local-only extraction.
+Missing source, unknown checks and a worker's self-reported pass never become observed success. Check verification sees native command exits and file-change events; shell-based edits and external editor writes are not established by those events.
 
 ## Policy settings
 
-Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex.json`. No file is required. Gate/Router settings are loaded for each new prompt; restart the local host for Compact and environment changes.
+Use `JEV_CODEX_CONFIG=/absolute/codex.json`, otherwise `~/.config/jev-gate/codex.json`. No file is required. Gate/Router settings are loaded for each new prompt; restart the local host for environment changes.
 
 ```json
 {
   "gate": {"mode":"auto"},
-  "router": {"enabled":true,"model":true,"effort":true,"timeoutMs":800},
-  "compact": {"enabled":true,"manual":true,"budgetChars":40000,"jevEnabled":true,"jevTimeoutMs":1000}
+  "router": {"enabled":true,"model":true,"effort":true,"timeoutMs":800}
 }
 ```
 
-`gate` accepts the shared V5 options, including depth floors, budgets, checks and `workerIsolation`. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable Router or Compact. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; Router and Compact keep their own settings, and `doctor` reports the value.
+`gate` accepts the shared V5 options, including depth floors, budgets and checks. Without a model mapping, the adapter selects accessible tiers from live `model/list` descriptions. Explicit `models` entries override only those tiers. Main model and effort routing are both enabled by default. Router has the same directional probability thresholds (upgrade 0.8, downgrade 0.6). `JEV_GATE_MODE` overrides the Gate mode only; `gate.mode: "off"` does not disable the Router. A `gate.mode` or `JEV_GATE_MODE` other than `off|native|auto` turns off the Gate only; the Router keeps its own settings, and `doctor` reports the value. A `compact` section left from an earlier version is ignored.
 
 ### Current Codex models and efforts
 
 The router retains the complete native `model/list` catalog and considers every eligible coding candidate, including IDs outside the four role preferences. A malformed or conflicting entry excludes only that candidate; incomplete pagination retains partial discovery and marks it incomplete. Initialization and account changes refresh the bounded catalog without paid probes.
 
-Codex `/model`, `--model`, and ordinary model configuration establish a baseline. They do not permanently pin it. Router defaults to model and effort selection on the same root request, preserving tools, provider, authentication and permissions. Independent switches/pins and a manual mid-turn change take precedence. Effort is scored separately for each candidate; a B answer is never reused for A.
+Codex `/model`, ordinary model configuration and an interactive `--model`/`-m` establish a baseline. They do not permanently pin it. A non-interactive `codex exec` run keeps its model and effort on every request. Codex sends nothing that tells `-m`/`-c model_reasoning_effort` apart from `config.toml` defaults, so every `codex exec` request (originator `codex_exec`) is treated as pinned, including one that only inherits the defaults or names the configured model; such a run is not routed, not even from a superseded model to its successor. For the same reason an interactive `-m` cannot be pinned, and an interactive session's start notice says so. Router defaults to model and effort selection on the same root request, preserving tools, provider, authentication and permissions. Independent switches/pins and a manual mid-turn change take precedence. Effort is scored separately for each candidate; a B answer is never reused for A.
 
 An eligible direct conversation can delegate one bounded subtask without starting a plan. The shared hook reserves that worker before Gate B, applies its model/effort pair, and settles the original execution once. Its result does not complete the whole main request. Background questions stay in the main conversation. If termination or state settlement is uncertain, the returned execution identity supports `jev_agent` status recovery for either foreground or background work; do not start a replacement.
 
@@ -110,27 +105,19 @@ Native ChatGPT requests follow the official App Server's workspace backend and r
 
 | Environment | Effect |
 | --- | --- |
-| `JEV_CODEX_WORKSPACE` | Optional explicit Evidence workspace override; otherwise supplied by the native caller |
-| `JEV_EVIDENCE_CONFIG` | Authoritative Evidence project/allowed roots/remote settings |
 | `TYPESAFE_API_KEY` | Optional explicit key override; otherwise use the shared key entered in the local screen |
 | `JEV_GATE_NO_BROWSER=1` | Headless runs: print the local key-entry URL without opening a browser |
 | `JEV_GATE_ONBOARDING=0` | Disable automatic key entry for unattended runs |
 | `JEV_CODEX_CONFIG` | Absolute Codex policy JSON path |
-| `JEV_CODEX_AUTO_CONNECT=0` | Keep Evidence without starting automatic provider integration |
-| `JEV_CODEX_ENABLED=0` | Disable hooks and connected automatic policies; the separate Evidence MCP remains available |
+| `JEV_CODEX_AUTO_CONNECT=0` | Start without automatic provider integration |
+| `JEV_CODEX_ENABLED=0` | Disable hooks and connected automatic policies |
 | `JEV_CODEX_TRACE_DIR` | Absolute recording directory; overrides `JEV_GATE_TRACE_DIR` |
 | `JEV_DASHBOARD_NO_OPEN=1` | Suppress the automatic dashboard for unattended runs; manual dashboard prints its URL without opening a browser |
 | `JEV_CODEX_UPSTREAM` | Owner-selected OpenAI-compatible Responses base URL; HTTPS or loopback HTTP only |
 
 The optional managed terminal supports native model, sandbox, approval and display options, and rejects options it cannot faithfully forward. Automatic connection preserves a pre-existing custom provider; use an explicit compatible upstream only when you intend it.
 
-Evidence resolves each calling thread’s native workspace, with separate caches and a shared process-wide concurrency bound. The plugin cache is never substituted for the project. `JEV_EVIDENCE_CONFIG` remains an authoritative explicit scope, for example:
-
-```json
-{"projectRoot":"/absolute/project","allowedRoots":["src"],"remote":false}
-```
-
-Explicit scope changes require MCP restart. Desktop apps do not need to inherit a shell key; the shared local key works there too.
+Desktop apps do not need to inherit a shell key; the shared local key works there too.
 
 ## Live dashboard
 
@@ -140,7 +127,7 @@ The settings panel controls recording and automatic opening independently. Both 
 
 Records default to `$XDG_STATE_HOME/jev-gate/codex/traces` or `~/.local/state/jev-gate/codex/traces`. Private atomic metadata records contain no raw prompts, source, tool output, credentials or transcript paths. Missing records mean unknown. No simulated activity or inferred token savings is shown. Old records are not automatically deleted.
 
-If no policy runs, check automatic connection readiness, `/hooks` trust, enablement and key; start a fresh native host if the current host loaded the old provider. The default depth floor is 0, so a fresh turn is eligible for assessment; Jev can still choose direct execution. `doctor` checks package definitions, configured Evidence scope, local connection health and the native `model/list` inventory. It enumerates each routing target and effort and reports invalid configured models or unsupported owned-profile efforts. Use `--json`, `--verbose` and optional `--check-update`. No thread or inference turn is created. An advertised model is not proof of account access, hook execution or product effect.
+If no policy runs, check automatic connection readiness, `/hooks` trust, enablement and key; start a fresh native host if the current host loaded the old provider. The default depth floor is 0, so a fresh turn is eligible for assessment; Jev can still choose direct execution. `doctor` checks package definitions, local connection health and the native `model/list` inventory. It enumerates each routing target and effort and reports invalid configured models or unsupported owned-profile efforts. Use `--json`, `--verbose` and optional `--check-update`. No thread or inference turn is created. An advertised model is not proof of account access, hook execution or product effect.
 
 ## Verification and implementation references
 
@@ -152,9 +139,9 @@ claude plugin validate . --strict
 JEV_CODEX_E2E=1 npx vitest run tests/codex/runtime.test.ts tests/codex/connection-runtime.test.ts
 ```
 
-Ordinary tests use fake HTTP/CLI and no credentials. The native runtime suite installs a uniquely named disposable plugin and drives **real Codex processes** with a scripted local Responses provider. It verifies guarded root calls, workers, failed-check rejection, an actual file edit invalidating an earlier check followed by a successful recheck, plan dependencies, cancellation, denial budgets, read-only permissions, planned-worker worktrees, automatic/manual digest installation, Evidence, GPT-6/6.1 and Terra model/effort application, and dashboard records; the temporary installation is removed afterwards. The ordinary-native connection test additionally verifies no launcher/workspace export, crash recovery, concurrent sessions, actual Gate worker checks, native compaction installation and restoration of owner settings. This establishes those execution paths, not every future host version or measured product savings.
+Ordinary tests use fake HTTP/CLI and no credentials. The native runtime suite installs a uniquely named disposable plugin and drives **real Codex processes** with a scripted local Responses provider. It verifies unguarded root calls, workers, failed-check rejection, an actual file edit invalidating an earlier check followed by a successful recheck, cancellation, read-only permissions, unrouted native compaction, GPT-6/6.1 and Terra model/effort application, and dashboard records; the temporary installation is removed afterwards. The ordinary-native connection test additionally verifies no launcher/workspace export, crash recovery, concurrent sessions, actual Gate worker checks, an unrouted native compaction, removal of an earlier version's compaction marker and restoration of owner settings. This establishes those execution paths, not every future host version or measured product savings.
 
-The design was checked against the [official App Server](https://developers.openai.com/codex/app-server), [native hooks](https://learn.chatgpt.com/docs/hooks), [CaMe's native terminal connection](https://github.com/IlBig/CaMe), [jev-router's native Responses integration](https://github.com/gargpratyush/jev-router), [jev-use](https://github.com/shitianfang/jev-use), and [fast-jev-compaction-codex](https://github.com/Li-ship-dot/fast-jev-compaction-codex). These are architectural references, not a copied alternate execution engine. The [0.158.0 loader](https://github.com/openai/codex/blob/main/codex-rs/core-plugins/src/loader.rs) uses the compatibility manifest and `.mcp.json`; root portable manifests currently omit plugin hooks.
+The design was checked against the [official App Server](https://developers.openai.com/codex/app-server), [native hooks](https://learn.chatgpt.com/docs/hooks), [CaMe's native terminal connection](https://github.com/IlBig/CaMe), [jev-router's native Responses integration](https://github.com/gargpratyush/jev-router), and [jev-use](https://github.com/shitianfang/jev-use). These are architectural references, not a copied alternate execution engine. The [0.158.0 loader](https://github.com/openai/codex/blob/main/codex-rs/core-plugins/src/loader.rs) uses the compatibility manifest and `.mcp.json`; root portable manifests currently omit plugin hooks.
 
 ## Responsive background workers
 

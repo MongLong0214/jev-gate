@@ -86,6 +86,9 @@ describe('parseFrontmatter', () => {
     expect(frontmatterModel('---\nname: x\n---\n')).toBe('inherit');
     expect(frontmatterModel('---\nmodel: inherit\n---\n')).toBe('inherit');
     expect(frontmatterModel('no block')).toBeNull();
+    // A host default subagent model is what a file with no `model:` runs; an explicit inherit stays the file's own.
+    expect(frontmatterModel('---\nname: x\n---\n', 'haiku')).toBe('haiku');
+    expect(frontmatterModel('---\nmodel: inherit\n---\n', 'haiku')).toBe('inherit');
   });
 
   it('reads whether an agent file\'s tools can edit', () => {
@@ -132,6 +135,8 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     sharedDist = join(tmp, 'shared-dist');
     const r = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tsconfig.json'), '--outDir', sharedDist], { encoding: 'utf8' });
     expect(r.status, r.stdout + r.stderr).toBe(0);
+    const codex = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(sharedDist, 'codex')], { encoding: 'utf8' });
+    expect(codex.status, codex.stdout + codex.stderr).toBe(0);
   }, 60_000);
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -141,7 +146,7 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const pluginRoot = join(tmp, `case-${String(caseNum++)}`);
     mkdirSync(pluginRoot, { recursive: true });
     cpSync(sharedDist, join(pluginRoot, 'dist'), { recursive: true });
-    for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src', 'plugins/evidence/skills']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
+    for (const rel of ['.claude-plugin', 'hooks', 'agents', 'mods', 'src']) cpSync(join(root, rel), join(pluginRoot, rel), { recursive: true });
     mkdirSync(join(pluginRoot, 'plugins/evidence/dist'), { recursive: true });
     writeFileSync(join(pluginRoot, 'plugins/evidence/dist/server.mjs'), '// Fake packaged entry; Doctor does not execute it.\n');
     if (mutate) writeFileSync(join(pluginRoot, 'agents', mutate.file), mutate.content);
@@ -155,6 +160,39 @@ describe('doctor: checkModelAuthority (#48 P0-2)', () => {
     const r = spawnSync(process.execPath, [join(pluginRoot, 'dist', 'cli.js'), 'doctor', '--verbose'], { encoding: 'utf8', env: { PATH: '/nonexistent', HOME: home, ...extraEnv } });
     return { status: r.status, stdout: r.stdout };
   };
+
+  it.each(['claude', 'codex'])('C3: %s doctor CLI never prints cookie-bearing legacy rejection or failure prose', host => {
+    const pluginRoot = preparePluginRoot(), trace = join(tmp, `legacy-${host}`), home = join(tmp, `legacy-home-${host}`);
+    mkdirSync(trace); mkdirSync(home);
+    const canary = 'sessionid=canary123', reason = `check curl --cookie ${canary}: result malformed`;
+    const records = [{ phase: 'post', subagent_type: 'jev-gate:worker', verdict: 'invalid', verdict_reason: reason },
+      { phase: 'background_terminal', status: 'failed', verdict_reason: reason },
+      { phase: 'failure', error_first_line: reason, failure_category: reason, verdict_reason: reason }];
+    records.forEach((r, i) => writeFileSync(join(trace, `legacy-${i}.json`), JSON.stringify({ host, session_id: 'legacy', written_at: new Date().toISOString(), ...r })));
+    const entry = host === 'codex' ? join(pluginRoot, 'dist/codex/cli.mjs') : join(pluginRoot, 'dist/cli.js');
+    const result = spawnSync(process.execPath, [entry, 'doctor', '--verbose'], { encoding: 'utf8',
+      env: { PATH: '/nonexistent', HOME: home, JEV_GATE_TRACE_DIR: trace, JEV_CODEX_TRACE_DIR: trace } });
+    // No host CLI or installed package is supplied; the activity output still runs, without authentication or inference.
+    expect(result.status).toBe(1);
+    expect(result.stdout, result.stderr).toContain('invalid_reply'); expect(result.stdout).toContain('worker_result_unknown');
+    expect(result.stdout + result.stderr).not.toContain(canary);
+  });
+
+  it('prints every Gate cleanup reason from activity fixtures', () => {
+    const pluginRoot = preparePluginRoot(), trace = join(tmp, 'cleanup-reasons'); mkdirSync(trace);
+    const gateA = ['admission_needs_context', 'admission_context_unclear', 'admission_context_low_confidence'];
+    const worker = ['worker_check_failed', 'worker_check_not_run', 'worker_check_duplicate', 'worker_checks_missing', 'worker_checks_unverified', 'worker_no_result', 'worker_failed', 'worker_cancelled'];
+    const records = [
+      ...gateA.map(reason => ({ phase: 'admission_result', decision: { shape: 'direct', reason } })),
+      { phase: 'pre_result', role: 'worker', decision: { tier: 'standard', reason: 'route_not_fast' } },
+      ...worker.map(verdict_reason => ({ phase: 'post', subagent_type: 'jev-gate:worker', verdict: 'incomplete', verdict_reason })),
+      { phase: 'background_terminal', status: 'cancelled', verdict_reason: 'worker_cancelled' },
+    ];
+    records.forEach((r, i) => writeFileSync(join(trace, `reason-${i}.json`), JSON.stringify({ session_id: 's', written_at: new Date().toISOString(), ...r })));
+    const { stdout } = runDoctor(pluginRoot, { JEV_GATE_TRACE_DIR: trace });
+    for (const reason of [...gateA, 'route_not_fast', ...worker]) expect(stdout).toContain(reason);
+    expect(stdout).toContain('cancelled 1');
+  });
 
   it('OK: unmodified plugin, default config -- no model-authority disagreement for any owned agent', () => {
     const pluginRoot = preparePluginRoot();

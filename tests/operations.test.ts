@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildOperations, operationsStableUntil, type ModRecord } from '../src/operations.js';
-import { deterministicVerdict, parseWorkerReply, reportedSingleVerdict } from '../src/plan.js';
+import { parseWorkerReply, reportedSingleVerdict } from '../src/plan.js';
 import { refusalReason } from '../src/verify.js';
-import type { PlannedTask, WorkerReply } from '../src/types.js';
+import { codexSpanKey } from '../src/codex-operations.js';
+import type { WorkerReply } from '../src/types.js';
 
 const at = '2026-09-29T06:00:00.000Z';
 const later = '2026-09-29T06:00:01.000Z';
@@ -11,6 +12,21 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: ModRecord['component'], rec: Record<string, unknown>, time = at): ModRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it.each(['jv_live_' + '0123456789abcdef'.repeat(4), 'sk-canary', 'ghp_' + 'a1'.repeat(20), 'AKIAIOSFODNN7EXAMPLE'])('H1: applies the shared credential screen to Codex operation identities: %s', secret => {
+    expect(codexSpanKey({ session_id: 'session', agent_id: secret }, 'SubagentStop')).toBeNull();
+  });
+
+  it('names plain Agent results without Gate acceptance and retains exact Jev call identities', () => {
+    const view = buildOperations([
+      { ...base, phase: 'post', tool_use_id: 'native', subagent_type: 'general-purpose' },
+      { ...base, phase: 'admission_intent', request_id: 'call-1', attempted: true },
+      { ...base, phase: 'admission_result', request_id: 'call-1', attempted: true, decision: { shape: 'direct' }, http: { duration_ms: 20, status: 200 } },
+      { ...base, phase: 'codex_router_skipped', host: 'codex', reason: 'future_reason_987' },
+    ], [], new Date(later), { trace: true });
+    expect(view.feed.find(s => s.callId === 'native')).toMatchObject({ title: 'Agent 호출 결과 · 계약 판정 없음' });
+    expect(view.feed.filter(s => s.feature === 'admission').every(s => s.callId === 'call-1')).toBe(true);
+    expect(view.feed.some(s => s.summary === 'future_reason_987')).toBe(true);
+  });
   it('identifies a request effort mismatch without inventing a response model mismatch', () => {
     const rows = [
       { ...base, host: 'codex', phase: 'codex_route_applied', request_kind: 'root_response', selected_model: 'gpt-6.1-sol', submitted_model: 'gpt-6.1-sol', selected_effort: 'high', submitted_effort: 'xhigh', applied: false },
@@ -72,10 +88,19 @@ describe('operations display model', () => {
     const gate = buildOperations([{ ...base, phase: 'admission_result', attempted: true, http: { code: 'deadline', duration_ms: 500 }, decision: { shape: 'direct' } }], [], new Date(later), { trace: true });
     expect(gate.feed.find(s => s.lane === 'jev')?.state).toBe('error');
   });
-  it('does not present a direct turn ending or a planner dispatch as observed worker execution', () => {
-    const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' }], [], new Date(later), { trace: true, host: 'codex' });
+  it('reports a skipped Codex assessment that moved a superseded baseline instead of claiming the original model', () => {
+    const skipped = { ...base, host: 'codex', phase: 'codex_router_skipped', known_not_sent: true, attempted: false };
+    const kept = buildOperations([{ ...skipped, reason: 'pinned' }], [], new Date(later), { trace: true });
+    expect(kept.feed[0]?.details).toContain('Jev 전송 없음 · 원래 모델·effort 유지');
+    const moved = buildOperations([{ ...skipped, reason: 'key_missing', superseded_baseline: { from: 'gpt-6-sol', to: 'gpt-6.1-sol' } }], [], new Date(later), { trace: true });
+    expect(moved.feed[0]?.details).toContain('Jev 전송 없음 · gpt-6-sol에서 후속 모델 gpt-6.1-sol로 변경 · effort 유지');
+  });
+  it('does not present a direct turn ending or a legacy planner dispatch as observed worker execution', () => {
+    const view = buildOperations([{ ...base, phase: 'stop', outcome: 'completed' }, { ...base, phase: 'dispatch', role: 'planner' },
+      { ...base, phase: 'interpretation_intent', request_id: 'legacy' }, { ...base, phase: 'interpretation_result', request_id: 'legacy', attempted: true }], [], new Date(later), { trace: true, host: 'codex' });
     expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, state: 'waiting' });
-    expect(view.features.find(f => f.id === 'planning')).toMatchObject({ count: 1, state: 'observed' });
+    expect(view.features.map(f => f.id)).not.toContain('planning');
+    expect(view.requests).toBe(0);
     expect(view.feed.some(s => s.title === '턴 종료' && s.lifecycle === true)).toBe(true);
   });
   it('exposes the applied admission path even when a Jev result or a local fallback owns it', () => {
@@ -92,14 +117,8 @@ describe('operations display model', () => {
       { ...base, phase: 'admission_result', request_id: 'a1', attempted: true, decision: { shape: 'orchestrated', reason: 'selected' }, jev: { usage: { input_tokens: 10, output_tokens: 2 } } },
       { ...base, phase: 'pre_intent', request_id: 'b1' },
       { ...base, phase: 'pre_result', request_id: 'b1', attempted: true, decision: { action: 'preserve', tier: 'standard' } },
-      { ...base, phase: 'plan', status: 'accepted', tasks: 2, graph: [{ id: 't1', depends_on: [], required_checks: 1 }, { id: 't2', depends_on: ['t1'], required_checks: 2 }] },
       { ...base, phase: 'dispatch', role: 'worker', task_id: 't1', requested_tier: 'standard', requested_model: 'sonnet' },
-      { ...base, phase: 'guard', tool_name: 'Read', allow: false, denials: 1 },
       { ...base, phase: 'post', task_id: 't1', verdict: 'accept', requested_model: 'sonnet', resolved_model: 'claude-sonnet-5', reported_checks: { pass: 1, fail: 0, not_run: 0 } },
-      { written_at: at, phase: 'evidence_start', request_id: 'e1', kind: 'search', mode: 'locate' },
-      { written_at: at, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1', candidates: 4 },
-      { written_at: later, phase: 'evidence_jev_result', request_id: 'e1:1', parent_request_id: 'e1', attempted: true, http: { status: 200 }, jev: { usage: { input_tokens: 20, output_tokens: 3 } } },
-      { written_at: later, phase: 'evidence_result', request_id: 'e1', status: 'ok', backend: 'jev', items: 4, remote_calls: 1, cache_hits: 0 },
     ];
     const mods = [
       row('router', { event: 'request', turn: 'r1', sent: true }),
@@ -108,14 +127,11 @@ describe('operations display model', () => {
       row('compact', { event: 'compact', run_id: 'c1', applied: true, digestChars: 100 }, later),
     ];
     const view = buildOperations(records, mods, new Date('2026-09-29T06:00:02.000Z'), { trace: true });
-    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'planning', 'workers', 'guard', 'router', 'compact', 'evidence']);
+    expect(view.features.map((f) => f.id)).toEqual(['admission', 'allocation', 'workers', 'router', 'compact']);
     expect(view.features.every((f) => f.state === 'observed')).toBe(true);
-    expect(view.requests).toBe(4);
-    expect(view.runs.map((r) => r.source).sort()).toEqual(['compact', 'evidence', 'gate', 'router']);
+    expect(view.requests).toBe(3);
+    expect(view.runs.map((r) => r.source).sort()).toEqual(['compact', 'gate', 'router']);
     const gate = view.runs.find((r) => r.source === 'gate')!;
-    expect(gate.steps.find((s) => s.feature === 'planning')?.graph).toEqual([
-      { id: 't1', dependsOn: [], checks: 1 }, { id: 't2', dependsOn: ['t1'], checks: 2 },
-    ]);
     expect(gate.steps.find((s) => s.title.includes('워커 결과'))?.details.join(' ')).toContain('claude-sonnet-5');
     expect(JSON.stringify(view)).not.toContain('PRIVATE_PROMPT');
     expect(JSON.stringify(view)).not.toContain('sk-private-value');
@@ -165,7 +181,7 @@ describe('operations display model', () => {
     expect(view.feed[0]?.model).toMatchObject({ selected: 'sonnet', observed: 'claude-sonnet-5', status: 'confirmed', selectedEffort: 'low' });
   });
 
-  it.each(['codex_event', 'guard'])('keeps a Jev judgment visible after a busy %s loop and correlates the known turn', phase => {
+  it.each(['codex_event'])('keeps a Jev judgment visible after a busy %s loop and correlates the known turn', phase => {
     const records: Array<Record<string, unknown>> = [
       { ...base, host: 'codex', phase: 'admission_result', request_id: 'a', attempted: true, decision: { shape: 'direct' } },
       ...Array.from({ length: 200 }, (_, i) => ({ ...base, written_at: later, host: 'codex', phase, event: 'PostToolUse', allow: true, tool_use_id: `c${i}`, invocation_id: `i${i}` })),
@@ -176,13 +192,12 @@ describe('operations display model', () => {
     expect(view.feed.some(s => s.lane === 'jev')).toBe(true);
   });
 
-  it('separates measured Jev response, typed answer and code policy without treating a guard denial as an error', () => {
+  it('separates measured Jev response, typed answer and code policy', () => {
     const records = [
       { ...base, phase: 'admission_intent', request_id: 'typed' },
       { ...base, written_at: later, phase: 'admission_result', request_id: 'typed', attempted: true,
         http: { duration_ms: 247 }, answers: { need_worker: { noul: 0.81, confidence: 0.72 } },
         decision: { shape: 'orchestrated' }, policy_basis: 'bounded_tool_worker', estimate: { saving_tokens: -245000, cost_support: 0 } },
-      { ...base, written_at: later, phase: 'guard', tool_name: 'Bash', allow: false, denials: 1 },
     ];
     const view = buildOperations(records, [], new Date(later), { trace: true });
     const steps = view.runs[0]!.steps;
@@ -193,7 +208,6 @@ describe('operations display model', () => {
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.summary).toBe('위임 이득 충분');
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.details.join(' ')).toContain('빠른 워커 우선 정책');
     expect(steps.find((s) => s.lane === 'policy' && s.feature === 'admission')?.details.join(' ')).toContain('-245,000');
-    expect(steps.find((s) => s.feature === 'guard')?.state).toBe('done');
     expect(view.latency).toMatchObject({ measured: 1, p50: 247, p95: 247 });
   });
 
@@ -319,26 +333,23 @@ it('does not close root or sibling preparations with another agent response in t
 });
 
 
-it('reports actual Compact Jev calls in both hosts separately from local packing and installation', () => {
+it('reports actual Compact Jev calls separately from local packing, and reads Codex Compact records of earlier versions as nothing', () => {
   const records = [
     { phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'r', stage: 'selected', applied: false, jev_sent: true, jev_ms: 310, candidates: 16, available: 20, dependencies: 1, selection: 'current_dependencies', written_at: at },
     { phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'r', stage: 'installed', applied: true, written_at: later },
   ];
   const mods = [row('compact', { event: 'compact', session_id: 's', run_id: 'r', stage: 'jev', jev_sent: true, jev_ms: 220, candidates: 4, available: 4, dependencies: 1, selection: 'current_dependencies' }), row('compact', { event: 'compact', session_id: 's', run_id: 'r', applied: true }, later)];
   const view = buildOperations(records, mods, new Date(later), { trace: true });
-  expect(view.requests).toBe(2); expect(view.latency.measured).toBe(2);
-  expect(view.feed.filter(s => s.lane === 'jev')).toHaveLength(2);
+  expect(view.requests).toBe(1); expect(view.latency.measured).toBe(1);
+  expect(view.feed.filter(s => s.lane === 'jev')).toHaveLength(1);
   expect(view.feed.some(s => s.summary.includes('Jev 작업 의존 근거 선택'))).toBe(true);
-  expect(view.feed.find(s => s.lane === 'host')?.summary).toContain('설치 확인');
+  expect(view.runs.some(r => r.host === 'codex')).toBe(false);
 });
 
 
-it('shows a forwarded native Compact request without a Router mismatch or claimed digest installation', () => {
+it('shows no step for a forwarded native Compact request recorded by an earlier version', () => {
   const view = buildOperations([{ phase: 'codex_compact', host: 'codex', session_id: 'c', run_id: 'n', stage: 'native_submitted', applied: false, summarizer_request: true, submitted_model: 'gpt-6.1-sol', submitted_effort: 'xhigh', written_at: at }], [], new Date(later), { trace: true, host: 'codex' });
-  expect(view.feed).toHaveLength(1);
-  expect(view.feed[0]).toMatchObject({ feature: 'compact', lane: 'host', state: 'unconfirmed', summary: expect.stringContaining('호스트 요약 모델') });
-  expect(view.feed[0]?.issue).toBeUndefined();
-  expect(view.feed[0]?.details.join(' ')).toContain('설치 미관측');
+  expect(view.feed).toHaveLength(0); expect(view.runs).toHaveLength(0);
 });
 
 
@@ -517,7 +528,6 @@ it('rebuilds only the sessions that changed or still wait on their age, and equa
   const settled: Record<string, unknown>[] = [
     { ...base, written_at: old, phase: 'admission_intent', request_id: 'a1' },
     { ...base, written_at: old, phase: 'admission_result', request_id: 'a1', attempted: true, decision: { shape: 'direct' } },
-    { written_at: old, phase: 'evidence_jev_intent', request_id: 'e1:1', parent_request_id: 'e1' },
     { ...base, session_id: 's2', written_at: old, phase: 'background_launch', tool_use_id: 'd' },
   ];
   const mods = [row('router', { session_id: 's1', event: 'root', turn: 't1' }, old), row('router', { event: 'root_result', turn: 't2', requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', confirmation: 'confirmed' }, old)];
@@ -534,7 +544,7 @@ it('rebuilds only the sessions that changed or still wait on their age, and equa
   // Only the recording execution is rebuilt; then s1's Gate turn changes, and its Router turn, the answered session, the
   // session-less rows and s2 stay as they were: past 30 seconds nothing in them waits on its age.
   expect(second!.runs.filter(run => first!.runs.includes(run))).toEqual(second!.runs.slice(1));
-  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Evidence 검색', 'Router 실행', 'Router 실행', '게이트 세션', '게이트 세션']);
+  expect(third!.runs.filter(run => second!.runs.includes(run)).map(run => run.title).sort()).toEqual(['Router 실행', 'Router 실행', '게이트 세션', '게이트 세션']);
 });
 
 it('remakes only the steps a new row changes in a long Codex turn, and equals a fresh pass over copied records each time', () => {
@@ -617,6 +627,22 @@ it('has no age edge while nothing waits: a settled busy history is stable until 
   expect(operationsStableUntil()).toBe(t0 + 250_000);
 });
 
+it.each([
+  ['no_current_task', '사람이 입력한 현재 작업 없음'],
+  ['no_prior_assistant', '이전 assistant 메시지 없음'],
+  ['disabled', 'Jev 선별 꺼짐'],
+  ['no_key', 'Jev API 키 없음'],
+  ['no_candidates', '선별할 과거 결과 없음'],
+] as const)('displays classic Compact selection reason %s on its pre record', (selection, label) => {
+  const view = buildOperations([], [row('compact', { event: 'compact', path: 'classic', session_id: 's', stage: 'pre', guided: true, selection })], new Date(later), { trace: true });
+  expect(view.feed.flatMap(s => [s.summary, ...s.details]).join(' ')).toContain(label);
+});
+
+it('displays why classic Compact had no current task when nothing could be restored', () => {
+  const view = buildOperations([], [row('compact', { event: 'compact', path: 'classic', session_id: 's', stage: 'pre', deferred: 'nothing_to_restore', selection: 'no_current_task' })], new Date(later), { trace: true });
+  expect(view.feed.flatMap(s => [s.summary, ...s.details]).join(' ')).toContain('사람이 입력한 현재 작업 없음');
+});
+
 it('gives a Compact selection and its result written in the same millisecond their own step ids', () => {
   const at = '2026-09-29T06:09:59.000Z', run = { event: 'compact', session_id: 's', run_id: 'c' };
   const steps = buildOperations([], [row('compact', { ...run, stage: 'jev', jev_sent: true, jev_ms: 180 }, at), row('compact', { ...run, applied: true }, at)],
@@ -662,25 +688,14 @@ it('keeps every record and Jev call of the last minute in the feed, past the new
 
 describe('current incidents and past error records (#223)', () => {
   const yesterday = '2026-09-28T09:00:00.000Z', now = new Date('2026-09-29T06:00:05.000Z'), avail = { trace: true };
-  const evidence = (request_id: string, written_at: string, extra: Record<string, unknown>) => ({ host: 'codex', session_id: `s-${request_id}`, phase: 'evidence_result', request_id, written_at, backend: 'local', items: 0, remote_calls: 0, cache_hits: 0, duration_ms: 0, coverage: { read_files: 0, candidates: 0, unjudged_on_page: 0 }, ...extra });
-  const refused = evidence('old', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['invalid_input'] });
-  const ok = evidence('new', at, { status: 'ok', is_error: false, items: 3, reason_codes: [] });
+  const admission = (request_id: string, written_at: string, extra: Record<string, unknown>) => ({ host: 'codex', session_id: `s-${request_id}`, phase: 'admission_result', request_id, written_at, attempted: true, decision: { shape: 'direct' }, ...extra });
+  const ok = admission('new', at, { http: { status: 200, code: 'ok' } });
   const failure = (view: ReturnType<typeof buildOperations>, id: string) => view.runs.find(r => r.steps.some(s => s.state === 'error' && s.at === id))!;
   const build = (records: Record<string, unknown>[], mods: ModRecord[] = []) => {
     const view = buildOperations(records, mods, now, avail);
     expect(view).toEqual(buildOperations(records, mods, now, avail, true));
     return view;
   };
-
-  it('keeps an old invalid-input refusal as a past record of that request, never as an incident or a later success', () => {
-    const view = build([refused, ok]);
-    const old = failure(view, yesterday);
-    expect(old.state).toBe('past_error');
-    expect(old.steps[0]).toMatchObject({ state: 'error', issue: 'evidence', cause: 'invalid_input', sessionId: 's-old', impact: { now: 'request_only', lastAt: at, lastState: 'done' } });
-    expect(view.attention).toBe(0);
-    // Alone, it still affected only that request.
-    expect(build([refused]).runs[0]).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'request_only', lastAt: yesterday, lastState: 'error' } }] });
-  });
 
   it('keeps a service failure in the current count until a later success of the same operation on the same host', () => {
     const outage = (turn: string, time: string, assessment: string) => row('router', { session_id: `s-${turn}`, event: 'root', turn, sent: true, assessment }, time);
@@ -693,9 +708,9 @@ describe('current incidents and past error records (#223)', () => {
     expect(recovered.runs.filter(r => r.state === 'past_error')).toHaveLength(2);
     expect(recovered.feed.filter(s => s.state === 'error').map(s => s.impact)).toEqual([{ now: 'later_ok', lastAt: later, lastState: 'done' }, { now: 'later_ok', lastAt: later, lastState: 'done' }]);
     // A success on another host shows nothing about this one.
-    const config = evidence('cfg', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['unavailable_config'] });
+    const config = admission('cfg', yesterday, { http: { status: 0, code: 'network' } });
     const elsewhere = build([config, { ...ok, host: 'claude' }]);
-    expect(failure(elsewhere, yesterday)).toMatchObject({ host: 'codex', state: 'attention', steps: [{ cause: 'unavailable_config', impact: { now: 'unknown' } }] });
+    expect(failure(elsewhere, yesterday)).toMatchObject({ host: 'codex', state: 'attention', steps: [{ cause: 'network', impact: { now: 'unknown' } }, { lane: 'policy' }] });
     expect(elsewhere.runs.filter(r => r.host === 'codex' && r.state === 'attention')).toHaveLength(1);
     expect(elsewhere.runs.filter(r => r.host === 'claude' && r.state === 'attention')).toHaveLength(0);
   });
@@ -714,13 +729,13 @@ describe('current incidents and past error records (#223)', () => {
   });
 
   it('keeps an unchanged failure run object across rebuilds and replaces it when its classification changes', () => {
-    const config = evidence('cfg', yesterday, { status: 'unavailable', is_error: true, reason_codes: ['unavailable_config'] });
+    const config = admission('cfg', yesterday, { http: { status: 0, code: 'network' } });
     const records = [config, { ...base, phase: 'admission_intent', request_id: 'a1' }];
     const first = buildOperations(records, [], now, avail), id = failure(first, yesterday).id;
     const second = buildOperations([...records, { ...base, session_id: 's9', phase: 'admission_intent', request_id: 'a9', written_at: later }], [], now, avail);
     expect(second.runs.find(r => r.id === id)).toBe(first.runs.find(r => r.id === id));
     const third = buildOperations([...records, ok], [], now, avail);
-    expect(third.runs.find(r => r.id === id)).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'later_ok' } }] });
+    expect(third.runs.find(r => r.id === id)).toMatchObject({ state: 'past_error', steps: [{ impact: { now: 'later_ok' } }, { lane: 'policy' }] });
   });
 });
 
@@ -773,7 +788,6 @@ describe('worker contract outcomes (#232)', () => {
   });
 
   it.each(['claude', 'codex'] as const)('classifies each engine reason into a closed label and never passes the reason text or a reply on (%s)', host => {
-    const task: PlannedTask = { id: 't1', outcome: 'o', depends_on: [], context: '', constraints: [], deliverables: [], replan_if: [], contract_hash: 'h', checks: [{ id: 'unit', description: 'd', required: true, command: 'npm test' }] };
     const reply = (over: Partial<WorkerReply>): WorkerReply => ({ status: 'done', summary: 'PRIVATE_SUMMARY', changed_files: [], interfaces: [], checks: [], blockers: [], ...over });
     const invalid = parseWorkerReply('{"status":"PRIVATE_REPLY_TEXT"}');
     const cases: Array<[string, string | null, string, string]> = [
@@ -783,10 +797,11 @@ describe('worker contract outcomes (#232)', () => {
       ['incomplete', refusalReason(verification({ stale: ['#1'] }) as never), 'check_stale', '변경 전 통과 #1'],
       ['incomplete', reportedSingleVerdict(reply({ status: 'blocked', checks: [{ check_id: 'npm test -- PRIVATE_COMMAND', result: 'fail', note: '' }] })).reason, 'worker_blocked', ''],
       ['incomplete', reportedSingleVerdict(reply({ blockers: ['PRIVATE_BLOCKER'] })).reason, 'worker_blocked', ''],
-      ['replan', deterministicVerdict(task, reply({ status: 'replan' })).reason, 'worker_blocked', ''],
-      ['incomplete', deterministicVerdict(task, reply({})).reason, 'check_report', ''],
-      ['rework', deterministicVerdict(task, reply({ checks: [{ check_id: 'unit', result: 'fail', note: 'PRIVATE_NOTE' }] })).reason, 'check_report', ''],
-      ['incomplete', deterministicVerdict(task, reply({ checks: [{ check_id: 'other', result: 'pass', note: '' }] })).reason, 'check_report', ''],
+      // #289: the reasons a planned-task verdict wrote, as legacy traces still carry them.
+      ['replan', 'worker reported status replan', 'worker_blocked', ''],
+      ['incomplete', 'required check unit was not reported', 'check_report', ''],
+      ['rework', 'required check unit reported fail', 'check_report', ''],
+      ['incomplete', 'unknown check id other', 'check_report', ''],
       ['incomplete', 'the worker changed files but reported no passing check it ran', 'check_report', ''],
       ['invalid', invalid.ok ? null : invalid.error, 'invalid_reply', ''],
       ['invalid', 'the task is no longer in the current plan', 'superseded', ''],
@@ -847,5 +862,17 @@ describe('worker contract outcomes (#232)', () => {
     const before = first.steps.find(s => s.outcome === 'rejected')!;
     expect(run.steps.find(s => s.outcome === 'rejected')).toEqual({ ...before, impact: { now: 'later_ok', lastAt: t(8), lastState: 'done' } });
     expect(run.steps.filter(s => s.feature === 'workers' && !s.lifecycle).map(s => s.outcome)).toEqual(['rejected', 'host_ended', 'accepted', 'accepted']);
+  });
+});
+
+describe('Gate cleanup reason fixtures', () => {
+  it.each([['admission_needs_context', '앞선 대화 문맥 필요'], ['admission_context_unclear', '요청 문맥 불명확'], ['admission_context_low_confidence', '독립 요청 근거 부족'], ['route_not_fast', '빠른 등급 요건 불충족']])('renders Gate reason %s', (reason, label) => {
+    const phase = reason === 'route_not_fast' ? 'pre_result' : 'admission_result';
+    const view = buildOperations([{ ...base, phase, role: 'worker', decision: { shape: 'direct', action: 'preserve', tier: 'standard', reason } }], [], new Date(later), { trace: true });
+    expect(view.feed[0]?.summary).toContain(label);
+  });
+  it.each([['worker_check_duplicate', '검사 중복 보고'], ['worker_check_failed', '보고된 검사 실패'], ['worker_check_not_run', '필수 검사 미실행'], ['worker_checks_missing', '변경 후 검사 보고 없음'], ['worker_checks_unverified', '검사 실행 확인 불가'], ['worker_no_result', '워커 결과 미반환 · 예약 해제'], ['worker_failed', '워커 실행 실패'], ['worker_cancelled', '사용자가 워커 취소']])('renders worker reason %s', (reason, label) => {
+    const view = buildOperations([{ ...base, phase: 'post', subagent_type: 'jev-gate:worker', verdict: reason === 'worker_failed' || reason === 'worker_cancelled' || reason === 'worker_no_result' ? 'unknown' : 'incomplete', verdict_reason: reason }], [], new Date(later), { trace: true });
+    expect(view.feed[0]?.summary).toContain(label);
   });
 });

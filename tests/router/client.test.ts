@@ -54,6 +54,48 @@ describe('the one request', () => {
     expect(x.fetch).not.toHaveBeenCalled();
   });
 
+  it('F1 false-positive fix: routes fetch credentials options and token budgets but refuses a literal password', async () => {
+    const client = createClient({ timeoutMs: 800 });
+    const x = transport(() => GOOD);
+    const state = { task: { text: "Use fetch(url, { credentials: 'include' }); max token: 4000" } };
+    expect(await client.assess(x.t, FAKE_KEY, state, QUESTIONS)).toMatchObject({ ok: true });
+    expect(x.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(x.fetch.mock.calls[0]![1].body).state).toEqual(state);
+    expect(await client.assess(x.t, FAKE_KEY, { task: { text: '"password":"canary-pw-123"' } }, QUESTIONS)).toMatchObject({
+      ok: false, reason: 'input_secret', sent: false, requestBytes: null,
+    });
+    expect(x.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
+    'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue',
+  ])('G1: refuses unquoted strong credentials without sending: %s', async text => {
+    const x = transport(() => GOOD);
+    expect(await createClient({ timeoutMs: 800 }).assess(x.t, FAKE_KEY, { task: { text } }, QUESTIONS)).toMatchObject({
+      ok: false, reason: 'input_secret', sent: false, requestBytes: null,
+    });
+    expect(x.fetch).not.toHaveBeenCalled();
+  });
+
+  it('I1: refuses a prefixed JSON credential in routed state without sending', async () => {
+    const x = transport(() => GOOD);
+    expect(await createClient({ timeoutMs: 800 }).assess(x.t, FAKE_KEY, { task: { text: '{"DB_PASSWORD":"review-only-password"}' } }, QUESTIONS)).toMatchObject({
+      ok: false, reason: 'input_secret', sent: false, requestBytes: null,
+    });
+    expect(x.fetch).not.toHaveBeenCalled();
+  });
+
+  it('I1: routes state containing only noncredential key names and file/reference flags', async () => {
+    const x = transport(() => GOOD);
+    const text = ['input_tokens: 1234', 'cache_creation_input_tokens: 45000', 'token_count: 12', 'password_reset_flow: enabled',
+      '"author": "Isaac Kim 2026"', 'authority: central-bank-01', 'secretary: Jane Doe 2026', '--password-file ./pw.txt', '--api-key-env API_KEY'].join('\n');
+    const state = { task: { text } };
+    expect(await createClient({ timeoutMs: 800 }).assess(x.t, FAKE_KEY, state, QUESTIONS)).toMatchObject({ ok: true });
+    expect(x.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(x.fetch.mock.calls[0]![1].body).state).toEqual(state);
+  });
+
   it('maps statuses to closed reasons, keeps the usage a refusal reports, and never retries', async () => {
     const cases: Array<[number, string]> = [
       [400, 'rejected_input'],

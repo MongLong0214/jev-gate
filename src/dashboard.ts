@@ -32,11 +32,8 @@ export const pruneViewers = (viewers: Map<string, number>, now: number): void =>
     if (Number.isFinite(expires) && (expires <= now || leases > VIEWER_LEASES)) { viewers.delete(id); leases--; }
   }
 };
-/** The least time from one rebuild's start to the next one's after new records. Four times the last rebuild keeps the
- * activity thread at most a quarter busy under a continuous stream; the one-second floor lets a burst of records share one
- * rebuild; the four-second ceiling bounds the wait after a slow one. Counting from the start, not the end, lets a record
- * that arrives a second after the last rebuild began start its own at once. */
-export const rebuildWait = (lastMs: number): number => Math.min(4000, Math.max(1000, 4 * lastMs));
+/** Coalesce one frame of notifications, without queuing values behind a one-second playback budget. Rebuilds stay shared. */
+export const rebuildWait = (lastMs: number): number => Math.min(100, Math.max(16, lastMs));
 
 export interface DashboardSources {
   host?: Host;
@@ -134,12 +131,12 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     };
     const watchers = new Map<string, { watcher: FSWatcher; identity: string }>();
     const directoryIdentities = new Map<string, string | null>();
+    const directoryTimes = new Map<string, number | null>();
     const directories = new Set([sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? [])].filter((dir): dir is string => !!dir).map(dir => join(dir, '.')));
     let loaded: LoadedActivity | null = null;
     let loading: Promise<void> | null = null;
     let startedAt = 0;
     let changed = false;
-    let watchedAt = 0;
     let timer: ReturnType<typeof setTimeout> | null = null, due: ReturnType<typeof setTimeout> | null = null;
     let step: { base: string; key: string; patch: string } | null = null;
     let whole: { key: string; json: string } | null = null, wholeLoading: Promise<void> | null = null;
@@ -171,14 +168,15 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       if (name === undefined) invalidations.set(dir, null);
       else if (names !== null) invalidations.set(dir, (names ?? new Set<string>()).add(name));
       changed = true;
-      if (!timer) timer = setTimeout(() => { timer = null; broadcast(); }, 100);
+      if (!timer) timer = setTimeout(() => { timer = null; broadcast(); }, 20);
     };
-    const syncWatchers = (force = false): void => {
-      if (!force && Date.now() - watchedAt < 2000) return;
-      watchedAt = Date.now();
+    const syncWatchers = (): void => {
       for (const dir of directories) {
-        let identity: string | null = null;
-        try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) identity = traceDirectoryIdentity(stat); } catch { /* It may appear later. */ }
+        let identity: string | null = null, modified: number | null = null;
+        try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) { identity = traceDirectoryIdentity(stat); modified = stat.mtimeMs; } } catch { /* It may appear later. */ }
+        // macOS can batch fs.watch notifications. One directory stat catches appends before that batch arrives;
+        // the reader reconciles filenames without statting or rereading the unchanged history.
+        if (directoryTimes.get(dir) !== modified) { directoryTimes.set(dir, modified); changed = true; }
         const existing = watchers.get(dir);
         if (existing?.identity === identity) continue;
         if (existing) { existing.watcher.close(); watchers.delete(dir); }
@@ -187,31 +185,30 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           const watcher = watch(dir, (_event, name) => kick(dir, name?.toString()));
           watcher.on('error', () => { watcher.close(); watchers.delete(dir); kick(dir); });
           watchers.set(dir, { watcher, identity });
-          // A new watcher can miss changes made while the OS is still starting it; look at the whole directory once more.
-          setTimeout(() => kick(dir), 1000).unref();
+          // The one-second name reconciliation also catches records missed while the OS starts the watcher.
         } catch { /* Retry on the next poll; reconciliation still reads available files. */ }
       }
     };
-    /** Rebuilds run on the activity thread, one at a time, and every caller shares the one in flight. A rebuild after new
-     * records starts `rebuildWait` after the previous one started, so a stream of records cannot keep that thread busy. */
+    /** Rebuilds run on the activity thread, one at a time, and every caller shares the one in flight.
+     * Coalesce nearby notifications for at most 100 ms; a later record never waits behind playback. */
     const wait = (): number => rebuildWait(loaded?.ms ?? 0);
     const refresh = (): Promise<void> => {
       syncWatchers();
       const elapsed = Date.now() - startedAt;
-      if (!loading && (!startedAt || changed && elapsed >= wait() || Date.now() >= (loaded?.until ?? 0) || elapsed >= 30_000)) {
+      if (!loading && (!startedAt || !timer && (changed && elapsed >= wait() || Date.now() >= (loaded?.until ?? 0) || elapsed >= 1000))) {
         startedAt = Date.now(); changed = false; flush();
         loading = engine.load().then(next => {
           if (next.patch && next.base) step = { base: next.base, key: next.key, patch: next.patch };
           loaded = next;
         }, () => { changed = true; /* The last snapshot stays; retry after the wait. */ })
-          .finally(() => { loading = null; syncWatchers(true); broadcast(); });
-      } else if (!loading && changed && !due) {
+          .finally(() => { loading = null; syncWatchers(); broadcast(); });
+      } else if (!loading && changed && !timer && !due) {
         // Waiting records start the next rebuild when its wait ends, not at a later tick.
         due = setTimeout(() => { due = null; if (!disposed) broadcast(); }, wait() - elapsed); due.unref();
       }
       return loading ?? Promise.resolve();
     };
-    const scan = setInterval(broadcast, 400);
+    const scan = setInterval(broadcast, 50);
     scan.unref();
     const dispose = (): void => {
       disposed = true; clearTimeout(openTimer);

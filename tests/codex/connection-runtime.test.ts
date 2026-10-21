@@ -60,11 +60,12 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
     market['name'] = 'jev-auto-fixture';
     writeFileSync(marketFile, JSON.stringify(market));
     const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome, JEV_CODEX_TRACE_DIR: trace, ...fixtureEnv };
-    delete env['JEV_CODEX_WORKSPACE']; delete env['JEV_EVIDENCE_CONFIG']; delete env['JEV_CODEX_BRIDGE_URL']; delete env['JEV_CODEX_BRIDGE_TOKEN'];
+    delete env['JEV_CODEX_BRIDGE_URL']; delete env['JEV_CODEX_BRIDGE_TOKEN'];
     delete env['TYPESAFE_API_KEY']; delete env['CLAUDE_PLUGIN_OPTION_TYPESAFEAPIKEY'];
     const cli = (args: string[]) => spawnSync('codex', args, { env, cwd: workspace, encoding: 'utf8', timeout: 20_000 });
     const config = join(codexHome, 'config.toml');
-    writeFileSync(config, `# Preserve this owner comment\nmodel = "gpt-6.1-sol"\nmodel_reasoning_effort = "high"\nopenai_base_url = ${JSON.stringify(base)}\n[shell_environment_policy]\ninherit = "all"\n[features]\nplugins = true\nhooks = true\n`);
+    // #292: a compact_prompt marker left by a version with Codex Compact.
+    writeFileSync(config, `# Preserve this owner comment\nmodel = "gpt-6.1-sol"\nmodel_reasoning_effort = "high"\nopenai_base_url = ${JSON.stringify(base)}\ncompact_prompt = "[jev-gate compact ${'cd'.repeat(24)}] Produce a factual compaction summary of the preceding conversation."\n[shell_environment_policy]\ninherit = "all"\n[features]\nplugins = true\nhooks = true\n`);
     writeFileSync(join(codexHome, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'fake-local-native-key' }), { mode: 0o600 });
     const ownerPath = join(codexHome, 'jev-gate/connection/owner.json');
     let installed = false;
@@ -81,10 +82,14 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
       const warm = await run(); expect(warm.code, warm.output).toBe(0);
       expect(existsSync(ownerPath), warm.output).toBe(true);
       expect(readFileSync(config, 'utf8')).toContain('model_provider = "jev-gate-native"');
+      expect(readFileSync(config, 'utf8')).not.toContain('compact_prompt');
       const at = requests.length; const connected = await run(); expect(connected.code, connected.output).toBe(0);
-      expect(requests.slice(at).some(r => (r['reasoning'] as Obj)?.['effort'] === 'low'), JSON.stringify({ requests: requests.slice(at), output: connected.output })).toBe(true);
+      // #282: `codex exec` keeps its model and effort (here config's high) although the fake Jev answers low.
+      const efforts = requests.slice(at).map(r => (r['reasoning'] as Obj)?.['effort']);
+      expect(efforts.includes('high') && !efforts.includes('low'), JSON.stringify({ requests: requests.slice(at), output: connected.output })).toBe(true);
       const rows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
-      expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === true)).toBe(true);
+      expect(rows.some(r => r['phase'] === 'codex_router_skipped' && r['reason'] === 'pinned')).toBe(true);
+      expect(rows.some(r => r['phase'] === 'codex_route_applied')).toBe(false);
       expect(rows.some(r => r['phase'] === 'codex_router_response' && r['reason'] === 'response_model_confirmed' && r['observed_model'] === 'gpt-6.1-sol')).toBe(true);
       expect(rows.some(r => r['phase'] === 'codex_model_request')).toBe(true);
       expect(JSON.stringify(rows)).not.toContain('fake-local-');
@@ -116,18 +121,18 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         };
         const start = async (): Promise<string> => String(((await rpc.request('thread/start', { cwd: workspace, ephemeral: true, approvalPolicy: 'never', sandbox: 'read-only' }))['thread'] as Obj)['id']);
         // Reproduce #178 through a normal App Server: root is routed low, while native compaction keeps host high.
-        writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'off' }, compact: { manual: false } }));
+        writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'off' } }));
         mode = 'compact'; step = 0; const nativeCompact = await start();
         await turn(nativeCompact, 'Preserve the exact nativeCompactConstraint.'); await turn(nativeCompact, 'Give a short answer.');
         const beforeNative = requests.length;
         await rpc.request('thread/compact/start', { threadId: nativeCompact });
         const nativeUntil = Date.now() + 10_000;
-        while (!readdirSync(trace).some(f => f.startsWith('codex_compact') && JSON.parse(readFileSync(join(trace, f), 'utf8')).stage === 'native_submitted') && Date.now() < nativeUntil) await new Promise<void>(resolve => setTimeout(resolve, 20));
+        while (requests.length < beforeNative + 1 && Date.now() < nativeUntil) await new Promise<void>(resolve => setTimeout(resolve, 20));
         expect(requests.length).toBe(beforeNative + 1);
         expect((requests.at(-1)!['reasoning'] as Obj)['effort']).toBe('high');
         const nativeRows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj).filter(r => r['session_id'] === nativeCompact);
         expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === 'low' && r['applied'] === true)).toBe(true);
-        expect(nativeRows.some(r => r['phase'] === 'codex_compact' && r['stage'] === 'native_submitted' && r['submitted_effort'] === 'high')).toBe(true);
+        expect(nativeRows.filter(r => r['phase'] === 'codex_model_request')).toHaveLength(2);
         expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === false)).toBe(false);
         writeFileSync(policyFile, '{}');
         mode = 'gate'; step = 0; const gateStart = requests.length; const gate = await start();
@@ -150,14 +155,6 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
           expect((nativeRequest!['reasoning'] as Obj)['effort'], nativeErrors).toBe(childRequests.find(c => c['request_id'] === response['request_id'])!['submitted_effort']);
         }
         expect(requests.slice(gateStart).length, nativeErrors).toBeGreaterThanOrEqual(5);
-        writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'off' }, router: { enabled: false }, compact: { manual: true } }));
-        mode = 'compact'; step = 0; const compact = await start();
-        await turn(compact, 'Preserve the exact userConstraintNeedle.'); await turn(compact, 'Give a short answer.');
-        const beforeCompact = requests.length; await rpc.request('thread/compact/start', { threadId: compact });
-        const until = Date.now() + 10_000;
-        while (!readdirSync(trace).some(f => f.startsWith('codex_compact') && JSON.parse(readFileSync(join(trace, f), 'utf8')).stage === 'installed') && Date.now() < until) await new Promise<void>(resolve => setTimeout(resolve, 20));
-        expect(readdirSync(trace).some(f => f.startsWith('codex_compact') && JSON.parse(readFileSync(join(trace, f), 'utf8')).stage === 'installed'), nativeErrors).toBe(true);
-        expect(requests.length).toBe(beforeCompact);
       } finally { rpc.close(); native.kill('SIGTERM'); }
       writeFileSync(config, readFileSync(config, 'utf8') + '\n# Owner edit while connected\n');
       const removed = cli(['plugin', 'remove', 'jev-gate@jev-auto-fixture']); expect(removed.status, removed.stderr).toBe(0); installed = false;

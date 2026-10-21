@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { resolveCompactConfig } from '../../mods/compact/hooks/config.ts';
+import { activityChecks, activityStableUntil } from '../../src/doctor-activity.js';
+import { loadActivity } from '../../src/activity.js';
+import { rowOf, type CellResult } from '../../src/bench/ab.js';
 
 /**
  * register.ts types itself against the host's `claude-code` declarations, which this Node typecheck does not load, so
@@ -28,7 +34,7 @@ const hostWith = (write: (path: string, text: string) => Promise<void>) => ({
 });
 const $ = hostWith(async (path, text) => {
   if (path.endsWith('.asked')) { marks.push(path); return; }
-  const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, ...fields } = JSON.parse(text) as Record<string, unknown>;
+  const { host: _host, session_id: _session, phase, version: _version, invocation_id: _id, written_at: _at, recording_id: _recording, loss_marker: _marker, ...fields } = JSON.parse(text) as Record<string, unknown>;
   logs.push(`jev-${String(phase).slice(4)} ${JSON.stringify(fields)}`);
 });
 
@@ -64,6 +70,23 @@ describe('resolveCompactConfig', () => {
 });
 
 describe('register', () => {
+  it('keeps a confirmed fake Jev send unknown after record loss and a post-send native exception', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-compact-loss-'));
+    try {
+      const hooks = await hooksFor({ enabled: true, jevEnabled: true, mode: 'shadow' });
+      const host = hostWith(async () => { throw new Error('EMFILE'); }); let sends = 0;
+      host.env.get = async name => ({ HOME: dir, JEV_GATE_TRACE_DIR: dir, TYPESAFE_API_KEY: 'k'.repeat(16) } as Record<string, string>)[name];
+      const engine = { ...host, http: { fetch: async () => { sends++; return { status: 200, text: JSON.stringify({ model: 'jev-1.14.0', answers: {}, usage: { input_tokens: 100, output_tokens: 1 } }) }; } } };
+      await expect(hooks.get('session.compact')!(engine, { trigger: 'auto', messages: conversation() }, async () => { throw new Error('engine failed after selection'); })).rejects.toThrow('engine failed after selection');
+      expect(sends).toBe(1); expect(readdirSync(dir)).toEqual([]);
+      const receipts: Record<string, unknown>[] = [];
+      host.fs.write = async (path, text) => { receipts.push(JSON.parse(text)); writeFileSync(path, text); };
+      await hooks.get('session.end')!(engine, {}, async () => ({}));
+      expect(receipts).toMatchObject([{ complete: false }]);
+      const cell = { cond: 'C', sid: 's', recording_version: 1, trace_complete: true, prime: {}, harness: {} } as CellResult;
+      expect(rowOf(cell, null, null, dir).jev_cost).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it('leaves the marker the plugin\'s command hook reads, for every compaction it is asked about and defers', async () => {
     const hook = (await hooksFor({ enabled: true, mode: 'shadow' })).get('session.compact')!;
     marks.length = 0;
@@ -114,7 +137,7 @@ describe('register', () => {
     const on = (await hooksFor({ enabled: true, mode: 'active', compactSubagents: false, compactManual: false })).get('session.compact')!;
     logs.length = 0;
     await on($, { trigger: 'manual', messages: conversation() }, next);
-    await on($, { trigger: 'precompute', messages: conversation() }, next);
+    await on($, { trigger: 'plugin', messages: conversation() }, next);
     await on($, { trigger: 'auto', agentId: 'a1', messages: conversation() }, next);
     await on($, { trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] }, next);
     expect(calls).toHaveLength(4);
@@ -124,6 +147,89 @@ describe('register', () => {
     await manual($, { trigger: 'manual', instructions: 'keep the plan', messages: conversation() }, next);
     expect(calls).toHaveLength(5);
     expect(await manual($, { trigger: 'manual', messages: conversation() }, next)).not.toBe(CORE);
+  });
+
+  it('precompute: active computes nothing ahead of a compaction it answers; shadow and an excluded subagent leave it to the engine', async () => {
+    const parse = () => logs.map((l) => JSON.parse(l.replace(/^jev-compact /, '')) as Record<string, unknown>);
+    const { next, calls } = nextSpy();
+    const active = (await hooksFor({ enabled: true, mode: 'active', compactSubagents: false })).get('session.compact')!;
+    logs.length = 0;
+    expect(await active($, { trigger: 'precompute', messages: conversation() }, next)).toEqual({ skip: expect.any(String) });
+    expect(calls).toEqual([]);
+    expect(parse()).toEqual([expect.objectContaining({ trigger: 'precompute', mode: 'active', subagent: false, skipped: 'precompute' })]);
+    const all = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+    expect(await all($, { trigger: 'precompute', agentId: 'a1', messages: conversation() }, next)).toEqual({ skip: expect.any(String) });
+    expect(calls).toEqual([]);
+    logs.length = 0;
+    const sub = { trigger: 'precompute', agentId: 'a1', messages: conversation() };
+    expect(await active($, sub, next)).toBe(CORE);
+    const shadow = { trigger: 'precompute', messages: conversation() };
+    expect(await (await hooksFor({ enabled: true, mode: 'shadow' })).get('session.compact')!($, shadow, next)).toBe(CORE);
+    expect(calls).toEqual([sub, shadow]);
+    expect(parse().map((x) => x['deferred'])).toEqual(['subagent', 'trigger']);
+  });
+
+  describe('precompute then auto', () => {
+    const parse = () => logs.map((l) => JSON.parse(l.replace(/^jev-compact /, '')) as Record<string, unknown>);
+    const turn = (text: string) => ({ role: 'user', text, toolUses: [] });
+    const say = (text: string) => ({ role: 'assistant', text, toolUses: [] });
+    const call = (text: string, result: string, id: string) => [
+      { role: 'assistant', text, toolUses: [{ tool: 'Read', input: { file_path: `/w/${id}` }, text: result, tool_use_id: id }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: id, text: result, isError: false }] },
+    ];
+    const work = (k: number) => Array.from({ length: k }, (_, i) => call(`s${i}`, 'y'.repeat(2000), `w${i}`)).flat();
+    const pending = { role: 'assistant', text: 'Starting the build.', toolUses: [{ tool: 'Bash', input: { command: 'make' }, tool_use_id: 'pa' }] };
+    const ghost = { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'gone', text: 'z', isError: false }] };
+    const fallbacks: Array<[string, number, unknown[]]> = [
+      ['mandatory_overflow', 40000, [turn('a'.repeat(45000)), say('b'.repeat(90000)), turn('continue'), say('done')]],
+      ['tail_too_large', 20000, [turn('Read the log.'), ...work(40), ...call('Reading the log.', 'x'.repeat(50000), 'big')]],
+      ['opaque_result', 30000, [turn('Look at the page.'), ...work(30), ...call('Taking a screenshot.', '', 'shot')]],
+      ['no_relief', 20000, [turn('Read the log.'), say('Reading.'), turn('ok'), ...call('Reading the log.', 'x'.repeat(30000), 'log')]],
+      ['unpaired_result', 8000, [turn('x'), ...work(20), say('hm'), ghost]],
+      ['pending_call', 8000, [turn('Build it.'), ...work(2), pending, ...work(40)]],
+      ['nothing_to_compact', 40000, [turn('hi')]],
+    ];
+
+    it.each(fallbacks)('%s: the engine precomputes, and the auto compaction that follows goes to the engine too', async (reason, budgetChars, messages) => {
+      const hook = (await hooksFor({ enabled: true, mode: 'active', budgetChars })).get('session.compact')!;
+      const { next, calls } = nextSpy();
+      logs.length = 0;
+      const pre = { trigger: 'precompute', messages };
+      const auto = { trigger: 'auto', messages };
+      expect(await hook($, pre, next)).toBe(CORE);
+      expect(await hook($, auto, next)).toBe(CORE);
+      expect(calls).toEqual([pre, auto]);
+      expect(parse().filter((x) => x['stage'] !== 'started').map((x) => [x['trigger'], x['fallback'], x['skipped']])).toEqual([['precompute', reason, undefined], ['auto', reason, undefined]]);
+    });
+
+    it('a transcript whose digest builds: precompute is skipped and the auto compaction is answered locally, so the engine is never asked', async () => {
+      const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+      const { next, calls } = nextSpy();
+      logs.length = 0;
+      expect(await hook($, { trigger: 'precompute', messages: conversation() }, next)).toEqual({ skip: expect.any(String) });
+      expect(await hook($, { trigger: 'auto', messages: conversation() }, next)).toEqual({ messages: expect.any(Array) });
+      expect(calls).toEqual([]);
+      expect(parse().filter((x) => x['stage'] !== 'started').map((x) => [x['trigger'], x['skipped'], x['applied']])).toEqual([['precompute', 'precompute', undefined], ['auto', undefined, true]]);
+    });
+
+    it('a transcript that changed between the two: the auto compaction is judged on its own and the engine takes it when no digest builds', async () => {
+      const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+      const { next, calls } = nextSpy();
+      expect(await hook($, { trigger: 'precompute', messages: conversation() }, next)).toEqual({ skip: expect.any(String) });
+      const later = { trigger: 'auto', messages: [turn('hi')] };
+      expect(await hook($, later, next)).toBe(CORE);
+      expect(calls).toEqual([later]);
+    });
+
+    it('a transcript the local check cannot read: precompute stays the engine\'s', async () => {
+      const hook = (await hooksFor({ enabled: true, mode: 'active' })).get('session.compact')!;
+      const { next, calls } = nextSpy();
+      logs.length = 0;
+      const pre = { trigger: 'precompute', messages: [null] };
+      expect(await hook($, pre, next)).toBe(CORE);
+      expect(calls).toEqual([pre]);
+      expect(parse().at(-1)).toMatchObject({ trigger: 'precompute', fallback: 'error' });
+    });
   });
 
   it('when the engine refuses a compaction it was handed, the line is still written and the refusal passes up', async () => {
@@ -187,4 +293,41 @@ describe('optional Jev failure does not discard the local digest', () => {
     const event = { trigger: 'auto', messages: conversation() };
     expect(await hook($, event, next)).toBe(CORE); expect(calls).toEqual([event]);
   });
+});
+
+
+it.each(['active', 'shadow', 'fallback', 'coreError', 'cancelled'] as const)('D3: real Function Compact %s records reach doctor and dashboard', async kind => {
+  const dir = mkdtempSync(join(tmpdir(), 'compact-activity-'));
+  try {
+    const records: Array<Record<string, unknown>> = [];
+    const host = hostWith(async (path, text) => {
+      if (!path.endsWith('.json')) return;
+      const { basename } = await import('node:path');
+      writeFileSync(join(dir, basename(path)), text); records.push(JSON.parse(text));
+    });
+    const hook = (await hooksFor({ enabled: true, mode: kind === 'shadow' ? 'shadow' : 'active', budgetChars: 40000 })).get('session.compact')!;
+    const next = kind === 'coreError' ? async () => { throw new Error('synthetic core failure'); } : nextSpy().next;
+    if (kind === 'cancelled') { const controller = new AbortController(); controller.abort(); Object.assign(next, { signal: controller.signal }); }
+    const messages = kind === 'fallback' || kind === 'coreError' ? [{ role: 'user', text: 'hi', toolUses: [] }] : conversation();
+    const run = Promise.resolve(hook(host, { trigger: 'auto', messages }, next));
+    if (kind === 'coreError') await expect(run).rejects.toThrow('synthetic core failure'); else await run;
+    const facts = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')!;
+    const applied = kind === 'active' ? 1 : 0, regression = kind === 'coreError' ? 1 : 0;
+    expect(facts.metrics).toMatchObject({ fired: 1, applied, restored: 0, regression, budget: 40000 });
+    if (kind === 'cancelled') expect(activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now() + 600001, installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')?.metrics).toMatchObject({ fired: 1, applied: 0, regression: 0 });
+    if (kind === 'active') {
+      const started = records.filter(r => r['stage'] === 'started');
+      const at = Date.parse(String(started[0]!['written_at']));
+      const pending = (now: number) => activityChecks({ traces: { claude: { records: started, unreadable: 0 } }, now, installed: null, recording: true, keyPresent: false, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')!;
+      expect(pending(at).metrics).toMatchObject({ fired: 1, applied: 0, regression: 0 });
+      expect(pending(at + 600001).metrics).toMatchObject({ fired: 1, applied: 0, regression: 1 });
+      expect(activityStableUntil(started, at)).toBe(at + 600001);
+    }
+    if (applied) {
+      const terminal = records.find(r => r['applied'] === true)!;
+      expect(facts.metrics).toMatchObject({ budget: 40000, budgetUsed: Number(terminal['digestChars']) + Number(terminal['tailChars']) });
+    }
+    const dashboard = loadActivity({ traceDir: dir, env: { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config') } });
+    expect(dashboard.activity24h.claude.find(c => c.feature === 'compact')?.metrics).toEqual(facts.metrics);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

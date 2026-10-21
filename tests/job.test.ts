@@ -5,9 +5,6 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import {
   ACTIVE_GRACE_MS,
-  activeDeliverables,
-  activePlanners,
-  activeTaskIds,
   activeWorkers,
   boundExhausted,
   cleanupJobs,
@@ -49,10 +46,35 @@ describe('paths', () => {
 });
 
 describe('updateJob', () => {
+  it.each([
+    { label: 'J1 literal interpolation marker', canary: "password='s3cure${literal}'" },
+    { label: 'cookie', canary: 'sessionid=canary123' },
+    { label: 'JSON', canary: '{"password":"canary-pw-123","api_key":"canary-key-456"}' },
+    { label: 'I1 prefixed JSON password', canary: '{"DB_PASSWORD":"review-only-password"}' },
+  ])('C4/F1: projects legacy current/history receipts and rebuilds raw background context on read and rewrite ($label)', ({ canary }) => {
+    const env = freshEnv(), original = seed(env);
+    const receipt = { task_id: 'single', contract_hash: '', rev: 0, attempt: 1, tool_use_id: 'call', provenance: 'worker_reported',
+      reply: { status: 'blocked', summary: 'Legacy functional result', changed_files: ['src/legacy.ts'], interfaces: ['legacy(): void'], blockers: ['Needs integration', canary],
+        checks: [1, 2, 3].map(i => ({ check_id: `echo ${i} ${canary}`, result: 'pass', note: canary })) }, verdict: 'invalid', verdict_reason: `check echo ${canary}: result malformed`,
+      verification: { transcript: 'read', contradicted: [`echo 1 ${canary}`], unobserved: [`legacy ${canary}`, `other ${canary}`], stale: [] }, observed_model: null, root_effort: null, recorded_at: '', advisory: canary };
+    const gen = { ...original.current, receipts: [receipt], background_job: true, background_context: `raw failure ${canary}`, legacy_report: canary,
+      active: { legacy: { role: 'worker', task_id: 'single', contract_hash: '', rev: 0, tier: 'standard', attempt: 1, deliverables: [], started_at: '', legacy_result: canary } } };
+    writeFileSync(jobPath(env, 's1'), JSON.stringify({ ...original, current: gen, history: [gen] }));
+    const read = readJob(env, 's1');
+    expect(JSON.stringify(read)).not.toContain(canary); expect(JSON.stringify(read)).toContain('Legacy functional result');
+    expect(read.ok && read.value?.current.background_context).toContain('confirmed command pass 0');
+    const rewritten = updateJob(env, 's1', prev => prev);
+    expect(rewritten.ok).toBe(true);
+    for (const value of [JSON.stringify(read), readFileSync(jobPath(env, 's1'), 'utf8')]) {
+      for (const sentinel of [canary, 'canary-pw-123', 'canary-key-456', 'review-only-password']) expect(value).not.toContain(sentinel);
+    }
+    expect(JSON.stringify(read)).toContain('#1');
+  });
+
   it('creates a private directory and file and writes atomically', () => {
     const env = freshEnv();
     const state = seed(env);
-    expect(state.current).toMatchObject({ prompt_id: 'p1', shape: 'orchestrated', phase: 'admitted', outcome: null });
+    expect(state.current).toMatchObject({ prompt_id: 'p1', shape: 'orchestrated', outcome: null });
     if (process.platform !== 'win32') {
       expect(statSync(jobsDir(env)).mode & 0o777).toBe(0o700);
       expect(statSync(jobPath(env, 's1')).mode & 0o777).toBe(0o600);
@@ -77,9 +99,9 @@ describe('updateJob', () => {
 
     const env3 = freshEnv();
     const big = seed(env3);
-    const oversized = updateJob(env3, 's1', (prev) => ({ ...(prev ?? big), current: { ...(prev ?? big).current, plan: { rev: 1, goal: 'z'.repeat(STATE_MAX_BYTES + 1), assumptions: [], constraints: [], tasks: [], chain_depth: 0, chain_depth_claimed: null, main_session_steps: [] } } }));
+    const oversized = updateJob(env3, 's1', (prev) => ({ ...(prev ?? big), current: { ...(prev ?? big).current, request: 'z'.repeat(STATE_MAX_BYTES + 1) } }));
     expect(oversized).toEqual({ ok: false, code: 'state_too_large' });
-    expect(readJob(env3, 's1')).toMatchObject({ ok: true, value: { current: { plan: null } } });
+    expect(readJob(env3, 's1')).toMatchObject({ ok: true, value: { current: { request: null } } });
   });
 
   it('waits for a live lock and reports state_locked, but steals a lock whose owner is gone', () => {
@@ -92,7 +114,7 @@ describe('updateJob', () => {
     expect(updateJob(env, 's1', (prev) => prev)).toEqual({ ok: false, code: 'state_locked' });
     expect(Date.now() - started).toBeGreaterThanOrEqual(250);
     writeFileSync(join(lock, 'owner'), '2147483646');
-    expect(updateJob(env, 's1', (prev) => (prev ? { ...prev, current: { ...prev.current, denials: 7 } } : null))).toMatchObject({ ok: true, value: { current: { denials: 7 } } });
+    expect(updateJob(env, 's1', (prev) => (prev ? { ...prev, current: { ...prev.current, request: 'lock recovered' } } : null))).toMatchObject({ ok: true, value: { current: { request: 'lock recovered' } } });
     expect(existsSync(lock)).toBe(false);
   });
 
@@ -123,10 +145,10 @@ describe('updateJob over an unreadable file', () => {
 describe('newGeneration', () => {
   it('supersedes an unfinished generation, keeps it as history and orphans its actives', () => {
     const first = newGeneration(null, 's1', 'p1', 'orchestrated').state;
-    first.current = reserve({ ...first.current, phase: 'planned' }, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
+    first.current = reserve(first.current, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
     const second = newGeneration(first, 's1', 'p2', 'direct');
     expect(second.superseded).toBe(true);
-    expect(second.state.current).toMatchObject({ prompt_id: 'p2', shape: 'direct', phase: 'admitted', plan: null, receipts: [] });
+    expect(second.state.current).toMatchObject({ prompt_id: 'p2', shape: 'direct', receipts: [] });
     expect(second.state.history[0]).toMatchObject({ prompt_id: 'p1', outcome: 'superseded' });
     expect(second.state.history[0]?.active['toolu_1']).toMatchObject({ task_id: 't1', orphaned: true });
     const third = newGeneration(second.state, 's1', 'p3', 'direct');
@@ -136,50 +158,37 @@ describe('newGeneration', () => {
 });
 
 describe('reservations and bounds', () => {
-  it('tracks active workers, planners, task ids and deliverables', () => {
+  it('tracks active workers and releases them one at a time', () => {
     let gen = emptyGeneration('p1', 'orchestrated');
-    gen = reserve(gen, 'toolu_1', { role: 'worker', taskId: 't1', contractHash: 'h-t1', rev: 1, tier: 'standard', attempt: 1, deliverables: ['a.ts'] });
-    gen = reserve(gen, 'toolu_2', { role: 'worker', taskId: 't2', contractHash: 'h-t2', rev: 1, tier: 'fast', attempt: 1, deliverables: ['b.ts'] });
-    gen = reserve(gen, 'toolu_p', { role: 'planner', taskId: null, contractHash: null, rev: null, tier: null, attempt: 1, deliverables: [] });
+    gen = reserve(gen, 'toolu_1', { role: 'worker', taskId: 'single', contractHash: '', rev: null, tier: 'standard', attempt: 1, deliverables: [] });
+    gen = reserve(gen, 'toolu_2', { role: 'worker', taskId: null, contractHash: null, rev: null, tier: 'fast', attempt: 1, deliverables: [] });
     expect(activeWorkers(gen)).toHaveLength(2);
-    expect(activePlanners(gen)).toHaveLength(1);
-    // T1: a planner holds no task, so it never appears as a task in flight.
-    expect([...activeTaskIds(gen)].sort()).toEqual(['t1', 't2']);
-    expect(activeDeliverables(gen, 't1')).toEqual(['b.ts']);
-    expect(activeDeliverables(gen, null).sort()).toEqual(['a.ts', 'b.ts']);
-    expect(Object.keys(release(gen, 'toolu_2').active).sort()).toEqual(['toolu_1', 'toolu_p']);
-    // T2: releasing the last reservation removes the record, and nothing else claims the writer stopped.
-    expect(activeTaskIds(release(release(gen, 'toolu_1'), 'toolu_2'))).toEqual(new Set());
+    expect(Object.keys(release(gen, 'toolu_2').active)).toEqual(['toolu_1']);
+    expect(activeWorkers(release(release(gen, 'toolu_1'), 'toolu_2'))).toEqual([]);
   });
 
   it('treats a prototype id as absent instead of resolving it through Object.prototype', () => {
     let gen = emptyGeneration('p1', 'orchestrated');
     for (const id of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
-      expect(boundExhausted(gen, 'task', id), id).toBe(false);
+      expect(boundExhausted(gen, id), id).toBe(false);
       expect(own(gen.attempts.tasks, id), id).toBeUndefined();
       expect(own(gen.active, id), id).toBeUndefined();
     }
-    gen = countAttempt(countAttempt(gen, 'task', 'constructor'), 'task', 'constructor');
-    expect(boundExhausted(gen, 'task', 'constructor')).toBe(true);
-    expect(boundExhausted(gen, 'task', 'toString')).toBe(false);
+    gen = countAttempt(countAttempt(gen, 'constructor'), 'constructor');
+    expect(boundExhausted(gen, 'constructor')).toBe(true);
+    expect(boundExhausted(gen, 'toString')).toBe(false);
     const roundTripped = JSON.parse(JSON.stringify(gen)) as typeof gen;
-    expect(boundExhausted(roundTripped, 'task', 'constructor')).toBe(true);
-    expect(boundExhausted(roundTripped, 'task', 'toString')).toBe(false);
+    expect(boundExhausted(roundTripped, 'constructor')).toBe(true);
+    expect(boundExhausted(roundTripped, 'toString')).toBe(false);
   });
 
-  it('exhausts after two planner attempts, two replans and two attempts per task', () => {
+  it('exhausts after two attempts per task', () => {
     let gen = emptyGeneration('p1', 'orchestrated');
-    expect(boundExhausted(gen, 'planner', null)).toBe(false);
-    gen = countAttempt(countAttempt(gen, 'planner', null), 'planner', null);
-    expect(boundExhausted(gen, 'planner', null)).toBe(true);
-    expect(boundExhausted(gen, 'replan', null)).toBe(false);
-    gen = countAttempt(countAttempt(gen, 'replan', null), 'replan', null);
-    expect(boundExhausted(gen, 'replan', null)).toBe(true);
-    gen = countAttempt(gen, 'task', 't1');
-    expect(boundExhausted(gen, 'task', 't1')).toBe(false);
-    gen = countAttempt(gen, 'task', 't1');
-    expect(boundExhausted(gen, 'task', 't1')).toBe(true);
-    expect(boundExhausted(gen, 'task', 't2')).toBe(false);
+    gen = countAttempt(gen, 't1');
+    expect(boundExhausted(gen, 't1')).toBe(false);
+    gen = countAttempt(gen, 't1');
+    expect(boundExhausted(gen, 't1')).toBe(true);
+    expect(boundExhausted(gen, 't2')).toBe(false);
   });
 });
 

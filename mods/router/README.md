@@ -16,7 +16,7 @@ Model and effort are independent. A model pin leaves effort open; an effort pin 
 
 ### Restricted automatic models
 
-Astra in Codex and Fable in Claude are **excluded from automatic targets by default**, including ordinary subagents, Gate planners/workers and retries. A manual root selection remains usable and can still have its effort routed. It does not authorize automatic children to inherit that restricted model. An ineligible child falls back to main-session work; ownership of an already launched or uncertain worker remains protected.
+Astra in Codex and Fable in Claude are **excluded from automatic targets by default**, including ordinary subagents, Gate workers and retries. A manual root selection remains usable and can still have its effort routed. It does not authorize automatic children to inherit that restricted model. An ineligible child falls back to main-session work; ownership of an already launched or uncertain worker remains protected.
 
 Only the literal boolean `true` enables the respective option. Null, strings and numbers are invalid. These are independent host/package settings, with no shared master switch:
 
@@ -153,7 +153,7 @@ The standalone names omit the `router` prefix where listed below. Existing names
 | `routerTimeoutMs` | `timeoutMs` | 800 | Total preparation budget, 50–30000ms |
 | `routerLogDecisions` | `logDecisions` | true | Optional diagnostics |
 
-`ANTHROPIC_MODEL` pins the root model; `CLAUDE_CODE_EFFORT_LEVEL` pins effort; `CLAUDE_CODE_SUBAGENT_MODEL` and its `_FORCE` form pin child model resolution. `ANTHROPIC_DEFAULT_*_MODEL` maps an alias to its actual ID and does not disable all routing. Unreadable pin/allowlist facts are conservative. Plugin option changes reload the activation; no polling watcher or global model rewrite is installed.
+`ANTHROPIC_MODEL` pins the root model; `CLAUDE_CODE_EFFORT_LEVEL` pins effort; `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` pins child model resolution. `CLAUDE_CODE_SUBAGENT_MODEL` alone (Claude Code 2.1.251+) is the default model of a child that names none, which owned roles and routed spawns override; a general-purpose or claude spawn and a custom agent without `model:` are compared against it rather than the parent's model. `ANTHROPIC_DEFAULT_*_MODEL` maps an alias to its actual ID and does not disable all routing. Unreadable pin/allowlist facts are conservative. Plugin option changes reload the activation; no polling watcher or global model rewrite is installed.
 
 ## Diagnostics and verification
 
@@ -161,4 +161,4 @@ Existing recording and dashboard views distinguish assessment, selection, reques
 
 TypeScript and Vitest cover selection, host adapters, cancellation, races, context, invalid settings, partial catalogs and recording failures. Native tests separately use the real Claude Function Hooks engine and Codex process with scripted providers. They establish control-flow behavior, not model quality or savings. Account access and native permissions are host decisions.
 
-For standalone development, run `node scripts/pack.mjs <out> --profile router`, extract the archive and pass that directory to `--plugin-dir`. The package includes the shared pure policy sources inside its own root. To run its host tests, copy `mods/router/tests` into the extracted directory and run `claude plugin test <directory>`. Combined development uses `--plugin-dir .` after the normal build.
+For standalone development, run `npm run build` then `node scripts/pack.mjs <out> --profile router`, extract the archive and pass that directory to `--plugin-dir`. The package includes the shared pure policy sources and the bounded transcript metadata reader inside its own root. To run its host tests, copy `mods/router/tests` into the extracted directory and run `claude plugin test <directory>`. Combined development uses `--plugin-dir .` after the normal build.

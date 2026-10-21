@@ -154,7 +154,7 @@ source estimate 42,799 against 19,713 billed tokens, the fixed Gate A question i
 estimates about 3,300 against 1,352), so the 25,000 cap sits near 10,000 to 11,000 real tokens, a third of the
 provider's line.
 
-**How often a request would need the header** (`scripts/evidence-cap-frequency.mjs` for Evidence, the rest from local
+**How often a request would need the header** (Evidence from a script removed in #288, the rest from local
 records; aggregates only):
 
 - Three days of local traces (Codex 805 Router calls and 2,157 responses, 32 Gate A, 30 Gate B, 22 Evidence, 40 Compact;
@@ -198,9 +198,9 @@ documented "danger zone" header for no observed request. Revisit if a trace reco
 
 Every validator that reads a Jev reply was checked for what it does with a field it does not know (a per-question
 `legend`, a `rationale`, a `confidence` beside a `noul`): Gate A and Gate B atomic deciders, the Router's choice reader,
-the Compact selector and the Evidence selector. None of them rejects an answer for an extra field, and none reads one;
+the Compact selector and the Evidence selector (removed in #288). None of them rejects an answer for an extra field, and none reads one;
 a test per site now pins that (`tests/admission-atomic.test.ts`, `tests/allocation-atomic.test.ts`,
-`tests/compact/selection.test.ts`, `tests/evidence/selector.test.ts`, `tests/jev.test.ts`; the Router's own choice reader, `src/router-answers.ts`, already had one in `tests/router/policy.test.ts`), so a later Jev version that
+`tests/compact/selection.test.ts`, `tests/jev.test.ts`; the Router's own choice reader, `src/router-answers.ts`, already had one in `tests/router/policy.test.ts`), so a later Jev version that
 adds a field cannot void a batch or change a decision. No code change was needed.
 
 ## G. Codex path
@@ -219,14 +219,12 @@ answered a `model` question that the Codex Router has asked as `capability` sinc
 - `scripts/router-dev-analyze.mjs` — effort and route breakdown of `npm run bench:router -- run` outputs.
 - `scripts/compression-corpus.mjs`, `compression-capture-preload.mjs`, `compression-measure.mjs`,
   `compression-analyze.mjs` — body corpus, latency measurement and its analysis. The corpus is written next to the
-  script as `corpus.json`: Gate A, Gate B and Router bodies from `compression-corpus.mjs`, Compact and Evidence bodies by
-  running `bench/compact/selection-eval.ts` and `bench/evidence/relevance-eval.mjs` once under
+  script as `corpus.json`: Gate A, Gate B and Router bodies from `compression-corpus.mjs`, Compact bodies by
+  running `bench/compact/selection-eval.ts` once under
   `JEV_CAPTURE_FILE=… JEV_CAPTURE_SITE=… node --import ./compression-capture-preload.mjs`. It is not committed.
-- `scripts/long-context-needle.mjs`, `long-context-analyze.mjs`, `context-exceeded-probe.mjs`,
-  `evidence-cap-frequency.mjs` — the long-context checks.
-- `bench/compact/selection-eval.ts`, `bench/evidence/relevance-eval.mjs`, `scripts/gate-b-calibration.mjs` and
+- `scripts/long-context-needle.mjs`, `long-context-analyze.mjs`, `context-exceeded-probe.mjs` — the long-context checks (`evidence-cap-frequency.mjs` was removed with Evidence in #288).
+- `bench/compact/selection-eval.ts`, `scripts/gate-b-calibration.mjs` and
   `bench/v5/gate-b-set.json` are in their usual places.
 
 The three runs that need a key: `TYPESAFE_API_KEY=… node scripts/gate-b-calibration.mjs --model jev-1.13.0 --repeats 3`,
-`… node bench/compact/selection-eval.ts --model jev-1.13.0 --repeats 5`, `… node bench/evidence/relevance-eval.mjs
---model jev-1.13.0 --repeats 5`; the same without `--model` runs the pinned version.
+and `… node bench/compact/selection-eval.ts --model jev-1.13.0 --repeats 5` (the Evidence relevance run was removed in #288); the same without `--model` runs the pinned version.
