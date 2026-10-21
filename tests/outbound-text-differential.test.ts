@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { looksSecret } from '../src/outbound-text.js';
 import { looksSecret as routerLooksSecret } from '../mods/router/hooks/secret.ts';
-import { ASSIGNMENT_CONTEXTS, CREDENTIAL_WORDS, KEY_SPELLINGS } from './fixtures/credential-corpus.js';
+import { ASSIGNMENT_CONTEXTS, CLI_CREDENTIAL_CASES, CLI_CREDENTIAL_NEGATIVES, CREDENTIAL_WORDS, KEY_SPELLINGS } from './fixtures/credential-corpus.js';
 import { looksSecret as baselineLooksSecret } from './fixtures/looks-secret-0.8.31.js';
 
 // Match the seeded generator used by the benchmark runner, without depending on its CLI entry point.
@@ -98,6 +98,14 @@ const EXCEPTIONS = [
 ];
 
 describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('0.8.31 differential closure — %s', (screen, current) => {
+  it.each(CLI_CREDENTIAL_CASES)('M1 CLI credential corpus | $tool | $label | $variant', ({ text, secret }) => {
+    expect(current(text)).toBe(secret);
+  });
+
+  it.each(CLI_CREDENTIAL_NEGATIVES)('M1 CLI exclusion | %s', text => {
+    expect(current(text)).toBe(false);
+  });
+
   it.each(['PASSWORD=correct.horse.battery.staple', 'access_token=ya29.a0AfH6SMBsynthetic1234567890'])(
     'L1: preserves the baseline positive %s', text => {
       expect(baselineLooksSecret(text)).toBe(true);

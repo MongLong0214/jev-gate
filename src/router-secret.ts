@@ -235,11 +235,98 @@ const literalPassword = (text: string): boolean => {
   return false;
 };
 
+// Shell words are read once per command region. Quoted fragments, escaped spaces and reference tokens stay
+// together; command separators end the tool's scope. This is operand screening, not shell execution/parsing.
+const CLI_TOOL_NAMES = 'curl|wget|mysql|mariadb|redis-cli|mongosh|mongo|sshpass|docker|helm|kubectl|htpasswd|az|aws|npm|git|openssl|zip|7z|ssh-keygen';
+const CLI_TOOL = new RegExp(String.raw`(?:^|[^\w.-])(${CLI_TOOL_NAMES})(?=[ \t])`, 'g');
+const CLI_TOOL_NAME = new RegExp(String.raw`^(?:.*\/)?(${CLI_TOOL_NAMES})$`);
+const CLI_ARGUMENT = new RegExp(String.raw`(?:${TEMPLATE_VALUE}|"[^"\r\n]*"|'[^'\r\n]*'|\\[^\r\n]|[^\s"'\\;|&])+`, 'y');
+const CLI_ENV = /(?:^|[^\w.-])(PGPASSWORD|MYSQL_PWD)=/g;
+const CLI_OPTIONS: Record<string, readonly string[]> = {
+  curl: ['-u', '-U', '--user', '--proxy-user'],
+  wget: ['--password', '--http-password', '--ftp-password'],
+  mysql: ['--password'], mariadb: ['--password'],
+  'redis-cli': ['-a', '--pass'], mongosh: ['-p', '--password'], mongo: ['-p', '--password'],
+  sshpass: ['-p'], 'docker login': ['-p', '--password'], 'helm repo add': ['--password'],
+  kubectl: ['--token'], 'az login': ['-p', '--password'],
+  openssl: ['-passin', '-passout', '-k'], zip: ['-P'], 'ssh-keygen': ['-N'],
+};
+const cliPassword = (value: string, basic = false): boolean => {
+  const colon = basic ? [...value.matchAll(new RegExp(TEMPLATE_VALUE + '|:', 'g'))].find(part => part[0] === ':')?.index ?? -1 : -1;
+  return (!basic || colon >= 0) && Boolean(literalRemainder(basic ? value.slice(colon + 1) : value));
+};
+const literalCliCredential = (text: string): boolean => {
+  const values = new RegExp(ASSIGNMENT_LITERAL);
+  for (const match of text.matchAll(CLI_ENV)) {
+    values.lastIndex = match.index! + match[0].length;
+    const value = values.exec(text);
+    if (value && cliPassword(value[1] ?? value[2] ?? value[3] ?? value[4] ?? '')) return true;
+  }
+  const tools = new RegExp(CLI_TOOL), wordsPattern = new RegExp(CLI_ARGUMENT);
+  let start: RegExpExecArray | null;
+  while ((start = tools.exec(text))) {
+    const words = [start[1]!];
+    let end = tools.lastIndex;
+    while (end < text.length) {
+      if (text[end] === ' ' || text[end] === '\t') { end++; continue; }
+      wordsPattern.lastIndex = end;
+      const word = wordsPattern.exec(text);
+      if (!word) break;
+      words.push(word[0].replace(/"([^"\r\n]*)"|'([^'\r\n]*)'|\\([^\r\n])/g,
+        (_match, double: string | undefined, single: string | undefined, escaped: string | undefined) => double ?? single ?? escaped!));
+      end = wordsPattern.lastIndex;
+    }
+    // Only sshpass introduces a nested command here; ordinary operands can themselves be tool names.
+    tools.lastIndex = Math.max(end, tools.lastIndex);
+    let tool = '', scope = '', prefix = 0, positional = -1, optionsEnded = false;
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i]!;
+      const namedTool = CLI_TOOL_NAME.exec(word)?.[1];
+      if (namedTool && (i === 0 || tool === 'sshpass')) {
+        tool = scope = namedTool; positional = -1; optionsEnded = false;
+        prefix = /^(?:docker|az)$/.test(tool) ? 1 : /^(?:helm|aws|npm)$/.test(tool) ? 2 : 0;
+        continue;
+      }
+      if (word === '--') { optionsEnded = true; continue; }
+      if (optionsEnded) continue;
+      if (prefix && !word.startsWith('-')) { scope += ' ' + word; prefix--; continue; }
+      if (tool === 'htpasswd') {
+        if (/^-[^-]*b/.test(word)) positional = 0;
+        else if (positional >= 0 && !word.startsWith('-') && ++positional === 3 && cliPassword(word)) return true;
+      }
+      if ((scope === 'aws configure set' && word === 'aws_secret_access_key')
+        || (scope === 'npm config set' && /^\/\/[^\s]+\/:_authToken$/i.test(word))) {
+        if (cliPassword(words[++i] ?? '')) return true;
+        continue;
+      }
+      if (tool === 'git' && word === '-c') {
+        const header = /^http(?:\.[^=]+)?\.extraHeader=(.*)$/i.exec(words[++i] ?? '');
+        if (header && literalAuthorization(header[1]!)) return true;
+        continue;
+      }
+      const attached = /^(?:mysql|mariadb|7z)$/.test(tool) ? /^-p(.+)$/.exec(word) : null;
+      if (attached && cliPassword(attached[1]!)) return true;
+      for (const flag of CLI_OPTIONS[scope] ?? []) {
+        const separated = word === flag;
+        const inline = !separated && word.startsWith(flag + (flag.startsWith('--') ? '=' : ''));
+        if (!separated && !inline) continue;
+        const value = separated ? words[++i] ?? '' : word.slice(flag.length + (flag.startsWith('--') ? 1 : 0));
+        if (tool === 'openssl' && (flag === '-passin' || flag === '-passout')) {
+          if (value.startsWith('pass:') && cliPassword(value.slice(5))) return true;
+        } else if (cliPassword(value, tool === 'curl')) return true;
+        break;
+      }
+    }
+  }
+  return false;
+};
+
 export const looksSecret = (text: string): boolean => {
   const literal = shellLiterals(text);
   return SECRET_PATTERNS.some((re) => re.test(literal))
     || literalAuthorization(literal)
     || literalPassword(literal)
+    || literalCliCredential(literal)
     || literalAssignment(literal, CREDENTIAL_ASSIGNMENT)
     || literalAssignment(literal, CLI_CREDENTIAL_ASSIGNMENT)
     || literalAssignment(literal, COOKIE_ASSIGNMENT, 8)

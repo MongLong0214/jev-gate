@@ -37,3 +37,56 @@ export const ASSIGNMENT_CONTEXTS = [
   { context: 'quoted prose assignment', render: (key: string, value: string) => `note='Observed ${key}=${value} during review.'` },
 ];
 
+// CLI operands establish the credential meaning even for short literals. Every syntax has a reference twin.
+export const CLI_CREDENTIAL_CORPUS = [
+  { tool: 'curl', label: 'M1 -u quoted', value: 'synthetic-canary-123', render: (value: string) => `curl -u 'reviewer:${value}' https://example.test` },
+  { tool: 'curl', label: 'M1 --user quoted', value: 'synthetic-canary-123', render: (value: string) => `curl --user 'reviewer:${value}' https://example.test` },
+  ...['-u ', '-u', '--user ', '--user=', '--proxy-user ', '--proxy-user=', '-U ', '-U'].map(flag => ({
+    tool: 'curl', label: flag.trim(), render: (value: string) => `curl ${flag}user:${value} https://example.test`,
+  })),
+  ...['--password=', '--http-password=', '--ftp-password=', '--user=review --password='].map(flag => ({
+    tool: 'wget', label: flag, render: (value: string) => `wget ${flag}${value} https://example.test`,
+  })),
+  ...['mysql', 'mariadb'].flatMap(tool => ['-p', '--password='].map(flag => ({
+    tool, label: flag, render: (value: string) => `${tool} ${flag}${value}`,
+  }))),
+  ...['PGPASSWORD', 'MYSQL_PWD'].map(tool => ({ tool, label: 'assignment', render: (value: string) => `${tool}=${value} client` })),
+  ...['-a ', '--pass '].map(flag => ({ tool: 'redis-cli', label: flag.trim(), render: (value: string) => `redis-cli ${flag}${value} PING` })),
+  ...['mongosh', 'mongo'].flatMap(tool => ['-p ', '--password '].map(flag => ({
+    tool, label: flag.trim(), render: (value: string) => `${tool} ${flag}${value}`,
+  }))),
+  { tool: 'sshpass', label: '-p', render: (value: string) => `sshpass -p ${value} ssh host` },
+  ...['-p ', '--password '].map(flag => ({ tool: 'docker', label: flag.trim(), render: (value: string) => `docker login -u review ${flag}${value}` })),
+  { tool: 'docker', label: 'tool-name username', render: (value: string) => `docker login -u mysql -p ${value}` },
+  { tool: 'htpasswd', label: 'tool-name username', render: (value: string) => `htpasswd -b ./fixture mysql ${value}` },
+  { tool: 'helm', label: 'repo add --password', render: (value: string) => `helm repo add review https://example.test --password ${value}` },
+  { tool: 'kubectl', label: '--token=', render: (value: string) => `kubectl --token=${value} get pods` },
+  { tool: 'htpasswd', label: '-b', render: (value: string) => `htpasswd -b ./fixture review ${value}` },
+  { tool: 'az', label: 'login -p', render: (value: string) => `az login -u review -p ${value}` },
+  { tool: 'aws', label: 'configure set', render: (value: string) => `aws configure set aws_secret_access_key ${value}` },
+  { tool: 'npm', label: 'config set', render: (value: string) => `npm config set //registry.example.test/:_authToken ${value}` },
+  // The ordinary quoted header is already detected; shell-escaped spaces exercise the CLI operand path too.
+  { tool: 'git', label: '-c quoted Basic', render: (value: string) => `git -c http.extraHeader="Authorization: Basic ${value}" status` },
+  { tool: 'git', label: '-c escaped Basic', render: (value: string) => `git -c http.extraHeader=Authorization:\\ Basic\\ ${value} status` },
+  ...['-passin pass:', '-passout pass:', '-k '].map(flag => ({
+    tool: 'openssl', label: flag.trim(), render: (value: string) => `openssl enc ${flag}${value}`,
+  })),
+  { tool: 'zip', label: '-P', render: (value: string) => `zip -P ${value} archive.zip file` },
+  { tool: '7z', label: '-p', render: (value: string) => `7z a -p${value} archive.7z file` },
+  { tool: 'ssh-keygen', label: '-N', render: (value: string) => `ssh-keygen -N ${value} -f ./fixture` },
+].map(row => ({ value: 'p7', ...row }));
+export const CLI_CREDENTIAL_CASES = CLI_CREDENTIAL_CORPUS.flatMap(row => [
+  { ...row, variant: 'literal', text: row.render(row.value), secret: true },
+  { ...row, variant: 'reference', text: row.render('${PASS}'), secret: false },
+]);
+export const CLI_CREDENTIAL_NEGATIVES = [
+  'curl -u "$USER:$PASS" https://x', 'curl -u user: https://x', 'curl -u "${CREDS}" https://x',
+  'docker login --password-stdin', 'client --password-file ./pw.txt',
+  'docker run -p 8080:80', 'ssh -p 2222 host', 'python -m http.server -p 8000', 'mkdir -p dir',
+  'git log -p', 'npm run dev -- -p 3000', 'mysql -p', 'use curl -u with a token',
+  'client -a p7 -k p7 -N p7 -P p7 -u user:p7 -p p7',
+  'curl https://x; client -u user:p7', 'mysql --version\nclient -pp7',
+  'docker run --password-file ./pw.txt', 'openssl enc -passin file:./pw.txt',
+  'openssl enc -passin env:PASS', 'openssl enc -passout stdin',
+  'curl -- -u user:p7', 'zip -- -P p7',
+];
