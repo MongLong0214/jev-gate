@@ -24,7 +24,7 @@ svg.wires line{stroke:var(--spark);stroke-dasharray:2 6}
 .insp .b{padding:14px 16px;display:flex;flex-direction:column;gap:12px;height:380px;overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain}.insp .b>*{flex-shrink:0}/* The inspector reserves space and keeps stable, scrollable fields across live updates. */
 .insp-tags{display:flex;gap:8px;align-items:center;height:20px}
 .kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:8px 10px;font-size:13px;margin:0}.kv dt{color:var(--faint)}.kv dd{margin:0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}.kv dd.w2{height:3em;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere;word-break:keep-all}
-.insp .kv dd,.insp .kv dd.w2{height:48px;white-space:normal;display:block;overflow:auto;text-overflow:clip;overflow-wrap:anywhere;-webkit-line-clamp:unset;scrollbar-gutter:stable;overscroll-behavior:contain;user-select:text}.insp .kv dd:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.insp .kv dd,.insp .kv dd.w2{height:48px;white-space:normal;display:block;overflow:auto;text-overflow:clip;overflow-wrap:anywhere;-webkit-line-clamp:unset;scrollbar-gutter:stable;overscroll-behavior:contain;user-select:text}.insp .kv .status-label{grid-column:1}.insp .kv dd.status-value{grid-column:2/-1;height:auto;min-height:48px;overflow:visible;scrollbar-gutter:auto}.insp .kv dd:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .insp .kv{grid-template-columns:repeat(3,88px minmax(0,1fr));gap:12px 16px}
 .insp .link{white-space:normal;overflow:visible;overflow-wrap:anywhere}.insp details summary{cursor:pointer;color:var(--muted);font-size:13px}.insp details p{color:var(--faint);font-size:13px;margin:8px 0 0}.link{appearance:none;border:0;background:none;padding:0;max-width:100%;text-align:left;font:inherit;font-size:13px;color:var(--accent);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .still .node.zap .t i:after{animation-play-state:paused}
@@ -152,7 +152,7 @@ function circuitInspector(ops,last){const root=$('circuit-inspector'),id=circuit
     const head=el('div','ch');head.append(el('h2','',tr(featureInfo[id][0])),el('span','hint',label('단계 상세 · 스크롤하여 전문 읽기','Stage details · Scroll to read full values')));
     const body=el('div','b'),tags=el('div','insp-tags'),kv=el('dl','kv'),help=el('details'),go=el('button','link');
     help.append(el('summary','',label('이 단계가 하는 일','How this stage works')),el('p','',guide.what[i]+' '+guide.jev[i]));go.type='button';
-    body.append(tags,kv,help,go);root.replaceChildren(head,body);view=root._view={id,lang,body,tags,kv,go,rows:[]};
+    body.append(tags,help,go,kv);root.replaceChildren(head,body);view=root._view={id,lang,body,tags,kv,go,rows:[]};
   }
   const {body,tags,kv,go}=view;let rowIndex=0;
   if(tags.dataset.inspectorHost!==(run?.host||'')){tags.dataset.inspectorHost=run?.host||'';tags.replaceChildren();if(run?.host)tags.append(el('span','tag '+(run.host==='codex'?'cx':'cl'),run.host==='codex'?'Codex':'Claude'))}
@@ -166,14 +166,15 @@ function circuitInspector(ops,last){const root=$('circuit-inspector'),id=circuit
   row(label('실행','Run'),run?[tr(run.title),tr(state[run.state]),time(run.firstAt)].join(' · '):none);
   row(label('판정','Decision'),x?(x.receipt?.choice||(x.model||x.outcome?decisionText(x):call?.receipt?.choice||decisionText(x))):none);
   row(label('모델 · effort','Model · effort'),x?.model?[label('선택','Selected')+': '+[x.model.selected,x.model.selectedEffort].filter(Boolean).join(' · '),label('관측','Observed')+': '+[x.model.observed||label('미확인','Unknown'),x.model.observedEffort].filter(Boolean).join(' · ')].join(' / '):none);
-  row(label('상태와 사유','Status and notes'),[last?.title,last?.summary,last?note(last,run):'',activity?activityDetail(id,activity):''].filter(Boolean).map(tr).join(' · ')||none,'w2');
-  row(label('이유','Reason'),reason||none,'w2').title=reason;row(label('결과','Effect'),x&&effectOf(x,why)||none);
+  row(label('결과','Effect'),x&&effectOf(x,why)||none);
   const after=x&&nextOf(step,run);row(label('다음 단계','Next stage'),after?tr(after.title)+' · '+decisionText(after):none);
   row(label('원인','Cause'),x&&failedStep(x)?[x.cause||label(...ISSUES[issueKind(x)]),label(...IMPACT[x.impact?.now||'unknown'])].join(' · '):none);
   row(label('Jev 응답','Jev response'),call?.durationMs!==undefined?ms(call.durationMs):none);
   row(label('토큰','Tokens'),rc&&(rc.input!=null||rc.output!=null)?num(rc.input)+' → '+num(rc.output):none);
   row(label('추정 비용','Est. cost'),rc?.costUsd!=null?usd(rc.costUsd):none);row(label('Jev 모델','Jev model'),rc?.model||none);
   row(label('24h 활동','24h activity'),activity?activityLine(activity):label('추적 불가','Untrackable'),'w2');row(label('24h 효과','24h effect'),[id==='router'?currentRouter(activity):'',activity?activityDetail(id,activity):label('미확인','Unknown')].filter(Boolean).join(' · '),'w2');
+  const statusParts=[last?.title,last?.summary,last?note(last,run):'',reason].filter(Boolean).flatMap(v=>tr(v).split(' · ')).map(v=>v.trim()).filter(Boolean);
+  const status=row(label('상태와 사유','Status and notes'),[...new Set(statusParts)].join(' · ')||none,'status-value');status.previousElementSibling.classList.add('status-label');
   put(go,last?label('이 실행의 판단 근거와 시간축 보기 ↗','Inspect this execution and its decisions ↗'):label('이 기능의 실행 기록 보기 ↗','Show executions for this feature ↗'));go.dataset.inspectFeature=id;if(run)go.dataset.inspectRun=run.id;else delete go.dataset.inspectRun;if(last)go.dataset.inspectStep=last.id;else delete go.dataset.inspectStep}
 window.addEventListener('resize',()=>requestAnimationFrame(wires));
 `;

@@ -529,7 +529,7 @@ const deriveRows = (records: Rec[], host: Host, only: Host | undefined, feed: bo
       const shape = token(sub(r, 'decision')?.['shape']);
       if (shape === 'direct') rows.direct++;
       else if (shape === 'orchestrated') rows.orchestrated++;
-    } else if (phase === 'pre_result' && r['attempted'] === true) rows.jevCalls++;
+    } else if ((phase === 'pre_result' || phase === 'codex_compact' && r['stage'] === 'selection_result') && r['attempted'] === true) rows.jevCalls++;
     const event = feed ? gateEvent(r) : null;
     if (event) rows.gateEvents.push(event);
   }

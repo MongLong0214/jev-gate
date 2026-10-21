@@ -15,6 +15,7 @@ export const SOURCES = {
   sol: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol.md',
   luna: 'https://developers.openai.com/api/docs/models/gpt-6-luna.md',
   astra: 'https://developers.openai.com/api/docs/models/gpt-6-astra.md',
+  codexCredits: 'https://learn.chatgpt.com/docs/pricing.md',
 };
 const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -205,16 +206,28 @@ export function priceMetadata(raw, official) {
   return result;
 }
 
+export function verifyCodexCredits(text, rates) {
+  requireFact(/Codex credit billing has no separate cache-write charge\./.test(text), 'Codex cache-write billing changed; review the routing cost guard');
+  const rows = [...text.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(row => [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(c => c[1].replace(/<[^>]*>/g, '').trim()));
+  for (const [model, expected] of Object.entries(rates)) {
+    const matches = rows.filter(row => row.length === 4 && row[0]?.toLowerCase().replaceAll(' ', '-') === model);
+    requireFact(matches.length === 1 && matches[0].length === 4, `Missing or ambiguous Codex credit rate: ${model}`);
+    const actual = matches[0].slice(1).map(c => /^([\d,.]+) credits$/.exec(c)?.[1]).map(n => n === undefined ? NaN : Number(n.replaceAll(',', '')));
+    requireFact(actual.every(n => Number.isFinite(n) && n >= 0) && JSON.stringify(actual) === JSON.stringify(expected), `Codex credit rate changed: ${model}; review src/codex/route-cost.ts`);
+  }
+}
+
 export async function run(mode, root = resolve(import.meta.dirname, '..')) {
   requireFact(['--check', '--write'].includes(mode), 'Usage: node scripts/model-sync.mjs --check|--write');
   const entries = await Promise.all(Object.entries(SOURCES).map(async ([key, url]) => [key, await fetchSource(url)]));
   const raw = Object.fromEntries(entries);
   const official = parseClaude(raw.overview, raw.effort);
   // Run the production selectors against upstream metadata, without maintaining a second Codex model registry.
-  const compiled = await build({ stdin: { contents: 'export { MODEL_FACTS } from "./src/claude-models.ts"; export { normalizeCatalog, generalCodexModel } from "./src/codex/catalog.ts"; export { codexCandidates } from "./src/codex/router.ts"; export { catalogTierModels } from "./src/codex/config.ts";', resolveDir: root, loader: 'js' },
+  const compiled = await build({ stdin: { contents: 'export { MODEL_FACTS } from "./src/claude-models.ts"; export { normalizeCatalog, generalCodexModel } from "./src/codex/catalog.ts"; export { codexCandidates } from "./src/codex/router.ts"; export { catalogTierModels } from "./src/codex/config.ts"; export { CODEX_CREDIT_RATES } from "./src/codex/route-cost.ts";', resolveDir: root, loader: 'js' },
     bundle: true, write: false, platform: 'node', format: 'esm', target: 'node22', logLevel: 'silent' });
   const facts = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
   const codex = verifyCodex(parseCodex(JSON.parse(raw.codex)), facts);
+  verifyCodexCredits(raw.codexCredits, facts.CODEX_CREDIT_RATES);
   const next = synchronizeClaude(facts.MODEL_FACTS, official, raw.releases);
   const prices = priceMetadata(raw, official);
   for (const model of new Set(Object.values(codex))) requireFact(prices.some(p => p.host === 'codex' && p.model === model), `Current Codex model has no verified price source: ${model}`);

@@ -4,8 +4,9 @@ import { routingContext, type RoutingCache } from '../../mods/router/hooks/conte
 import { looksSecret } from '../../mods/router/hooks/secret.ts';
 import { MAX_REQUEST_TOKENS, estimateTokens } from '../../mods/router/hooks/client.ts';
 import { callJev } from '../jev.js';
-import { costHold, routeCost } from '../route-cost.js';
-import { ModelCache } from '../cost.js';
+import { costHold } from '../route-cost.js';
+import { codexRouteCost, type CodexBilling } from './route-cost.js';
+import type { ModelCache } from '../cost.js';
 import type { Env } from '../config.js';
 import type { TraceWriter } from '../trace.js';
 import type { CodexPolicyConfig } from './config.js';
@@ -39,6 +40,7 @@ export const routeCodex = async (args: {
   model: string; effort: string | null; task: string; previousReply?: string; recentRequests?: readonly string[]; session: string; prompt: string;
   modelPinned?: boolean; effortPinned?: boolean; catalog: CodexModel[]; catalogComplete?: boolean; catalogExcluded?: Record<string, number>; config: CodexPolicyConfig; env: Env; trace?: TraceWriter; signal?: AbortSignal; fetchImpl?: typeof fetch;
   cache?: RoutingCache; modelCache?: ModelCache; epoch?: string;
+  billing?: CodexBilling; serviceTier?: unknown; cachePolicy?: unknown;
   child?: { agentId: string; step: number; context: unknown };
 }): Promise<PairPatch> => {
   const { config, env, signal } = args;
@@ -80,7 +82,7 @@ export const routeCodex = async (args: {
   const decision = out.ok && out.response.model === config.gate.jevModel && !signal?.aborted ? selectPair(offer, out.response.answers) : { patch: {} as PairPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
   if (moved && !decision.patch.model) { decision.patch = { ...decision.patch, model: moved }; decision.reasons.model = 'superseded_baseline'; }
   // A thread not yet observed still has a conversation the next turn may return to.
-  const cost = decision.patch.model && decision.patch.model !== moved ? routeCost('codex', model, decision.patch.model, args.modelCache ?? new ModelCache(), args.epoch ?? '', Date.now(), args.child ? 1 : estimateTokens(args.task)) : null;
+  const cost = decision.patch.model && decision.patch.model !== moved ? codexRouteCost(model, decision.patch.model, args.billing ?? 'unknown', args.serviceTier, args.modelCache, args.epoch ?? '', Date.now(), args.child ? 1 : estimateTokens(args.task), args.cachePolicy) : null;
   const { hold, reason: costReason } = costHold(cost, offer.baselineCandidate?.rank, offer.candidates.find(c => c.id === decision.patch.model)?.rank);
   if (hold && out.ok) { decision.patch = { ...keepModelPair(offer, out.response.answers).patch, ...native }; decision.reasons.model = costReason; }
   write('codex_router_result', { ...diagnostic, attempted: true, duration_ms: out.durationMs, ok: out.ok,

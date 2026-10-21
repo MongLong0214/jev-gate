@@ -49,4 +49,13 @@ describe('native Responses observation without required Content-Type', () => {
     const bytes = Buffer.from(event('\n')); (input as unknown as PassThrough).end(bytes);
     expect(Buffer.concat(native).equals(bytes)).toBe(true);
   });
+  it.each(['response.failed', 'response.incomplete'])('reports %s separately while preserving usage and native bytes', type => {
+    const input = new PassThrough() as unknown as IncomingMessage; input.headers = {};
+    const native: Buffer[] = []; input.on('data', chunk => native.push(Buffer.from(chunk)));
+    const completed = vi.fn(), failed = vi.fn(); observeResponseStream(input, completed, failed);
+    const bytes = Buffer.from(`data: ${JSON.stringify({ type, response })}\n\n`);
+    (input as unknown as PassThrough).end(bytes);
+    expect(completed).not.toHaveBeenCalled(); expect(failed).toHaveBeenCalledExactlyOnceWith(response);
+    expect(Buffer.concat(native).equals(bytes)).toBe(true);
+  });
 });

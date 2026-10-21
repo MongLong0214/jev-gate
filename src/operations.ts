@@ -102,7 +102,7 @@ const FEATURES: Array<{ id: FeatureId; label: string }> = [
   { id: 'allocation', label: 'Gate B · 등급 배정' },
   { id: 'workers', label: '워커 · 수락 검사' },
   { id: 'router', label: 'Router · 모델과 effort' },
-  { id: 'compact', label: 'Compact · 요약 대체' },
+  { id: 'compact', label: 'Compact · 문맥 압축' },
 ];
 const TOKEN = /^[A-Za-z0-9_.:/+@-]{1,80}(?:\[[A-Za-z0-9_-]{1,16}\])?$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
@@ -192,6 +192,7 @@ const callDetails = (r: Rec): string[] => {
 };
 
 export const traceFeature = (phase: string): FeatureId | null => {
+  if (phase === 'codex_compact') return 'compact';
   if (phase === 'codex_model_request' || phase === 'codex_model_failure' || phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied' || phase === 'codex_router_response') return 'router';
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
@@ -284,6 +285,27 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   if (!feature) return null;
   const at = iso(r['written_at']);
   if (!at) return null;
+  if (phase === 'codex_compact') {
+    const stage = token(r['stage']), reason = token(r['reason']);
+    if (!['selection_intent', 'selection_result', 'prepared', 'submitted', 'result'].includes(stage ?? '')) return null;
+    const selection = stage === 'selection_result', prepared = stage === 'prepared', submitted = stage === 'submitted';
+    const jev = field(r, 'jev'), usage = field(jev ?? {}, 'usage');
+    const failed = selection && !['assessed', 'stale'].includes(reason ?? '') || stage === 'result' && r['outcome'] === 'failed';
+    const unknown = stage === 'result' && r['outcome'] !== 'completed' && !failed;
+    const selectionIds = Array.isArray(r['selection_ids']) ? r['selection_ids'].flatMap(v => token(v) ? [token(v)!] : []) : [];
+    return { id: id(`codex-compact:${token(r['invocation_id']) ?? at}:${token(r['request_id'])}:${stage}`), at, feature: 'compact',
+      ...(stage === 'selection_intent' || prepared ? { lifecycle: true } : {}),
+      ...(token(r['selection_id']) || selectionIds.length === 1 ? { callId: token(r['selection_id']) ?? selectionIds[0]! } : {}),
+      state: failed ? 'error' : unknown ? 'unconfirmed' : prepared && !r['applied'] ? 'skipped' : 'done',
+      lane: selection || stage === 'selection_intent' ? 'jev' : submitted || stage === 'result' ? 'host' : 'policy',
+      title: selection ? 'Compact · Jev 선별' : submitted ? 'Compact · 실제 전송' : stage === 'result' ? 'Compact · 모델 응답' : prepared ? 'Compact · 입력 준비' : 'Compact · Jev 요청',
+      summary: selection ? `선별 후보 ${n(number(r['candidates']))} · 제외 선택 ${n(number(r['selected']))} · ${reason ?? '미확인'}`
+        : r['applied'] === true ? `오래된 도구 텍스트 ${n(number(r['removed_chars']))}자 제외 · ${r['path'] === 'native' ? '네이티브 압축' : '일반 추론'}${stage === 'result' ? ` · ${token(r['outcome']) ?? '미확인'}` : ''}` : `네이티브 문맥 유지 · ${reason ?? token(r['outcome']) ?? stage}`,
+      details: ['암호화 문맥·최근 도구 결과·호출 연결 보존', '제외 문자 수는 총 토큰 절감이 아닙니다. Jev·재시도·재조회 포함 총 절감 미측정.'],
+      ...(selection && number(r['duration_ms']) !== null ? { durationMs: number(r['duration_ms'])! } : {}),
+      ...(selection ? { receipt: { status: null, code: reason, model: token(jev?.['model']), input: number(usage?.['input_tokens']), output: number(usage?.['output_tokens']), costUsd: null, choice: number(r['selected']) !== null ? `제외 선택 ${n(number(r['selected']))}` : null, confidence: null, threshold: .9, direction: null } } : {}),
+    };
+  }
   const requestId = token(r['request_id']);
   const ownId = token(r['invocation_id']) ?? `${phase}:${at}:${requestId ?? ''}`;
   const isIntent = phase.endsWith('_intent') || phase === 'worktree_start';
@@ -807,6 +829,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   const requests = new Set<string>();
   for (const r of records) {
     const phase = token(r['phase']) ?? '';
+    if (phase === 'codex_compact' && r['stage'] === 'selection_intent' && token(r['selection_id'])) { requests.add(`codex-compact:${token(r['selection_id'])}`); continue; }
     if (!['admission_intent', 'pre_intent', 'codex_router_intent'].includes(phase)
       && !(r['attempted'] === true && ['admission_result', 'pre_result', 'codex_router_result'].includes(phase))) continue;
     const kind = phase.replace(/_(intent|result)$/, '');

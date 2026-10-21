@@ -441,9 +441,9 @@ describe('activity: child_effect', () => {
 });
 
 describe('activity: compact', () => {
-  it('does not report Compact for a Codex-only diagnosis', () => {
+  it('reports Codex Compact as unmeasured before any selection', () => {
     const checks = run([], { traces: { codex: { records: [rec('codex_event', { host: 'codex', event: 'UserPromptSubmit' })], unreadable: 0 } } });
-    expect(checks.some(c => c.message.startsWith('compact:'))).toBe(false);
+    expect(checks.find(c => c.message.startsWith('compact:'))).toMatchObject({level:'info',metrics:{fired:0,applied:0,effect:null}});
   });
 
   const pre = (body: Rec = {}, minutes = 30): Rec => rec('mod_compact', { stage: 'pre', mode: 'active', selection: 'selected', ...body }, minutes);

@@ -23,3 +23,5 @@ node <plugin>/dist/cli.mjs dashboard
 ```
 
 The default trace directory is `$XDG_STATE_HOME/jev-gate/codex/traces` or `~/.local/state/jev-gate/codex/traces`; `JEV_CODEX_TRACE_DIR` overrides it. The dashboard supports Korean/English and light/dark themes. Use `/hooks` in Codex to review and trust the installed hook definitions. Installation alone does not trust hooks.
+
+Jev Compact selects optional older plaintext tool evidence on eligible full-context requests. Instructions, recent results, call links and opaque native context remain native. Consult submitted and observed receipts; a selection or omitted-character count is not measured total-token savings. Missing context, invalid choices and failures retain the original request.

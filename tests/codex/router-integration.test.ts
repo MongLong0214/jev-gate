@@ -57,6 +57,56 @@ const ownedFixture = async (wait?: Promise<void>) => {
   const next = { ...first, input: [...first.input, { type: 'function_call', call_id: 'exact-tool', name: 'exec_command', arguments: '{}' }, { type: 'function_call_output', call_id: 'exact-tool', output: 'ok' }] };
   return { ...f, child, signal, next };
 };
+const nativeBillingFixture = async (wait?: Promise<void>) => {
+  const f = await fixture(true, 'gpt-6-luna', 'low', wait);
+  f.policy.catalog = [
+    { model: 'gpt-6.1-sol', description: 'Latest workhorse model for coding and everyday work.', supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) },
+    { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) },
+  ];
+  return { ...f, request: { ...f.request, model: 'gpt-6.1-sol' } };
+};
+describe('native Codex billing-aware model routing', () => {
+  it.each(['chatgpt', 'api', 'unknown'] as const)('preserves the native input and applies only an eligible pair for %s billing', async billing => {
+    const f = await nativeBillingFixture();
+    const expected = billing === 'chatgpt' ? 'gpt-6-luna' : f.request.model;
+    for (let i = 0; i < 3; i++) {
+      const request = i === 0 ? f.request : { ...f.request, input: [...f.request.input, { type: 'function_call', call_id: 'exact-tool', name: 'original', arguments: '{}' }, { type: 'function_call_output', call_id: 'exact-tool', output: 'ok' }] };
+      const selected = (await f.policy.externalRequest('root', request, new AbortController().signal, 'codex-tui', billing)).request;
+      expect(selected).toEqual({ ...request, model: expected, reasoning: { ...request.reasoning, effort: 'low' } });
+      expect(selected.input).toBe(request.input); expect(selected.tools).toBe(request.tools);
+    }
+    expect(f.fetchImpl).toHaveBeenCalledOnce();
+    const rows = readdirSync(join(dir, 'trace')).map(file => JSON.parse(readFileSync(join(dir, 'trace', file), 'utf8')));
+    expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_router_result', selected_model: expected,
+      cost: expect.objectContaining({ basis: billing === 'chatgpt' ? 'codex_credit_rate_comparison' : billing === 'api' ? 'api_list_estimate' : 'unknown' }) }));
+    f.rpc.close();
+  });
+  it.each(['billing', 'tier'] as const)('invalidates a cached native pair after %s changes without another paid assessment', async change => {
+    const f = await nativeBillingFixture(), signal = new AbortController().signal;
+    expect((await f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt')).request.model).toBe('gpt-6-luna');
+    const changed = change === 'tier' ? { ...f.request, service_tier: 'ultrafast' } : f.request;
+    expect((await f.policy.externalRequest('root', changed, signal, 'codex-tui', change === 'tier' ? 'chatgpt' : 'api')).request).toEqual(changed);
+    expect((await f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt')).request).toEqual(f.request);
+    expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
+  });
+  it('discards an in-flight decision when the actual billing basis changes, and reassesses only on a new prompt', async () => {
+    let release!: () => void; const f = await nativeBillingFixture(new Promise<void>(resolve => { release = resolve; }));
+    const signal = new AbortController().signal;
+    const first = f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt');
+    await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+    const changed = f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'api'); release();
+    expect((await first).request).toEqual(f.request); expect((await changed).request).toEqual(f.request);
+    expect(f.fetchImpl).toHaveBeenCalledOnce();
+    await f.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 'root', turn_id: 'new-billing-prompt', prompt: 'Add two numbers.' });
+    expect((await f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt')).request.model).toBe('gpt-6-luna');
+    expect(f.fetchImpl).toHaveBeenCalledTimes(2); f.rpc.close();
+  });
+  it('does not bypass an explicit native execution pin for the cheaper credit rate', async () => {
+    const f = await nativeBillingFixture();
+    expect((await f.policy.externalRequest('root', f.request, new AbortController().signal, 'codex_exec', 'chatgpt')).request).toEqual(f.request);
+    expect(f.fetchImpl).not.toHaveBeenCalled(); f.rpc.close();
+  });
+});
 describe('original Codex root execution boundaries', () => {
   it('routes effort after encrypted native reasoning without changing the model or encrypted history', async () => {
     const f = await ownedFixture();

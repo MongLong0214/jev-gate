@@ -20,7 +20,7 @@ try {
   await build({ entryPoints: [join(root, 'src/dashboard-page.ts')], bundle: true, platform: 'node', format: 'esm', outfile: join(scratch, 'page.mjs') });
   const { DASHBOARD_PAGE } = await import(pathToFileURL(join(scratch, 'page.mjs')).href);
   const runs = Array.from({ length: 8 }, (_, i) => {
-    const host = i % 3 === 1 ? 'codex' : 'claude', features = host === 'codex' ? ids.slice(0, 4) : ids;
+    const host = i % 3 === 1 ? 'codex' : 'claude', features = ids;
     const steps = features.map((feature, j) => {
       const worker = feature === 'workers', model = host === 'codex' ? 'gpt-6-luna' : 'claude-sonnet-5';
       const choice = feature === 'router' ? (host === 'codex' ? 'gpt-6-luna · low' : 'sonnet · high') : feature === 'admission' ? 'orchestrated' : feature === 'allocation' ? 'standard' : '12 / 16';

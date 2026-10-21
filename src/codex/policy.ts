@@ -19,6 +19,7 @@ import { runtimeCodexPolicy, type CodexPolicyConfig } from './config.js';
 import { codexObservation, textInput, obj, type Obj } from './source.js';
 import { AGENT_TOOL, CODEX_PROFILES, codexGuidance } from './profiles.js';
 import { routeCodex, codexCandidates, type CodexModel } from './router.js';
+import type { CodexBilling } from './route-cost.js';
 import { capturedPermissions } from './permissions.js';
 import { codexCallerWorkspace } from './workspace.js';
 import { writesInto } from './write-scope.js';
@@ -28,12 +29,13 @@ import { normalizeUsage, usageCost, ModelCache } from '../cost.js';
 import { providerPrice, providerContextLimit } from '../provider-prices.js';
 import { workerStepContext, requestStepKey } from './worker-step.js';
 import { requestedUpdateEffort } from './effort-update.js';
+import { compactScope, newCompactState, prepareCodexCompact, type CompactReceipt, type CompactState } from './compact.js';
 import { observedDelegationPrices } from '../delegation-prices.js';
 import { normalizeCatalog, codexTargetAllowed, generalCodexModel } from './catalog.js';
 import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.ts';
 import type { RoutingCache } from '../../mods/router/hooks/context.ts';
 
-export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null }
+export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null; defaultCachePolicy: boolean; billing: CodexBilling }
 interface WorkerDispatch {
   parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
   worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
@@ -52,6 +54,7 @@ interface Session {
   requestKind?: 'root_response' | 'child_response';
   eligible?: boolean; terminal?: boolean;
   role?: string; parent?: string; done?: (turn: Obj) => void; route?: PairPatch; routePending?: Promise<void>; routeDeadline?: number; routeConfig?: string;
+  routeBilling?: string;
   previousReply?: string; completedReply?: string; turnReply?: string; lastSubmitted?: CodexSubmission;
   starting?: { prompt: string; controller: AbortController };
   external?: boolean; task?: string; routed?: string;
@@ -62,9 +65,10 @@ interface Session {
   dispatch?: WorkerDispatch;
   cache?: RoutingCache & { at: number };
   modelCache?: ModelCache;
-  stepRoutes?: Map<string, { index: number; model: string; effort: string | null; patch: PairPatch; config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void> }>;
+  stepRoutes?: Map<string, { index: number; model: string; effort: string | null; patch: PairPatch; billing?: string; config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void> }>;
   stepIndex?: number;
   settingsEpoch?: number;
+  compact?: CompactState;
 }
 const contextOf = (result: { stdout: string | null }): string => {
   if (!result.stdout) return '';
@@ -199,6 +203,7 @@ export class CodexPolicy {
       this.sessions.set(id, session);
     }
     if (!session?.external) return this.nativeHook(input, signal);
+    if (event === 'PostCompact') { delete session.compact; session.epoch = randomUUID(); session.modelCache?.clear(); delete session.cache; }
     if (event === 'UserPromptSubmit' && typeof input['prompt'] === 'string') {
       if (session.wirePending) session.complete = false;
       session.items = session.items.map(({ clientId: _previousPrompt, ...item }) => item);
@@ -219,14 +224,38 @@ export class CodexPolicy {
     return result;
   }
 
+  /** Select optional tool text from the actual wire only; no transcript or history file is edited. */
+  async compactRequest(id: string, request: Obj, signal: AbortSignal, path: 'inference' | 'native'): Promise<{ request: Obj; receipt?: CompactReceipt }> {
+    const session = this.sessions.get(id);
+    if (!session?.prompt || !session.task || !this.hooked.has(id) || requestedUpdateEffort(request).present) return { request };
+    const prompt = session.prompt; const controller = session.controller;
+    const config = runtimeCodexPolicy(this.env, this.catalog);
+    const key = compactScope(request, session.task, prompt) + JSON.stringify(config.compact);
+    const state = session.compact?.key === key ? session.compact : newCompactState(key);
+    session.compact = state;
+    try { return await prepareCodexCompact({ request, task: session.task, recentRequests: session.recentRequests ?? [], state,
+      session: id, prompt, config: config.compact, jevModel: config.gate.jevModel, env: this.env, path,
+      signal: controller ? AbortSignal.any([signal, controller.signal]) : signal,
+      current: () => this.sessions.get(id) === session && session.prompt === prompt && session.compact === state && JSON.stringify(runtimeCodexPolicy(this.env, this.catalog).compact) === JSON.stringify(config.compact),
+      ...(this.trace ? { trace: this.trace } : {}), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
+    } catch {
+      // An optional context optimization must never turn a valid native request into a gateway error.
+      try { this.trace?.write('codex_compact', { host: 'codex', session_id: id, prompt_id: prompt, path, stage: 'prepared', reason: 'internal_error', applied: false, sent: false }); } catch { /* Optional metadata. */ }
+      return { request };
+    }
+  }
+  recordCompact(id: string, receipt: CompactReceipt, stage: 'submitted' | 'result', facts: Obj): void {
+    try { this.trace?.write('codex_compact', { host: 'codex', session_id: id, ...receipt, stage, ...facts }); } catch { /* Optional metadata. */ }
+  }
+
   /** Selection is made once from the actual submitted prompt; every original Responses field is preserved. */
-  async externalRequest(id: string, request: Obj, signal: AbortSignal, originator?: unknown): Promise<{ request: Obj }> {
+  async externalRequest(id: string, request: Obj, signal: AbortSignal, originator?: unknown, billing: CodexBilling = 'unknown'): Promise<{ request: Obj }> {
     const session = this.sessions.get(id);
     if (requestedUpdateEffort(request).present) {
       this.trace?.write('codex_router_skipped', { host: 'codex', session_id: id, prompt_id: session?.prompt ?? null, reason: 'configuration_update_native_history', known_not_sent: true, effective_effort: 'unknown' });
       return { request }; // Preserve opaque native updates, their positions and top-level values.
     }
-    if (session?.role && session.dispatch) return this.workerRequest(session, request, signal);
+    if (session?.role && session.dispatch) return this.workerRequest(session, request, signal, billing);
     if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
     const requestPrompt = session.prompt;
     session.requestKind = 'root_response';
@@ -243,10 +272,16 @@ export class CodexPolicy {
     if (session.complete && Array.isArray(request['input'])) session.wire = request['input']; else delete session.wire;
     const model = request['model']; const effort = obj(request['reasoning'])?.['effort'];
     if (typeof model !== 'string') return { request };
+    const cachePolicy = request['prompt_cache_options'] !== undefined || request['prompt_cache_retention'] !== undefined ? [request['prompt_cache_options'], request['prompt_cache_retention']] : undefined;
+    const billingKey = JSON.stringify([billing, request['service_tier'] ?? null, cachePolicy]);
+    if ((session.routed === session.prompt || session.routePending) && session.routeBilling !== billingKey) {
+      session.routeBilling = 'changed'; delete session.route;
+    }
     if (session.routed !== session.prompt && !session.routePending) {
       session.baseline = { model, effort: typeof effort === 'string' ? effort : null };
       const prompt = session.prompt;
       session.routed = prompt;
+      session.routeBilling = billingKey;
       session.routeDeadline = Date.now() + session.policy.router.timeoutMs;
       const deadline = session.routeDeadline;
       const task = session.task; const previousReply = session.previousReply; const baseline = { ...session.baseline };
@@ -264,18 +299,20 @@ export class CodexPolicy {
         const catalog = this.catalog.map(m => { const out = { ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) };
           if (out.defaultReasoningEffort && !out.supportedReasoningEfforts.some(e => e.reasoningEffort === out.defaultReasoningEffort)) delete out.defaultReasoningEffort; return out; });
         const patch = await routeCodex({ ...baseline, task, ...(previousReply ? { previousReply } : {}), modelPinned: pinned, effortPinned: pinned,
+          billing, serviceTier: request['service_tier'], cachePolicy,
           recentRequests: session.recentRequests ?? [], session: id, prompt, ...(session.modelCache ? { modelCache: session.modelCache, epoch: session.epoch } : {}), catalog, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded,
           ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
           config: { ...config, router: { ...config.router, timeoutMs: remaining } }, env: this.env,
           ...(this.trace ? { trace: this.trace } : {}), signal: requestController ? AbortSignal.any([signal, requestController.signal]) : signal,
           ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
-        if (!signal.aborted && !requestController?.signal.aborted && session.prompt === prompt && this.catalogEpoch === epoch) { session.route = patch; session.routed = prompt; }
+        if (!signal.aborted && !requestController?.signal.aborted && session.prompt === prompt && this.catalogEpoch === epoch && session.routeBilling === billingKey) { session.route = patch; session.routed = prompt; }
       })().finally(() => { if (session.routePending === pending) delete session.routePending; });
       session.routePending = pending;
     }
     if (session.routePending) await session.routePending;
     if (signal.aborted || requestController?.signal.aborted || session.prompt !== requestPrompt) throw new Error('interrupted policy');
     const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
+    if (session.routeBilling !== billingKey) delete session.route;
     if (session.routeConfig !== JSON.stringify(current.router)) delete session.route;
     const nativeEffort = typeof effort === 'string' ? effort : null;
     // A plugin-applied value is not a manual edit. A genuinely new native value wins for this turn.
@@ -286,11 +323,13 @@ export class CodexPolicy {
     return { request: selected };
   }
   /** Gate B owns the first inference; each new observed native continuation gets one batched decision. */
-  private async workerRequest(session: Session, request: Obj, signal: AbortSignal): Promise<{ request: Obj }> {
+  private async workerRequest(session: Session, request: Obj, signal: AbortSignal, billing: CodexBilling): Promise<{ request: Obj }> {
     const d = session.dispatch!;
     if (d.ended || session.controller?.signal.aborted || signal.aborted || typeof request['model'] !== 'string') return { request };
     const model = request['model'], effort = obj(request['reasoning'])?.['effort'];
     const nativeEffort = typeof effort === 'string' ? effort : null;
+    const cachePolicy = request['prompt_cache_options'] !== undefined || request['prompt_cache_retention'] !== undefined ? [request['prompt_cache_options'], request['prompt_cache_retention']] : undefined;
+    const billingKey = JSON.stringify([billing, request['service_tier'] ?? null, cachePolicy]);
     const key = createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex');
     const steps = session.stepRoutes ??= new Map();
     let step = steps.get(key);
@@ -300,7 +339,7 @@ export class CodexPolicy {
         this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: null, reason: 'child_step_limit', known_not_sent: true });
         return { request };
       }
-      step = { index: session.stepIndex === undefined ? 0 : session.stepIndex + 1, model, effort: nativeEffort, patch: {} }; steps.set(key, step); session.stepIndex = step.index;
+      step = { index: session.stepIndex === undefined ? 0 : session.stepIndex + 1, model, effort: nativeEffort, patch: {}, billing: billingKey }; steps.set(key, step); session.stepIndex = step.index;
       if (step.index > 0) {
         const context = workerStepContext(request['input']);
         const opaque = !!request['previous_response_id'] || Array.isArray(request['input']) && request['input'].some((raw: unknown) => { const item = obj(raw); return item?.['type'] === 'reasoning' && typeof item['encrypted_content'] === 'string'; });
@@ -313,20 +352,23 @@ export class CodexPolicy {
             const catalog = this.catalog.map(m => ({ ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) }));
             const bound = Buffer.byteLength(JSON.stringify(request));
             const patch = await routeCodex({ model, effort: nativeEffort, task: d.input['prompt'] as string, session: session.id, prompt: session.prompt ?? d.prompt,
+              billing, serviceTier: request['service_tier'], cachePolicy,
               child: { agentId: session.id, step: owned.index, context }, catalog, catalogComplete: this.catalogComplete, config: opaque ? { ...config, router: { ...config.router, model: false } } : config, env: this.env,
               epoch: session.epoch, ...(session.modelCache ? { modelCache: session.modelCache } : {}),
               ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
               ...(this.trace ? { trace: this.trace } : {}), signal: AbortSignal.any([signal, d.signal]), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
             // Exact owner, catalog and source epoch must still match after HTTP; permissions stay native.
             const target = patch.model;
-            if (!d.ended && !signal.aborted && !d.signal.aborted && this.sessions.get(session.id) === session && this.catalogEpoch === epoch && session.epoch === sourceEpoch &&
+            if (!d.ended && !signal.aborted && !d.signal.aborted && owned.billing === billingKey && this.sessions.get(session.id) === session && this.catalogEpoch === epoch && session.epoch === sourceEpoch &&
               (!target || providerContextLimit('codex', target) !== null && bound <= providerContextLimit('codex', target)! && this.catalog.some(m => m.model === target && generalCodexModel(m)) && codexTargetAllowed(target, config.router.allowAstra))) owned.patch = patch;
           })().catch(() => undefined).finally(() => { delete owned.pending; });
         } else this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: step.index, reason: 'child_context_unavailable', known_not_sent: true });
       }
     }
+    if (step.billing !== billingKey) { step.billing = 'changed'; step.patch = {}; }
     if (step.pending) await step.pending;
     if (signal.aborted || d.signal.aborted || d.ended || session.controller?.signal.aborted || this.sessions.get(session.id) !== session || model !== step.model || nativeEffort !== step.effort) return { request };
+    if (step.billing !== billingKey) { step.billing = 'changed'; step.patch = {}; }
     if (Object.keys(step.patch).length) {
       const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
       const target = step.patch.model ?? model;
@@ -360,14 +402,15 @@ export class CodexPolicy {
       const tier = typeof response['service_tier'] === 'string' ? response['service_tier'] : null;
       this.trace?.write('codex_router_response', { host: 'codex', session_id: id, prompt_id: null, request_id: null, scope: 'unknown',
         response_id: typeof response['id'] === 'string' ? response['id'] : null, observed_model: model, observed_effort: 'unknown', effective_effort: 'unknown',
-        usage, cost: usageCost(usage, model ? providerPrice('codex', model, typeof input === 'number' ? input : null, tier) : null),
+        usage, cost: usageCost(usage, model && usage.write === 0 ? providerPrice('codex', model, typeof input === 'number' ? input : null, tier) : null),
         reason: 'request_identity_unknown', subscription_cost: 'unknown' });
     }
     if (binding) {
       const model = typeof response['model'] === 'string' ? response['model'] : null;
       const effort = obj(response['reasoning'])?.['effort'];
       const usage = normalizeUsage('codex', response['usage']);
-      const price = providerPrice('codex', model ?? binding.model, typeof input === 'number' ? input : null, typeof response['service_tier'] === 'string' ? response['service_tier'] : null);
+      // The static API table establishes default writes only. Do not price extended/mixed policies as default.
+      const price = binding.defaultCachePolicy || usage.write === 0 ? providerPrice('codex', model ?? binding.model, typeof input === 'number' ? input : null, typeof response['service_tier'] === 'string' ? response['service_tier'] : null) : null;
       if (binding.scope === 'child' && binding.index === 0 && model === binding.model && usage.coverage === 'complete' && typeof input === 'number' && price?.write !== undefined) {
         const previous = this.workerStarts.get(model);
         this.workerStarts.set(model, { range: [Math.min(previous?.range[0] ?? input, input), Math.max(previous?.range[1] ?? input, input)], writeRate: price.write });
@@ -375,12 +418,12 @@ export class CodexPolicy {
       }
       if (session && binding.prompt === session.prompt && binding.epoch === session.epoch && session.lastSubmitted?.requestId === binding.requestId && model === binding.model) {
         session.cache = { model, input: usage.input, read: usage.read, write: usage.write, ageMs: 0, at: Date.now(), source: 'provider_response_usage' };
-        (session.modelCache ??= new ModelCache()).observe({ model, epoch: session.epoch, at: Date.now(), input: usage.input, ttlIsMinimum: true, ttlMs: usage.write !== null && usage.write > 0 ? 1_800_000 : null, read: usage.read, write: usage.write, output: usage.output });
+        (session.modelCache ??= new ModelCache()).observe({ model, epoch: session.epoch, at: Date.now(), input: usage.input, ttlIsMinimum: true, ttlMs: binding.billing === 'api' && binding.defaultCachePolicy && usage.write !== null && usage.write > 0 ? 1_800_000 : null, read: usage.read, write: usage.write, output: usage.output });
       }
       this.trace?.write('codex_router_response', { host: 'codex', session_id: id, prompt_id: binding.prompt, request_id: binding.requestId, stage: 'response',
         scope: binding.scope, agent_id: binding.scope === 'child' ? id : null, parent_session_id: binding.parent, index: binding.index,
         selected_model: binding.model, selected_effort: binding.effort, submitted_effort: binding.effort, observed_model: model, observed_effort: typeof effort === 'string' ? effort : 'unknown',
-        response_id: typeof response['id'] === 'string' ? response['id'] : null, usage, cost: usageCost(usage, price), provider_reported_cost: typeof response['cost_usd'] === 'number' && Number.isFinite(response['cost_usd']) && response['cost_usd'] >= 0 ? response['cost_usd'] : null, subscription_cost: 'unknown', service_tier: response['service_tier'] ?? null, effective_effort: 'unknown',
+        response_id: typeof response['id'] === 'string' ? response['id'] : null, usage, cost: usageCost(usage, price), provider_reported_cost: typeof response['cost_usd'] === 'number' && Number.isFinite(response['cost_usd']) && response['cost_usd'] >= 0 ? response['cost_usd'] : null, billing: binding.billing, subscription_cost: 'unknown', service_tier: response['service_tier'] ?? null, effective_effort: 'unknown',
         reason: model === null ? 'response_unconfirmed' : model !== binding.model ? 'mismatch' : 'response_model_confirmed' });
     }
     if (session?.external && binding && binding.prompt === session.prompt && binding.epoch === session.epoch && session.lastSubmitted?.requestId === binding.requestId) {
@@ -480,12 +523,14 @@ export class CodexPolicy {
       session.policy = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
       const task = textInput(params['input']);
       session.eligible = task !== null;
+      if (task !== null) session.task = task;
       // Non-text and malformed input is preserved. No image or attachment is silently dropped to enable Jev.
       if (task === null || this.env['JEV_CODEX_ENABLED'] === '0' || collaboration && collaboration['mode'] !== 'default') { session.eligible = false; this.rpc.forward(message); return; }
       await this.waitCatalog(deadline);
       session.policy = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
       const previousReply = session.completedReply;
       const recentRequests = selectRecentPrompts(session.items.filter(i => i['type'] === 'userMessage').flatMap(i => { const t = textInput(i['content']); return t ? [t] : []; }));
+      session.recentRequests = recentRequests;
       const catalogEpoch = this.catalogEpoch;
       const patch = Date.now() >= deadline ? {} : await routeCodex({ model: session.baseline.model, effort: session.baseline.effort,
         task, recentRequests, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded, ...(typeof previousReply === 'string' ? { previousReply } : {}), session: session.id, prompt, catalog: this.catalog, config: { ...session.policy, router: { ...session.policy.router, timeoutMs: Math.max(1, deadline - Date.now()) } }, env: this.env,
@@ -959,7 +1004,7 @@ export class CodexPolicy {
     }
     return typeof affinity === 'string' && this.sessions.has(affinity) ? affinity : null;
   }
-  observeRequest(sessionId: string, request: Obj): CodexSubmission | undefined {
+  observeRequest(sessionId: string, request: Obj, billing: CodexBilling = 'unknown'): CodexSubmission | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     const step = session.role ? session.stepRoutes?.get(createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex')) : undefined;
@@ -968,7 +1013,8 @@ export class CodexPolicy {
     const effort = obj(request['reasoning'])?.['effort'];
     if (typeof request['model'] === 'string') session.requestModel = request['model'];
     if (typeof effort === 'string') session.requestEffort = effort; else delete session.requestEffort;
-    const submitted = { prompt: session.prompt, model: String(request['model']), effort: typeof effort === 'string' ? effort : null, requestId: randomUUID(), epoch: session.epoch, index: step?.index ?? null, scope: session.role ? 'child' as const : 'root' as const, parent: session.parent ?? null };
+    const submitted = { prompt: session.prompt, model: String(request['model']), effort: typeof effort === 'string' ? effort : null, requestId: randomUUID(), epoch: session.epoch, index: step?.index ?? null, scope: session.role ? 'child' as const : 'root' as const, parent: session.parent ?? null,
+      defaultCachePolicy: request['prompt_cache_options'] === undefined && request['prompt_cache_retention'] === undefined, billing };
     session.lastSubmitted = submitted;
     this.trace?.write('codex_model_request', { host: 'codex', session_id: session.id, prompt_id: session.prompt, request_id: submitted.requestId,
       requested_update_effort: requestedUpdateEffort(request).effort, effective_effort: 'unknown', effort_cache: 'native_configuration_update_unverified',

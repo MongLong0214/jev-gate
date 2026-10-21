@@ -139,8 +139,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       await p.screenshot({path:join(output,`circuit-${width}-${theme}.png`),fullPage:true,animations:'disabled'});
       await p.locator('#pipeline').screenshot({path:join(output,`circuit-detail-${width}-${theme}.png`),animations:'disabled'});
       await p.locator('[data-host=codex]').click();await settle(p);const four=await inspect();
-      expect.soft(four.features).toEqual(['admission','allocation','workers','router']);expect.soft(four.fills).toBe(true);expect.soft(four.overflow).toBe(false);
-      expect.soft(four.sizes).toEqual(width>=1024?[4]:width===768?[2,2]:[1,1,1,1]);
+      expect.soft(four.features).toEqual(['admission','allocation','workers','router','compact']);expect.soft(four.fills).toBe(true);expect.soft(four.overflow).toBe(false);
+      expect.soft(four.sizes).toEqual(five.sizes);
       await p.close();
     }
     writeFileSync(join(output,'circuit-layouts.json'),JSON.stringify(layouts,null,2)+'\n');
@@ -251,8 +251,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
   });
 
-  it('draws no Compact card or inspector in the Codex view and keeps Claude Compact (#292)', async () => {
-    const codex=run('cx','codex',[call('cx-router','router',90)]);
+  it('keeps Compact visible in Codex and Claude views (#317)', async () => {
+    const codex=run('cx','codex',[call('cx-router','router',90),call('cx-compact','compact',81)]);
     for(const rows of [[run('cl','claude',[call('cl-compact','compact',80)]),codex],[codex]]){
       push(rows);
       const p=await page();await settle(p);
@@ -260,9 +260,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(await shown()).toBe(true);
       await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');expect(await p.locator('#pipeline svg.wires line').count()).toBe(5);
       await p.locator('[data-host="codex"]').click();await settle(p);
-      expect.soft(await shown()).toBe(false);expect.soft(await p.locator('#circuit-inspector').textContent()).not.toContain('Compact');
-      expect.soft(await p.locator('#runs [data-run="cx"]').count()).toBe(1);expect.soft(await p.locator('#run-count').textContent()).not.toMatch(/Compact|컴팩트/);
-      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(4);
+      expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#circuit-inspector').textContent()).toContain('Compact');
+      expect.soft(await p.locator('#runs [data-run="cx"]').count()).toBe(1);expect.soft(await p.locator('#run-count').textContent()).toContain('Compact');
+      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);
       await p.locator('[data-host="claude"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);
       await p.locator('[data-host="all"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);expect.soft(await p.locator('#runs .row').count()).toBe(rows.length);
       await p.close();
@@ -630,6 +630,39 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.locator('[data-circuit-mode=live]').click();await node('compact').click();await p.locator('#circuit-inspector button[data-inspect-feature]').click();expect(await p.locator('#search').evaluate(e=>e===document.activeElement)).toBe(true);
     await p.close();
   });
+
+  it('keeps long status readable without an inner scrollbar or moving adjacent panels (#316)', async () => {
+    for (const width of [1440, 768, 390, 320]) {
+      const initial = call('status-call', 'router', 92, { summary: 'Recorded result' });
+      push([run('status-run', 'codex', [initial])]);
+      const p = await page(width); await p.emulateMedia({ reducedMotion: 'reduce' });
+      await p.locator('#pipeline .node[data-feature=router]').click(); await settle(p);
+      const geometry = () => p.evaluate(() => Object.fromEntries(['pipeline', 'circuit-inspector', 'runs'].map(id => {
+        const r = document.getElementById(id)!.getBoundingClientRect(); return [id, [r.x, r.y + (globalThis as unknown as {scrollY:number}).scrollY, r.width, r.height]];
+      })));
+      const before = await geometry();
+      const status = p.locator('#circuit-inspector .status-value');
+      await status.focus();
+      const note = 'Preserved complete status: ' + 'the original request remains active and response usage is unknown; '.repeat(28);
+      push([run('status-run', 'codex', [{ ...initial, summary: note }])]);
+      await p.waitForFunction(() => document.querySelector('.status-value')?.textContent?.includes('Preserved complete status:'));
+      await settle(p);
+      expect(await geometry()).toEqual(before);
+      expect(await status.textContent()).toContain(note.trim());
+      expect((await status.textContent())!.split('Preserved complete status:')).toHaveLength(2);
+      expect(await status.evaluate(e => ({ focused: e === document.activeElement, clipped: e.scrollHeight > e.clientHeight + 1, overflow: getComputedStyle(e).overflowY }))).toEqual({ focused: true, clipped: false, overflow: 'visible' });
+      const body = p.locator('#circuit-inspector .b');
+      await body.evaluate(e => { e.scrollTop = 140; });
+      const scroll = await body.evaluate(e => e.scrollTop);
+      push([run('status-run', 'codex', [{ ...initial, summary: note + ' Updated.' }])]);
+      await p.waitForFunction(() => document.querySelector('.status-value')?.textContent?.includes('Updated.'));
+      expect(await body.evaluate(e => e.scrollTop)).toBeCloseTo(scroll, 0);
+      expect(await geometry()).toEqual(before);
+      expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      await p.screenshot({ path: join(output, `status-${width}.png`), fullPage: true });
+      await p.close();
+    }
+  }, 30_000);
 
   // #261: the inspector showed one line, and '–' for Router and Compact, whose Jev call a host or local record follows.
   it('shows the stage Jev call facts in the inspector when a host record follows the call',async()=>{

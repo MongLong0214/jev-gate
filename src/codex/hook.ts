@@ -11,7 +11,7 @@ type Rec = Record<string, unknown>;
 const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Rec : null;
 // Metadata identifiers reject even truncated/embedded sk- fragments. Prose screening keeps prefix mentions and task-id usable.
 const token = (v: unknown): string | null => typeof v === 'string' && /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null;
-const EVENTS = new Set(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt']);
+const EVENTS = new Set(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt', 'PreCompact', 'PostCompact']);
 const LIMIT = 2 * 1024 * 1024;
 
 /** Only explicit structured status or the anchored native exec envelope; never infer from command output. */
@@ -56,6 +56,7 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
     tool_name: tool, agent_id: token(input['agent_id']), agent_type: token(input['agent_type']),
     // The hook's model is the emitting session's model. It is never promoted to a spawned child's model.
     model: token(input['model']),
+    ...(['PreCompact', 'PostCompact'].includes(event) ? { trigger: ['manual', 'auto'].includes(String(input['trigger'])) ? input['trigger'] : null } : {}),
     ...toolOutcome(input['tool_response']),
     interrupted: event === 'Interrupt',
     // Start metadata names the historical provider, not the loaded inference endpoint.

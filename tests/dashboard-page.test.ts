@@ -43,14 +43,16 @@ it('only attaches populated history rows and reuses their buttons when 200 runs 
   const p = page(), history = Array.from({ length: 200 }, (_, i) => run('history-' + i, 'claude', [step('s-' + i, 'router', 'host')]));
   p.push(snapshot(history));
   expect([...rows(p)].every(b => b.textContent?.trim() && b.getAttribute('aria-label'))).toBe(true);
-  await vi.waitFor(() => expect(rows(p)).toHaveLength(200));
+  // Batched frames run in a disposable DOM alongside the full suite; this checks eventual
+  // population/identity. Actual rendering latency and layout are covered by Chromium.
+  await vi.waitFor(() => expect(rows(p)).toHaveLength(200), { timeout: 4000 });
   const button = p.w.document.querySelector('[data-run="history-100"]')!;
   button.dispatchEvent(new p.w.PointerEvent('pointerdown', { bubbles: true }));
   const reordered = [history[100]!, ...history.filter((_, i) => i !== 100)];
   p.push(snapshot(reordered));
   expect(rows(p)[100]).toBe(button);
   button.dispatchEvent(new p.w.PointerEvent('pointerup', { bubbles: true }));
-  await vi.waitFor(() => expect(rows(p)[0]).toBe(button));
+  await vi.waitFor(() => expect(rows(p)[0]).toBe(button), { timeout: 4000 });
   expect([...rows(p)].every(b => b.textContent?.trim() && b.getAttribute('aria-label'))).toBe(true);
 });
 
