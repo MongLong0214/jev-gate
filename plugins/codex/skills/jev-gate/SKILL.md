@@ -9,7 +9,7 @@ Owned dispatches run in the background by default. End the main turn after dispa
 
 The native hooks record lifecycle metadata. A spawn receipt is not a completed worker. A stop event is not Jev contract acceptance. Missing events mean unknown; no fake activity is generated.
 
-The installed plugin automatically connects ordinary native Codex sessions. No Jev terminal or workspace export is required. Codex owns hook trust and authentication; review/trust the hooks when prompted and start a new native session if the current host loaded its provider before installation. Never forge trust or claim connection merely from installation.
+The installed plugin automatically connects ordinary native Codex sessions. No Jev terminal or workspace export is required. Codex owns hook trust and authentication; review/trust the hooks when prompted and start a new native session if the current host loaded its endpoint before installation. Never forge trust or claim connection merely from installation.
 
 The installed MCP opens a local API key screen when no key is available. The user enters one Jev key, shared with Claude Code in the private local credential file. Do not ask users to edit settings or export a key for ordinary use. Existing explicit environment keys remain authoritative. Saving a key is not proof of API validity or policy application. Never send a key through tool arguments, prompts or logs.
 

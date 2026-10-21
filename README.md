@@ -102,7 +102,7 @@ codex plugin marketplace add /absolute/path/to/extracted-plugin
 codex plugin add jev-gate@jev-gate-codex
 ```
 
-Enter your key in the automatic local screen and use ordinary Codex in your project. The plugin discovers the workspace and prepares a local connection. Start a fresh Codex host after installation or upgrade; a running host retains its previous provider. Review installed hooks in `/hooks` if Codex asks for native trust. Keep one Jev Gate installation enabled. Automatic connection was tested with Codex CLI 0.162.1 and Node 22.15+.
+Enter your key in the automatic local screen and use ordinary Codex in your project. The plugin discovers the workspace and automatically adds the official `openai_base_url` connection setting. The built-in `openai` provider, login, model and effort settings stay in place; no manual config editing is needed. Start a fresh Codex host after installation or upgrade; a running host retains its loaded endpoint. Review installed hooks in `/hooks` if Codex asks for native trust. Keep one Jev Gate installation enabled. Automatic connection was tested with Codex CLI 0.163.0 and Node 22.15+.
 
 Both hosts share one private key and dashboard. Installing from source is for development; run `npm ci` and `npm run build` before registering the checkout. [Codex configuration and troubleshooting](plugins/codex/README.md).
 
@@ -223,7 +223,7 @@ For Codex, replace the directory you registered with the new release's extracted
 codex plugin add jev-gate@jev-gate-codex
 ```
 
-Restart the host after upgrading to load new hooks/provider code. Old separate Jev plugins are automatically disabled where user settings permit; customized or managed overrides are preserved. Disabling one feature does not disable the others. Uninstalling does not delete credentials, traces, or transcripts.
+Restart the host after upgrading to load new hooks and connection settings. Old separate Jev plugins are automatically disabled where user settings permit; customized or managed overrides are preserved. Disabling one feature does not disable the others. Uninstalling does not delete credentials, traces, or transcripts.
 
 | Symptom | Next step |
 | --- | --- |

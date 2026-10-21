@@ -46,11 +46,21 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   let rpc: CodexRpc | undefined; let policy: CodexPolicy | undefined; let client: WebSocket | undefined;
   const proxyHeaders = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'x-jev-gate-session']);
   const requests = new Set<ReturnType<typeof httpRequest>>();
+  let active = 0;
+  let restarting = false;
+  const nativePath = (req: IncomingMessage): string | null => {
+    const prefix = `/native/${token}`;
+    if (equal(req.url?.slice(0, prefix.length), prefix) && req.url?.[prefix.length] === '/') return req.url.slice(prefix.length);
+    return equal(req.headers['x-jev-gate-session'], token) ? req.url ?? null : null;
+  };
   const server = createServer(async (req, res) => {
     try {
       const path = req.url?.split('?')[0];
       if (options.connection && path === '/restart' && req.method === 'POST') {
         if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        // An update must never terminate an inference or a worker between tool calls.
+        if (restarting || active || policy?.hasActiveWorkers()) { res.writeHead(409); res.end(); return; }
+        restarting = true;
         res.writeHead(204); res.end(); setTimeout(() => options.connection?.restart?.(), 20); return;
       }
       if (options.connection && path === '/credentials' && req.method === 'POST') {
@@ -66,6 +76,8 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       }
       if (options.connection && path === '/agent' && req.method === 'POST') {
         if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        if (restarting) { res.writeHead(503); res.end(); return; }
+        active++; res.once('close', () => { active--; });
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
         res.once('close', () => { if (!res.writableEnded && input) policy?.cancelCaller(input['meta']); });
         const handler = policy;
@@ -74,6 +86,8 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       }
       if (req.url === '/hook' && req.method === 'POST') {
         if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        if (restarting) { res.writeHead(503); res.end(); return; }
+        active++; res.once('close', () => { active--; });
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
         const disconnected = new AbortController();
         const abort = () => { if (!res.writableEnded) disconnected.abort(); };
@@ -83,22 +97,28 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         if (disconnected.signal.aborted) return;
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
-      if (!equal(req.headers['x-jev-gate-session'], token)) { res.writeHead(401); res.end(); return; }
+      const target = nativePath(req);
+      if (!target) { res.writeHead(401); res.end(); return; }
+      if (restarting) { res.writeHead(503, { 'retry-after': '1' }); res.end(); return; }
+      req.url = target;
+      const route = target.split('?')[0];
       if (!/^\/(responses(?:\/compact)?|models)(?:\?.*)?$/.test(req.url ?? '') || !['GET', 'POST'].includes(req.method ?? '')) { res.writeHead(404); res.end(); return; }
+      active++;
+      res.once('close', () => { active--; });
       const raw = await body(req, 32 * 1024 * 1024);
       let decoded = raw;
       if (req.headers['content-encoding'] === 'zstd') decoded = (createRequire(import.meta.url)('node:zlib') as { zstdDecompressSync: (b: Buffer, o: { maxOutputLength: number }) => Buffer }).zstdDecompressSync(raw, { maxOutputLength: 32 * 1024 * 1024 });
       const sessionId = policy?.requestSession(req.headers['x-codex-turn-metadata'], req.headers['session-id']) ?? null;
       let payload = raw;
       let modified = false;
-      const nativeCompact = req.method === 'POST' && (path === '/responses/compact' || path === '/responses' && compactionRequest(req.headers['x-codex-turn-metadata']));
-      if (req.method === 'POST' && (path === '/responses' || path === '/responses/compact')) {
+      const nativeCompact = req.method === 'POST' && (route === '/responses/compact' || route === '/responses' && compactionRequest(req.headers['x-codex-turn-metadata']));
+      if (req.method === 'POST' && (route === '/responses' || route === '/responses/compact')) {
         // Hook trust is the root's; a native child request is checked against the root it was sent for.
         const trusted = sessionId ?? policy?.requestSession(undefined, req.headers['session-id']);
         if ((!trusted || !policy?.hooksReady(trusted)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
         if (sessionId && policy) {
           const parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
-          if (path === '/responses' && !nativeCompact) {
+          if (route === '/responses' && !nativeCompact) {
             const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
             const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator']);
             payload = Buffer.from(JSON.stringify(selected.request)); modified = true;
@@ -124,14 +144,14 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
         res.writeHead(response.statusCode ?? 502, output); response.pipe(res);
         if (sessionId && (response.statusCode ?? 502) >= 400) policy?.observeRequestFailure(sessionId, submitted);
-        if (!nativeCompact && sessionId && response.statusCode === 200 && req.method === 'POST' && path === '/responses') {
+        if (!nativeCompact && sessionId && response.statusCode === 200 && req.method === 'POST' && route === '/responses') {
           observeResponseStream(response, value => policy?.observeUsage(sessionId, value, submitted));
         }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
       upstream.on('error', () => { if (sessionId) policy?.observeRequestFailure(sessionId, submitted); if (!res.headersSent) res.writeHead(502); res.end(); });
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
-      if (!nativeCompact && req.method === 'POST' && path === '/responses' && sessionId && policy) {
+      if (!nativeCompact && req.method === 'POST' && route === '/responses' && sessionId && policy) {
         try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}); } catch { /* Observation does not block sending. */ }
       }
       upstream.end(payload);
@@ -139,6 +159,12 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
   });
   const ws = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
   server.on('upgrade', (req, socket, head) => {
+    const target = nativePath(req);
+    if (target?.split('?')[0] === '/responses') {
+      // Codex 0.163.0 explicitly handles 426 by switching this session to SSE,
+      // before sending response.create. No inference is retried or reconstructed.
+      socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return;
+    }
     if (req.url !== '/' || !equal(req.headers.authorization, `Bearer ${token}`) || client) { socket.destroy(); return; }
     ws.handleUpgrade(req, socket, head, c => { client = c; ws.emit('connection', c, req); });
   });
