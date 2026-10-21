@@ -261,7 +261,7 @@ describe('responsive native background contracts', () => {
     const f = await fixture(); await f.launch(); f.transcript();
     const rows = readFileSync(f.path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     delete rows.at(-1).message.stop_reason; rows.at(-1).timestamp = '2026-10-07T05:31:45.968Z';
-    if (kind === 'other_generation') rows[0].message.content = rows[0].message.content.replace(/token=[a-f0-9-]{36}/, 'token=00000000-0000-0000-0000-000000000000');
+    if (kind === 'other_generation') rows[0].message.content = rows[0].message.content.replace(/(?:id|token)=[a-f0-9-]{36}/, 'id=00000000-0000-0000-0000-000000000000');
     if (kind === 'invalid_child_time') rows.at(-1).timestamp = 'not-a-time';
     if (kind === 'tool_use') rows.at(-1).message.content.push({ type: 'tool_use', name: 'Bash', id: 'tool' });
     writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
@@ -309,6 +309,19 @@ describe('responsive native background contracts', () => {
   it('settles a terminal before the async launch hook using the private dispatch token', async () => {
     const f = await fixture(); f.transcript(); await f.terminal(); await f.launch();
     expect(f.job().current.receipts).toHaveLength(1); expect(f.job().current.active).toEqual({});
+  });
+  it.each(['id', 'token'])('N1: claims an unbound background dispatch with the %s marker across upgrades', async key => {
+    const f = await fixture();
+    const id = '12345678-1234-4234-8234-123456789abc';
+    updateJob(f.env, 's', prev => prev && { ...prev, current: { ...prev.current, active: {
+      ...prev.current.active, dispatch: { ...prev.current.active['dispatch']!, background_execution: {
+        ...prev.current.active['dispatch']!.background_execution!, token: id,
+      } },
+    } } });
+    f.input.prompt = f.input.prompt.replace(/\[JEV_DISPATCH (?:id|token)=[a-f0-9-]{36}\]/, `[JEV_DISPATCH ${key}=${id}]`);
+    f.transcript(); await f.terminal(); await f.launch();
+    expect(f.job().current.active).toEqual({});
+    expect(f.job().current.receipts).toEqual([expect.objectContaining({ verdict: 'accept', tool_use_id: 'dispatch' })]);
   });
   it('does not release a live worker when a main-session tool wait is interrupted', async () => {
     const f = await fixture(); await f.launch();

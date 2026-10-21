@@ -4,8 +4,9 @@ import { dirname, resolve } from 'node:path';
 import { isHostNoticeRow } from './recent-prompts.js';
 import { subagentTranscriptPath } from './verify.js';
 import type { HookInput } from './types.js';
+import { parseDispatchMarker } from './claude-dispatch.js';
 
-export const dispatchMarker = (token: string): string => `\n\n[JEV_DISPATCH token=${token}]`;
+export { dispatchMarker } from './claude-dispatch.js';
 
 /** #281: why a prompt was or was not taken as a native notice. Gate A records it, so notice inflow can be counted. */
 export type NoticeBasis = 'not_notice' | 'source' | 'transcript_row' | 'task_stop' | 'launch_receipt' | 'unproven';
@@ -96,7 +97,7 @@ export const claudeTerminal = (input: HookInput, nativeNotification = false): { 
     const rows = (text: string) => text.split('\n').flatMap(line => { try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; } });
     const first = rows(head.toString()).find(r => r['type'] === 'user');
     const content = (first?.['message'] as { content?: unknown } | undefined)?.content;
-    const tokens = (typeof content === 'string' ? content : JSON.stringify(content ?? '')).match(/\[JEV_DISPATCH token=([a-f0-9-]{36})\]/g) ?? [];
+    const token = parseDispatchMarker(typeof content === 'string' ? content : JSON.stringify(content ?? ''));
     const last = rows(tail.toString()).filter(r => r['type'] === 'assistant').at(-1);
     const message = last?.['message'] as { content?: Array<{ type: string; text?: string }>; stop_reason?: string; model?: string } | undefined;
     if (!last || last['agentId'] !== input.agent_id || last['sessionId'] !== input.session_id || !Array.isArray(message?.content)) return null;
@@ -126,7 +127,7 @@ export const claudeTerminal = (input: HookInput, nativeNotification = false): { 
     // The host may flush the text before it flushes the completed message row.
     // An absent stop reason is pending evidence, not a failed execution.
     if (message.stop_reason == null && last['isApiErrorMessage'] !== true && !notification) return null;
-    return { token: tokens.length === 1 ? /token=([a-f0-9-]{36})/.exec(tokens[0]!)![1]! : null, text,
+    return { token, text,
       model: typeof message.model === 'string' ? message.model : null,
       completed: last['isApiErrorMessage'] !== true && (notification ? notification === 'completed' : message.stop_reason === 'end_turn') };
   } catch { return null; }
