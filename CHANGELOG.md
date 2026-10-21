@@ -1,7 +1,8 @@
 # Changelog
 
-## v0.8.40 — 2026-10-21 — Host-specific Compact activity
+## v0.8.40 — 2026-10-21 — Compact assessment overhead and host activity
 
+- Skip new Compact judgments whose best-case current-request reduction cannot repay their estimated request and typed-answer overhead (#321). Prefer the useful repeated prefix of a batch, retain exact verified decisions and expose the preserve reason. Estimates do not prove total-token savings or assume future reuse.
 - Show Codex Compact assessments, applied submissions and completed responses instead of Claude-only restore/budget metrics (#319). Combine both hosts' actual counts in the All view and retain unknown token effects.
 - Use context-selection labels for Compact and regenerate the README previews. Preserve the existing fixed circuit geometry and readable status fields.
 - A further bounded OAuth OFF/ON comparison completed actual native compaction and a subsequent turn with all required parser facts preserved. Total usage including Jev was 81,978 versus 53,134, a 35.2% reduction for this pair. This differs from the earlier first-response experiment; representative quality and the 50% target remain unproven in #300 and #317.

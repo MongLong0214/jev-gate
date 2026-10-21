@@ -25,6 +25,40 @@ const answer = (body: string, options: { invalid?: boolean; confidence?: number;
 const argsFor = (request = fixture()) => ({ request, task: 'Implement the new parser; keep its public contract.', recentRequests: [], state: newCompactState('task'), session: 's', prompt: 'p', config: { enabled: true, timeoutMs: 200 }, jevModel: 'systemone', env: { TYPESAFE_API_KEY: 'local-fake' }, path: 'inference' as const, signal: new AbortController().signal, current: () => true });
 
 describe('Codex Jev Compact wire selector (#317)', () => {
+  it('preserves unique one-shot evidence when even all removals cannot repay a new assessment (#321)', async () => {
+    const request = fixture();
+    for (const [i, item] of (request.input as Obj[]).entries()) if (item.type === 'custom_tool_call_output') {
+      (item.output as Obj[])[0]!.text = Array.from({ length: 90 }, (_, j) => `Archived sample ${i}:${j}: completed unrelated color survey with no parser dependency.\n`).join('');
+    }
+    const rows: Obj[] = [], args = argsFor(request), fetchImpl = vi.fn();
+    const out = await prepareCodexCompact({ ...args, fetchImpl, trace: { write: (_phase, body) => { rows.push(body); return { ok: true, file: 'fake' }; } } });
+    expect(fetchImpl).not.toHaveBeenCalled(); expect(out.request).toBe(request); expect(out.receipt.applied).toBe(false);
+    expect(rows).toContainEqual(expect.objectContaining({ stage: 'prepared', reason: 'assessment_not_amortized', sent: false }));
+    expect(args.state.calls).toBe(0); expect(args.state.decisions.size).toBe(0);
+  });
+
+  it('still applies previously verified exact decisions when an unseen batch cannot repay its assessment', async () => {
+    const args = argsFor(), fetchImpl = vi.fn(async (_url, init) => answer(String(init?.body)));
+    await prepareCodexCompact({ ...args, fetchImpl });
+    const next = structuredClone(args.request), item = (next.input as Obj[]).find(i => i.type === 'custom_tool_call_output')!;
+    (item.output as Obj[])[0]!.text = Array.from({ length: 180 }, (_, j) => `Unique archived sample ${j}: completed color survey; no parser dependency.\n`).join('');
+    const out = await prepareCodexCompact({ ...args, request: next, fetchImpl });
+    expect(out.receipt.applied).toBe(true); expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((out.request.input as Obj[]).find(i => i.call_id === item.call_id && i.type === item.type)).toEqual(item);
+  });
+
+  it('keeps a useful repeated batch without paying to assess its unique tails', async () => {
+    const args = argsFor(), item = (args.request.input as Obj[]).find(i => i.type === 'custom_tool_call_output')!;
+    (item.output as Obj[])[0]!.text = Array.from({ length: 180 }, (_, j) => `Unique archived sample ${j}: completed color survey; no parser dependency.\n`).join('');
+    const fetchImpl = vi.fn(async (_url, init) => {
+      expect(JSON.parse(String(init?.body)).state.candidates.every((c: { text: string }) => !c.text.includes('Unique archived sample'))).toBe(true);
+      return answer(String(init?.body));
+    });
+    const out = await prepareCodexCompact({ ...args, fetchImpl });
+    expect(out.receipt.applied).toBe(true); expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((out.request.input as Obj[]).find(i => i.call_id === item.call_id && i.type === item.type)).toEqual(item);
+  });
+
   it('handles encrypted history, large mandatory context and mixed code-mode blocks without dropping topology or media', async () => {
     const request = fixture(); (request.input as unknown[]).unshift({ role: 'developer', content: 'mandatory '.repeat(50000) });
     const original = structuredClone(request);

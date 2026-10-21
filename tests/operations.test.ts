@@ -352,6 +352,12 @@ it('shows no step for a forwarded native Compact request recorded by an earlier 
   expect(view.feed).toHaveLength(0); expect(view.runs).toHaveLength(0);
 });
 
+it('exposes a skipped Compact assessment without reporting a Jev call or savings (#321)', () => {
+  const view = buildOperations([{ phase: 'codex_compact', host: 'codex', session_id: 'c', prompt_id: 'p', stage: 'prepared', reason: 'assessment_not_amortized', applied: false, sent: false, written_at: at }], [], new Date(later), { trace: true, host: 'codex' });
+  expect(view.feed).toContainEqual(expect.objectContaining({ feature: 'compact', state: 'skipped', lane: 'policy', summary: '네이티브 문맥 유지 · 판정 비용 회수 여지 부족 · 원본 유지' }));
+  expect(view.feed[0]!.lifecycle).not.toBe(true); expect(view.requests).toBe(0);
+});
+
 it('separates Codex Compact selection, reused applications and native responses without claiming token savings', () => {
   const common = { phase: 'codex_compact', host: 'codex', session_id: 'c', prompt_id: 'p', written_at: at };
   const records = [
