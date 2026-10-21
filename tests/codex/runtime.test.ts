@@ -63,6 +63,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(stagedPlugin, 'dist')], { env: runtimeEnv, encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     cpSync(join(root, 'package.json'), join(staged, 'package.json'));
+    cpSync(join(root, 'LICENSE'), join(staged, 'LICENSE'));
     const packed = spawnSync(process.execPath, [join(root, 'scripts/pack.mjs'), join(tmp, 'archives'), '--profile', 'codex', '--root', staged], { env: runtimeEnv, encoding: 'utf8' });
     expect(packed.status, packed.stderr).toBe(0);
     const archive = readdirSync(join(tmp, 'archives')).find(f => f.endsWith('.zip'))!;

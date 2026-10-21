@@ -30,6 +30,17 @@
 
 <p align="center"><sub><i>Two real feature tasks, each a 17-turn Claude Code 2.1.294 session on Opus 5.5 (xhigh), with and without Jev Gate v0.8.15 defaults. Cost is the host's own total and includes Jev's requests; quality is blind-graded against the merged PRs. One pair per task: a pilot that shows a direction, not a guarantee — <a href="#results">method and limits</a>.</i></sub></p>
 
+<h3 align="center">Every decision and its result, live.</h3>
+
+<p align="center">
+  <a href="#read-the-live-dashboard"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
+    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate dashboard with sample data: header KPIs, the five-feature execution circuit with a shared Jev rail, the execution list, the Jev call log and decision basis, and one execution's detail">
+  </picture></a>
+</p>
+
+<p align="center"><sub><i>Sample data. One local dashboard for Claude Code and Codex opens on its own: each Jev judgment lights the feature it decided, with its run, reply time and observed result — <a href="#read-the-live-dashboard">how to read it</a>.</i></sub></p>
+
 # Jev Gate
 
 Long coding sessions get expensive in a quiet way: one main context keeps growing, every request re-reads it from cache on the most capable model, and routine work — searching, running checks, reviewing — pays the same price as the hard part.

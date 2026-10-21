@@ -130,6 +130,9 @@ describe('dashboard live interactions', () => {
   it('renders all five real feature states and never invents traffic on first load', () => {
     const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 70 })]), run('x', 'codex', [step('l', 'workers', 'host', { lifecycle: true })])]));
     expect(p.w.document.querySelectorAll('#pipeline .node')).toHaveLength(5);
+    expect(p.w.document.querySelectorAll('#pipeline .cells')).toHaveLength(1);
+    expect([...p.w.document.querySelectorAll('#pipeline .cells > .node')].map(n => (n as HTMLElement).dataset['feature'])).toEqual(['admission', 'allocation', 'workers', 'router', 'compact']);
+    expect(p.w.document.querySelector('.cells8,.gate-grp,.mod-grp')).toBeNull();
     expect(node(p, 'workers').classList.contains('idle')).toBe(true); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('–');
     expect(node(p, 'admission').classList.contains('idle')).toBe(false);
     expect(p.w.document.querySelectorAll('.trip,.node.zap,.rail .ln b')).toHaveLength(0); expect(filled(p)).toHaveLength(1);
@@ -372,7 +375,7 @@ it('reads a Gate decision as one stage with plain-word basis, call scope, reason
   expect(text(p, 'rd-meta')).toContain('2시간 1분');
   p.click('.node[data-feature=admission]');
   // The card already names the reason, so the inspector does not repeat it.
-  expect(node(p, 'admission').querySelector('.nt')!.textContent).toBe('직접 처리 · 확신 기준 충족'); expect(text(p, 'circuit-inspector')).not.toContain('확신 기준 충족'); expect(text(p, 'circuit-inspector')).toContain('워커 · 실행');
+  expect(node(p, 'admission').querySelector('.nt')!.textContent).toBe('직접 처리 · 확신 기준 충족'); expect(text(p, 'circuit-inspector')).toContain('확신 기준 충족'); expect(text(p, 'circuit-inspector')).toContain('워커 · 실행');
   p.click('#language'); expect(text(p, 'rd-meta')).toContain('2h 1m');
 });
 
@@ -584,8 +587,8 @@ it('shows a refused worker contract as its own failure through a later host end 
   expect(marks()).toContain('호스트 종료');
   for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인']) expect(opened(p)).toContain(fact);
   expect(text(p, 'trace')).not.toContain('transcript shows');
-  // The inspector does not repeat the decision its selected card shows.
-  p.click('.node[data-feature=workers]'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('계약 미충족'); expect(text(p, 'circuit-inspector')).not.toContain('계약 미충족');
+  // The inspector exposes the complete decision for keyboard and touch readers.
+  p.click('.node[data-feature=workers]'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('계약 미충족'); expect(text(p, 'circuit-inspector')).toContain('계약 미충족');
   p.click('#language');
   expect(marks()).toContain('Contract not met'); expect(text(p, 'k-diag')).toBe('Worker contract not met 1 recorded');
   expect(opened(p)).toContain('Reported pass not seen in the worker transcript');

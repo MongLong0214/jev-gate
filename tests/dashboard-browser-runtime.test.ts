@@ -3,11 +3,11 @@ import type { Window } from 'happy-dom';
 // Browser globals are typed locally; adding lib.dom globally would change the Node HTTP tests.
 declare const document: Window['document'];
 declare const requestAnimationFrame: Window['requestAnimationFrame'];
-declare const getComputedStyle: Window['getComputedStyle'];
+declare const getComputedStyle: Window['getComputedStyle'] & ((node: unknown, pseudo: string) => ReturnType<Window['getComputedStyle']>);
 declare const MutationObserver: Window['MutationObserver'];
 declare const innerWidth: number;
 declare const innerHeight: number;
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { chromium, type Browser, type Page } from 'playwright';
@@ -121,6 +121,84 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     } finally { await p.close(); await local.close(); rmSync(home, { recursive: true, force: true }); }
   });
 
+  it('balances the current circuit stages without vacant slots at five widths in both themes', async () => {
+    push([run('layout','claude',[call('layout-a','admission',63,{executionPath:'direct'}),call('layout-b','allocation',88,{},{choice:'standard'}),step('layout-w','workers',{lane:'host',outcome:'accepted'}),call('layout-r','router',91,{},{choice:'sonnet · medium'}),call('layout-c','compact',220)])]);
+    const layouts=[];
+    for(const width of [1440,1280,1024,768,390])for(const theme of ['dark','light']){
+      const p=await page(width,900);await p.evaluate(theme=>{document.documentElement.dataset.theme=theme},theme);await settle(p);
+      const inspect=()=>p.evaluate(()=>{
+        const nodes=[...document.querySelectorAll('#pipeline .node:not([hidden])')],rows=new Map<number,Array<{left:number;right:number}>>();
+        for(const n of nodes){const b=n.getBoundingClientRect(),y=Math.round(b.top);if(!rows.has(y))rows.set(y,[]);rows.get(y)!.push({left:b.left,right:b.right});}
+        const bounds=document.querySelector('#pipeline')!.getBoundingClientRect(),sizes=[...rows.values()].map(r=>r.length);
+        return {sizes,features:nodes.map(n=>n.getAttribute('data-feature')),fills:[...rows.values()].every(r=>Math.abs(r[0]!.left-bounds.left-16)<2&&Math.abs(bounds.right-r.at(-1)!.right-16)<2),overflow:document.documentElement.scrollWidth>innerWidth};
+      });
+      const five=await inspect();layouts.push({width,theme,...five});
+      expect.soft(five.features).toEqual(['admission','allocation','workers','router','compact']);expect.soft(five.overflow).toBe(false);expect.soft(five.fills,`${width} ${theme}: each row fills the circuit`).toBe(true);
+      expect.soft(five.sizes,`${width} ${theme}: balanced rows`).toEqual(width>=1280?[5]:width===1024?[3,2]:width===768?[3,2]:[1,1,1,1,1]);
+      expect.soft(await problems(p)).toEqual([]);
+      await p.screenshot({path:join(output,`circuit-${width}-${theme}.png`),fullPage:true,animations:'disabled'});
+      await p.locator('#pipeline').screenshot({path:join(output,`circuit-detail-${width}-${theme}.png`),animations:'disabled'});
+      await p.locator('[data-host=codex]').click();await settle(p);const four=await inspect();
+      expect.soft(four.features).toEqual(['admission','allocation','workers','router']);expect.soft(four.fills).toBe(true);expect.soft(four.overflow).toBe(false);
+      expect.soft(four.sizes).toEqual(width>=1024?[4]:width===768?[2,2]:[1,1,1,1]);
+      await p.close();
+    }
+    writeFileSync(join(output,'circuit-layouts.json'),JSON.stringify(layouts,null,2)+'\n');
+  },60_000);
+
+  it('keeps circuit text at AA contrast and exposes focus and reduced-motion states in both themes', async () => {
+    push([run('access','claude',[call('access-a','admission',80,{executionPath:'direct'}),call('access-r','router',90,{},{choice:'sonnet · high'})])]);
+    const p=await page();
+    for(const theme of ['dark','light']){
+      await p.evaluate(theme=>{document.documentElement.dataset.theme=theme},theme);await p.emulateMedia({reducedMotion:'reduce'});await settle(p);
+      for(const highlighted of [false,true]){
+        const ratios=await p.evaluate(highlighted=>{
+          for(const n of document.querySelectorAll('#pipeline .node')){n.classList.toggle('zap',highlighted);(n as unknown as {style:{backgroundColor:string}}).style.backgroundColor=highlighted?'color-mix(in srgb,var(--accent) 10%,var(--bg))':'';}
+          const rgb=(v:string)=>v.match(/[\d.]+/g)!.slice(0,3).map(n=>Number(n)*(v.startsWith('color(srgb')?255:1)),lum=(v:string)=>rgb(v).reduce((sum,c,i)=>{c/=255;return sum+[.2126,.7152,.0722][i]!*(c<=.04045?c/12.92:((c+.055)/1.055)**2.4)},0);
+          return [...document.querySelectorAll('#pipeline :is(.grp,.nm,.ds,.dl,.dec b,.nt,.ago,.jb,.jb .v)')].filter(e=>e.textContent?.trim()).map(e=>{
+            let parent=e;while(getComputedStyle(parent).backgroundColor==='rgba(0, 0, 0, 0)'&&parent.parentElement)parent=parent.parentElement;
+            const a=lum(getComputedStyle(e).color),b=lum(getComputedStyle(parent).backgroundColor);return {text:e.textContent,ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)};
+          });
+        },highlighted);
+        for(const item of ratios)expect(item.ratio,theme+' '+item.text).toBeGreaterThanOrEqual(4.5);
+      }
+      const node=p.locator('#pipeline .node[data-feature=router]');await node.focus();await p.keyboard.press('Tab');await p.keyboard.press('Shift+Tab');
+      expect(await node.evaluate(e=>e.matches(':focus-visible'))).toBe(true);
+      expect(await node.evaluate(e=>getComputedStyle(e).outlineWidth)).toBe('2px');
+      expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationName)).toBe('none');
+      await p.emulateMedia({reducedMotion:'no-preference'});await node.evaluate(e=>e.classList.add('zap'));expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationName)).toBe('halo');
+      await p.locator('#pause').click();expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationPlayState)).toBe('paused');await p.locator('#pause').click();
+    }
+    await p.close();
+  });
+
+  it('preserves circuit geometry, full values, scroll and keyboard focus through long live results', async () => {
+    for(const width of [1440,1280,1024,768,390]){
+      const short=call('stable-short','router',90,{summary:'short'},{choice:'sol · low'});push([run('stable','codex',[short])]);
+      const p=await page(width);await p.locator('#pipeline [data-feature=router]').click();await settle(p);
+      const rects=()=>p.evaluate(()=>['#pipeline',...Array.from(document.querySelectorAll('#pipeline .node:not([hidden])')).map(e=>'#pipeline [data-feature='+e.getAttribute('data-feature')+']'),'#circuit-inspector','#runs'].map(q=>{const b=document.querySelector(q)!.getBoundingClientRect();return [b.x,b.y+document.documentElement.scrollTop,b.width,b.height]}));
+      const before=await rects();
+      const full='full-model-identifier-'+('아주 긴 이유 error details with spaces '.repeat(30))+'-END';
+      const long=call('stable-long','router',9999,{summary:full,cause:full,state:'error',model:{selected:full,observed:full,status:'mismatch',selectedEffort:'xhigh',observedEffort:'high'}},{choice:full+' · xhigh',model:full,input:999999999,output:99999999});
+      push([run('stable','codex',[short,long],{title:full,state:'attention'})]);await expect.poll(()=>p.locator('#circuit-inspector').textContent()).toContain(full);await settle(p);
+      expect(await rects()).toEqual(before);
+      const field=p.locator('#circuit-inspector dd').filter({hasText:full}).first();
+      await field.focus();await field.press('End');await wait(300);
+      const focused=await field.evaluate(e=>({text:e.textContent,height:e.clientHeight,scroll:e.scrollHeight,overflow:getComputedStyle(e).overflowY,focused:document.activeElement===e}));
+      expect(focused.text).toContain(full);expect(focused.scroll).toBeGreaterThan(focused.height);expect(focused.overflow).toBe('auto');expect(focused.focused).toBe(true);
+      await p.locator('#circuit-inspector .b').evaluate(e=>{e.scrollTop=120});
+      await field.evaluate(e=>{e.scrollTop=40});
+      const position=await p.locator('#circuit-inspector .b').evaluate(e=>e.scrollTop);
+      const pagePosition=await p.evaluate(()=>document.documentElement.scrollTop);
+      const newest={...long,id:'stable-newest',at:ago(0),durationMs:3};push([run('stable','codex',[short,long,newest],{title:full,state:'attention'})]);await wait(80);await settle(p);
+      expect(await rects()).toEqual(before);expect(await field.evaluate(e=>document.activeElement===e)).toBe(true);expect(await field.evaluate(e=>e.scrollTop)).toBe(40);
+      expect(await p.locator('#circuit-inspector .b').evaluate(e=>e.scrollTop)).toBe(position);
+      expect(await p.evaluate(()=>document.documentElement.scrollTop)).toBe(pagePosition);
+      expect(await p.locator('#circuit-inspector dd').filter({hasText:'3ms'}).count()).toBeGreaterThan(0);
+      await p.close();
+    }
+  },30_000);
+
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
     const releaseFetch = (async () => new Response(JSON.stringify({ tag_name: 'v99.0.0', draft: false, prerelease: false, html_url: 'https://github.com/MongLong0214/jev-gate/releases/tag/v99.0.0' }))) as typeof fetch;
@@ -133,7 +211,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         // The server puts the version in the page, so the badge has its text, and its width, without waiting for /api/version.
         expect(await p.locator('#version-badge').textContent()).toContain('99.0.0');
         expect(await p.locator('#version-badge').getAttribute('data-state')).toBe('update');
-        expect(await p.locator('#version-badge').textContent()).toContain('0.8.32');
+        expect(await p.locator('#version-badge').textContent()).toContain(JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')).version);
         expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
         await p.screenshot({ path: join(output, `version-${width}.png`), fullPage: true });
         await p.close();
@@ -545,9 +623,11 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const c=call('ic','router',226,{at:ago(2000)},{choice:'opus · xhigh',model:'jev-1.14.0',input:3394,output:203,costUsd:0.000142548,confidence:0.91,threshold:0.6});
     push([run('i','claude',[c,step('ih','router',{lane:'host',summary:'Model confirmed'})])]);const p=await page();await settle(p);
     await p.locator('#pipeline .node[data-feature=router]').click();const text=await p.locator('#circuit-inspector').textContent();
-    for(const x of ['3.4K → 203','≈$0.00014','226ms','jev-1.14.0'])expect(text).toContain(x);
-    // The card shows the decision and the basis panel its probability; the inspector repeats neither.
-    expect(text).not.toMatch(/Model confirmed|opus · xhigh|91%|60%/);
+    for(const x of ['3,394 → 203','≈$0.00014','226ms','jev-1.14.0'])expect(text).toContain(x);
+    // Full recorded decisions and follow-up status remain readable in the inspector.
+    expect(text).toContain('Model confirmed');
+    expect(text).toContain('opus · xhigh');
+    expect(text).not.toMatch(/91%|60%/);
     expect(await problems(p)).toEqual([]);await p.close();
   });
 
