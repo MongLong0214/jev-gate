@@ -81,7 +81,8 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
       const addedPlugin = cli(['plugin', 'add', 'jev-gate@jev-auto-fixture']); expect(addedPlugin.status, addedPlugin.stderr).toBe(0); installed = true;
       const warm = await run(); expect(warm.code, warm.output).toBe(0);
       expect(existsSync(ownerPath), warm.output).toBe(true);
-      expect(readFileSync(config, 'utf8')).toContain('model_provider = "jev-gate-native"');
+      expect(readFileSync(config, 'utf8')).not.toContain('model_provider =');
+      expect(readFileSync(config, 'utf8')).toMatch(/openai_base_url = "http:\/\/127\.0\.0\.1:\d+\/native\/[a-f0-9]{64}"/);
       expect(readFileSync(config, 'utf8')).not.toContain('compact_prompt');
       const at = requests.length; const connected = await run(); expect(connected.code, connected.output).toBe(0);
       // #282: `codex exec` keeps its model and effort (here config's high) although the fake Jev answers low.
@@ -155,13 +156,17 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
           expect((nativeRequest!['reasoning'] as Obj)['effort'], nativeErrors).toBe(childRequests.find(c => c['request_id'] === response['request_id'])!['submitted_effort']);
         }
         expect(requests.slice(gateStart).length, nativeErrors).toBeGreaterThanOrEqual(5);
+        const completedHooks = events.filter(m => m['method'] === 'hook/completed').map(m => (m['params'] as Obj)['run'] as Obj).filter(r => r['source'] === 'plugin');
+        expect(completedHooks.length, nativeErrors).toBeGreaterThan(0);
+        expect(completedHooks.map(r => r['status']), nativeErrors).not.toContain('failed');
       } finally { rpc.close(); native.kill('SIGTERM'); }
       writeFileSync(config, readFileSync(config, 'utf8') + '\n# Owner edit while connected\n');
       const removed = cli(['plugin', 'remove', 'jev-gate@jev-auto-fixture']); expect(removed.status, removed.stderr).toBe(0); installed = false;
       const until = Date.now() + 10_000;
-      while (readFileSync(config, 'utf8').includes('model_provider = "jev-gate-native"') && Date.now() < until) await new Promise<void>(resolve => setTimeout(resolve, 100));
+      while (readFileSync(config, 'utf8').includes('/native/') && Date.now() < until) await new Promise<void>(resolve => setTimeout(resolve, 100));
       const restored = readFileSync(config, 'utf8');
-      expect(restored).not.toContain('model_provider = "jev-gate-native"');
+      expect(restored).not.toContain('model_provider =');
+      expect(restored).toContain(`openai_base_url = ${JSON.stringify(base)}`);
       expect(restored).toContain('model_reasoning_effort = "high"'); expect(restored).toContain('# Preserve this owner comment'); expect(restored).toContain('# Owner edit while connected');
     } finally {
       if (installed) cli(['plugin', 'remove', 'jev-gate@jev-auto-fixture']);

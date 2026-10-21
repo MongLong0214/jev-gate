@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { helperRequest, installConnection, restoreConnection, type Connection } from '../../src/codex/connection.js';
+import { connectionBaseUrl, helperRequest, installConnection, restoreConnection, type Connection } from '../../src/codex/connection.js';
 import { runCodexHook } from '../../src/codex/hook.js';
 import { startCodexSession } from '../../src/codex/launch.js';
 import { DISPATCH_FAILED } from '../../src/codex/policy.js';
@@ -43,7 +43,7 @@ describe('automatic connection ownership and recovery', () => {
     await restoreConnection(f.rpc, f.env);
     expect(f.config).toMatchObject({ model: 'gpt-6.1-sol', model_reasoning_effort: 'high' });
     expect(f.config['model_provider']).toBeUndefined(); expect(f.config['compact_prompt']).toBeUndefined();
-    expect((f.config['model_providers'] as Obj)['jev-gate-native']).toBeUndefined();
+    expect(f.config['openai_base_url']).toBeUndefined();
     expect(readFileSync(join(f.home, 'jev-gate/connection/owner.json'), 'utf8')).not.toMatch(/TYPESAFE|OPENAI_API_KEY/);
   });
   it('restores explicit owner values and preserves changes made while connected', async () => {
@@ -53,6 +53,31 @@ describe('automatic connection ownership and recovery', () => {
     await restoreConnection(f.rpc, f.env);
     expect(f.config).toMatchObject({ model_provider: 'openai', compact_prompt: 'new owner prompt', model: 'gpt-5.6-terra', model_reasoning_effort: 'max' });
   });
+  it('uses the built-in provider and restores the original compatible endpoint without touching authentication', async () => {
+    const original = { model_provider: 'openai', openai_base_url: 'https://owner.example/v1', model: 'gpt-6.1-sol', model_reasoning_effort: 'high', profile: 'owner', model_providers: { other: { name: 'Owner' } } };
+    const f = fixture(structuredClone(original));
+    await installConnection(f.rpc, f.connection(), f.env);
+    expect(f.config).toEqual({ ...original, openai_base_url: connectionBaseUrl(f.connection()) });
+    expect((f.requests[0]!['edits'] as Obj[]).map(e => e['keyPath'])).toEqual(['openai_base_url']);
+    await restoreConnection(f.rpc, f.env); expect(f.config).toEqual(original);
+  });
+  it('restores the global provider and retains an owned historical alias in the same endpoint transaction', async () => {
+    const legacyProvider = { name: 'Jev Gate / native Codex', base_url: 'http://127.0.0.1:12345' };
+    const f = fixture({ model_provider: 'jev-gate-native', model_providers: { 'jev-gate-native': legacyProvider, other: { name: 'Owner' } }, model: 'gpt-6.1-sol' });
+    const state = f.connection();
+    state.original = { model_provider: 'openai', 'model_providers.jev-gate-native': null };
+    state.installed = { model_provider: 'jev-gate-native', 'model_providers.jev-gate-native': legacyProvider };
+    mkdirSync(join(f.home, 'jev-gate/connection'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(f.home, 'jev-gate/connection/owner.json'), JSON.stringify(state), { mode: 0o600 });
+    await installConnection(f.rpc, f.connection(), f.env);
+    expect(f.requests).toHaveLength(1);
+    expect(f.config).toMatchObject({ model_provider: 'openai', openai_base_url: connectionBaseUrl(f.connection()), model: 'gpt-6.1-sol', model_providers: { other: { name: 'Owner' } } });
+    expect((f.config['model_providers'] as Obj)['jev-gate-native']).toEqual({ ...legacyProvider, base_url: connectionBaseUrl(f.connection()) });
+    await installConnection(f.rpc, f.connection(), f.env);
+    await restoreConnection(f.rpc, f.env);
+    expect(f.config['model_provider']).toBe('openai'); expect(f.config['openai_base_url']).toBeUndefined();
+    expect((f.config['model_providers'] as Obj)['jev-gate-native']).toBeUndefined();
+  });
   it('never replaces a custom provider or an unowned Jev provider', async () => {
     for (const provider of ['owner-endpoint', 'jev-gate-native']) {
       const f = fixture({ model_provider: provider });
@@ -61,10 +86,10 @@ describe('automatic connection ownership and recovery', () => {
   });
   it('refuses reconnecting over owner edits but can restore remaining owned keys', async () => {
     const f = fixture(); await installConnection(f.rpc, f.connection(), f.env);
-    f.config['model_provider'] = 'openai';
+    f.config['openai_base_url'] = 'https://owner.example/v1';
     await expect(installConnection(f.rpc, f.connection(), f.env)).rejects.toThrow();
     await restoreConnection(f.rpc, f.env);
-    expect(f.config['model_provider']).toBe('openai'); expect((f.config['model_providers'] as Obj)['jev-gate-native']).toBeUndefined();
+    expect(f.config['model_provider']).toBeUndefined(); expect(f.config['openai_base_url']).toBe('https://owner.example/v1');
   });
   // #292: versions with Codex Compact wrote this exact compact_prompt and recorded the owner's value before it.
   const legacy = `[jev-gate compact ${'ab'.repeat(24)}] Produce a factual compaction summary of the preceding conversation.`;
@@ -74,7 +99,7 @@ describe('automatic connection ownership and recovery', () => {
     writeFileSync(owner, JSON.stringify({ ...state, marker: legacy, original: { ...state.original, compact_prompt: 'owner prompt' }, installed: { ...state.installed, compact_prompt: legacy } }));
     f.config['compact_prompt'] = legacy;
     await installConnection(f.rpc, f.connection(), f.env);
-    expect(f.config).toMatchObject({ compact_prompt: 'owner prompt', model_provider: 'jev-gate-native' });
+    expect(f.config).toMatchObject({ compact_prompt: 'owner prompt', openai_base_url: connectionBaseUrl(f.connection()) });
     await restoreConnection(f.rpc, f.env);
     expect(f.config['compact_prompt']).toBe('owner prompt'); expect(f.config['model_provider']).toBeUndefined();
   });

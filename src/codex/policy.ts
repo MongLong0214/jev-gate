@@ -93,6 +93,7 @@ export const DISPATCH_FAILED = 'Jev dispatch failed or was interrupted. No compl
 /** A Codex execution adapter over the existing Gate state machine. No policy decisions are delegated to prose. */
 export class CodexPolicy {
   readonly sessions = new Map<string, Session>();
+  hasActiveWorkers(): boolean { return [...this.sessions.values()].some(s => s.dispatch && !s.dispatch.settled); }
   catalog: CodexModel[] = [];
   catalogComplete = false;
   catalogExcluded: Record<string, number> = {};

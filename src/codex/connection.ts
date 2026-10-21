@@ -12,6 +12,8 @@ import type { TraceWriter } from '../trace.js';
 import { resolveApiKey, withApiKey } from '../credentials.js';
 
 export const PROVIDER = 'jev-gate-native';
+/** A local capability, not an upstream credential. Never forwarded or recorded in traces. */
+export const connectionBaseUrl = (connection: Pick<Connection, 'port' | 'token'>): string => `http://127.0.0.1:${connection.port}/native/${connection.token}`;
 /** `marker` is carried over only from versions with Codex Compact, whose still-running readers require it. */
 export interface Connection { version: 1; pid: number; port: number; token: string; marker?: string; root: string; original: Obj; installed: Obj }
 /** The compact_prompt that versions with Codex Compact wrote. No other value is ever treated as theirs. */
@@ -60,22 +62,32 @@ export const installConnection = async (rpc: CodexRpc, connection: Connection, e
   const previous = read(env);
   if (current !== undefined && current !== 'openai' && current !== PROVIDER) throw new Error('custom provider is preserved');
   if (current === PROVIDER && !previous) throw new Error('provider ownership unavailable');
-  const values: Obj = {
-    model_provider: PROVIDER,
-    [`model_providers.${PROVIDER}`]: { name: 'Jev Gate / native Codex', base_url: `http://127.0.0.1:${connection.port}`, wire_api: 'responses', requires_openai_auth: env['JEV_CODEX_CONNECTION_TEST_NO_AUTH'] !== '1', supports_websockets: false, http_headers: { 'x-jev-gate-session': connection.token } },
-  };
+  const values: Obj = { openai_base_url: connectionBaseUrl(connection) };
+  // Native resume restores a thread's historical provider. Keep only an alias
+  // already owned by this installation so old threads resume without overrides.
+  const legacyKey = `model_providers.${PROVIDER}`;
+  if (obj(previous?.installed[legacyKey])) values[legacyKey] = { ...previous!.installed[legacyKey] as Obj, base_url: connectionBaseUrl(connection) };
   for (const key of Object.keys(values)) {
     const actual = valueAt(user.config, key);
     if (previous && key in previous.installed && !equal(actual, previous.installed[key]) && !equal(actual, previous.original[key])) throw new Error('owner modified the connection settings');
     connection.original[key] = previous && Object.hasOwn(previous.original, key) ? previous.original[key] : actual ?? null;
   }
+  // Restore the global selection in the same native transaction. New history
+  // uses the built-in provider; neither rollouts nor its database are edited.
+  const migrated: Obj = {};
+  for (const [key, installed] of Object.entries(previous?.installed ?? {})) {
+    if (!(key in values) && equal(valueAt(user.config, key), installed)) migrated[key] = previous!.original[key] ?? null;
+  }
   // An earlier version's own marker returns to the owner's value from before it; any other compact_prompt is the owner's.
   const legacy = typeof user.config['compact_prompt'] === 'string' && LEGACY_COMPACT_PROMPT.test(user.config['compact_prompt']);
   const prior = previous?.original['compact_prompt'];
   if (legacy) connection.original['compact_prompt'] = typeof prior === 'string' && !LEGACY_COMPACT_PROMPT.test(prior) ? prior : null;
-  connection.installed = values;
+  connection.original = { ...previous?.original, ...connection.original };
+  connection.installed = { ...previous?.installed, ...values };
   write(env, connection); // Recovery facts precede the transaction.
-  await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits: Object.entries(legacy ? { ...values, compact_prompt: connection.original['compact_prompt'] } : values).map(([keyPath, value]) => ({ keyPath, value, mergeStrategy: 'replace' })) });
+  await rpc.request('config/batchWrite', { filePath: user.path, expectedVersion: user.version, reloadUserConfig: false, edits: Object.entries({ ...migrated, ...values, ...(legacy ? { compact_prompt: connection.original['compact_prompt'] } : {}) }).map(([keyPath, value]) => ({ keyPath, value, mergeStrategy: 'replace' })) });
+  connection.installed = values;
+  write(env, connection);
 };
 export const restoreConnection = async (rpc: CodexRpc, env: Env): Promise<void> => {
   const state = read(env); if (!state) return;
@@ -148,9 +160,16 @@ export const ensureConnection = async (root: string, env: Env, signal?: AbortSig
     if (previous && await healthy(previous, signal)) {
       if (previous.root === root || packageVersion(root) <= packageVersion(previous.root)) { await provision(previous, env, signal); return true; }
       // Only a newer installed package can replace an older helper. Old MCP clients cannot downgrade it.
-      try { await fetch(`http://127.0.0.1:${previous.port}/restart`, { method: 'POST', headers: { authorization: `Bearer ${previous.token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(500)]) }); }
+      try {
+        const response = await fetch(`http://127.0.0.1:${previous.port}/restart`, { method: 'POST', headers: { authorization: `Bearer ${previous.token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(500)]) });
+        if (!response.ok) return true; // Busy helpers keep serving; retry the update at a later idle check.
+        const until = Date.now() + 500;
+        while (await healthy(previous, signal)) {
+          if (Date.now() >= until) return false;
+          await delay(25, undefined, { signal });
+        }
+      }
       catch { return false; }
-      return false; // The next supervisor/startup attempt starts the new package after the old lock is released.
     }
     signal.throwIfAborted();
     const child = spawn(process.execPath, [join(root, 'dist', 'cli.mjs'), 'connection-serve'], { cwd: root, env, detached: true, stdio: 'ignore' });
@@ -205,7 +224,8 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
     state.port = Number(new URL(session.url).port);
     const user = await userConfig(session.rpc);
     if (!env['JEV_CODEX_UPSTREAM']) {
-      const upstream = env['OPENAI_BASE_URL'] ?? user.config['openai_base_url'];
+      const configured = user.config['openai_base_url'];
+      const upstream = env['OPENAI_BASE_URL'] ?? (previous && equal(configured, previous.installed['openai_base_url']) ? previous.original['openai_base_url'] : configured);
       if (typeof upstream === 'string') env['JEV_CODEX_UPSTREAM'] = upstream;
     }
     if (await installedPlugins() !== 1) throw new Error('one enabled native installation required');

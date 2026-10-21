@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.37 — 2026-10-21 — Preserve the native Codex provider
+
+- Automatically configure the official `openai_base_url` endpoint instead of replacing the global provider (#304). Preserve native authentication, model, effort, comments and user settings, and restore only the owned legacy global provider selection while retaining its owned table as a historical-resume alias with Codex's revision-checked writer.
+- Authenticate the local endpoint with a private capability, strip it before forwarding, and use Codex 0.163.0's official 426-to-SSE fallback before inference. No WebSocket state reconstruction or extra inference retry is introduced.
+- Keep the serving helper during active inference, hooks or owned workers when an update is requested. An idle update starts its replacement within the existing startup deadline; old clients cannot downgrade it.
+- Verify actual native installation, continuation, worker, compaction, hook completion, crash recovery and settings restoration with local scripted APIs. List both historical providers and resume their exact thread IDs through the built-in endpoint without changing stored history. Codex's default picker still filters providers even with `--all`; this host limitation remains documented.
+- No total-token reduction or quality-equivalent product savings was measured here. Router cost policy and actual token effect remain tracked in #300.
+
 ## v0.8.36 — 2026-10-21 — Readable live execution circuit
 
 - Balance the five Claude stages and four Codex stages across responsive rows, with a shared Jev rail on wide screens (#302). Real responses trigger the signal, glow and pulse effects; idle data does not invent activity.

@@ -58,7 +58,7 @@ export const handleCodexEvent = (input: Rec, env: CodexHookDeps['env'], trace?: 
     model: token(input['model']),
     ...toolOutcome(input['tool_response']),
     interrupted: event === 'Interrupt',
-    // A session keeps the provider it started with: one started without the connection is never routed.
+    // Start metadata names the historical provider, not the loaded inference endpoint.
     ...routing,
   };
   const eventRecord = trace?.write('codex_event', base);
@@ -103,16 +103,16 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     const startup = (!bridge || !secret) && deps.env['JEV_CODEX_AUTO_CONNECT'] !== '0' && input['hook_event_name'] === 'SessionStart' && input['source'] === 'startup';
     const started = startup ? startedSession(input) : null;
     const provider = started?.['model_provider'];
-    // Without start metadata (an ephemeral session has no transcript, or it is unreadable or another session's) the provider is unknown, never routed;
-    // only an absent connection owner, read before this hook may start one, proves the session cannot have started connected. A live helper proves nothing.
-    const owner = startup && !started ? connectionOwner(deps.env) : null;
-    const routing = typeof provider === 'string' && provider !== PROVIDER ? { routed: false, model_provider: token(provider) }
-      : owner === 'absent' ? { routed: false, model_provider: null } : owner ? { routed: 'unknown', model_provider: null } : undefined;
+    // Built-in openai can use either endpoint, and a resumed rollout can name an
+    // earlier provider. Only actual proxy requests prove routing.
+    const owner = startup ? connectionOwner(deps.env) : null;
+    const routing = startup && (provider !== PROVIDER || !started)
+      ? { routed: owner === 'absent' ? false : 'unknown', model_provider: token(provider) } : undefined;
     const opened = (deps.openTrace ?? openTraceDir)(codexTraceDir(deps.env), deps.env);
     const recorded = handleCodexEvent(input, deps.env, opened.ok ? opened.writer : undefined, routing);
     // The user sees these; the model does not. `codex exec` keeps its model and effort, so it needs no notice.
     const notice = routing?.routed === false ? { systemMessage: `Jev Gate: this session started ${routing.model_provider ? `on model provider ${JSON.stringify(routing.model_provider)} ` : ''}without the Jev Gate connection, so Router does not apply to it. Start a new session once the connection is ready.` }
-      : routing ? { systemMessage: 'Jev Gate: Codex reported no usable start metadata for this session, so whether Router applies to it is unknown. Run doctor, then start a new session once the connection is ready.' }
+      : routing ? { systemMessage: 'Jev Gate: whether this session loaded the connection is unknown until a model request is observed. Start metadata and a running helper do not establish Router application.' }
       : started && started['originator'] !== 'codex_exec' ? { systemMessage: 'Jev Gate: Router may change the model and effort of this interactive session, including a model given with -m/--model; Codex reports no signal that separates it from config defaults. codex exec keeps its model and effort.' } : {};
     const automatic = !bridge || !secret;
     if (automatic) {
@@ -128,7 +128,7 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
       return { ...recorded, ...notice };
     }
     if (Object.keys(reply.value).length) return { ...reply.value, ...notice };
-    if (automatic && input['hook_event_name'] === 'SessionStart') return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router applies only when actual model requests pass through the local connection; a host already running before installation retains its previous provider until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' }, ...notice };
+    if (automatic && input['hook_event_name'] === 'SessionStart') return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Jev Gate native hooks and jev_agent dispatch are available. Follow the current Gate guidance and use jev_agent for owned dispatches. Router applies only when actual model requests pass through the local connection; a host already running before installation retains its previous endpoint until restarted. Native permissions and user constraints remain authoritative. Do not claim unobserved policies ran.' }, ...notice };
     return { ...recorded, ...notice };
   } catch {
     // Hook failures preserve native behavior. No exception messages containing input reach stdout/stderr.
