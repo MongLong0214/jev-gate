@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.34 — 2026-10-21 — Codex hook deadlines
+
+- Keep native Codex hooks within their host deadlines (#305). SessionEnd and Interrupt now share a 2.2-second internal budget; other events share 4.2 seconds. Startup health checks, credential provisioning, connection polling and the helper request consume the same budget, leaving time for process startup and the baseline JSON response before the host's 3/5-second limits.
+- A stalled helper returns the native baseline instead of waiting beyond the host deadline. An isolated compiled SessionEnd process exited successfully in 2.31 seconds with `{}` and no stderr. This verifies the timeout repair, not the cause of every reported Hook failed alert; their native completion details remain unavailable.
+- The broader worker collection/tool guard (#303), provider/history compatibility (#304), dashboard redesign (#302) and measured Router token effect (#300) remain separate work. No token reduction or cost improvement was measured for this patch.
+
 ## v0.8.33 — 2026-10-21 — Credential forms and faithful activity status
 
 - Screen CLI credentials after global options with values, across shell line continuations, and in supported short-flag clusters (#295). Literal credentials and environment/template references are tested as pairs; the Router uses the same screen.
