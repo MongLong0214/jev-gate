@@ -446,6 +446,25 @@ describe('Gate A admission', () => {
     expect(body['hookSpecificOutput']).toBeUndefined();
   });
 
+  it.each(['claude', 'codex'] as const)('explains unknown depth using the actual %s source without asking Gate A (#311)', async host => {
+    const env = makeEnv();
+    const fetchImpl = fakeJev();
+    const extra: Partial<HookDeps> = host === 'codex' ? { host: {
+      id: 'codex', config: { ...DEFAULT_CONFIG, mode: 'auto' }, compactWindow: 200000,
+      depth: () => ({ ok: false, reason: 'depth_unknown', bytesRead: 0, durationMs: 0 }), observation: () => null,
+    } } : {};
+    const r = await run(env, { ...promptEvent(), transcript_path: undefined }, fetchImpl, extra);
+    expect(r).toMatchObject({ kind: 'notice', code: 'depth_unknown' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(state(env).current.shape).toBe('direct');
+    const body = JSON.parse(r.stdout!) as Record<string, unknown>;
+    expect(body['hookSpecificOutput']).toBeUndefined();
+    if (host === 'codex') {
+      expect(body['systemMessage']).toContain('native Codex token usage is unavailable');
+      expect(body['systemMessage']).not.toMatch(/transcript|claude|Single-prompt automation/);
+    } else expect(body['systemMessage']).toContain('claude -p');
+  });
+
   it('carries the depth into the record of an admitted job, so a bench case can prove it primed the session', async () => {
     const dir = join(tmp, 'trace-deep');
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });

@@ -112,6 +112,8 @@ export type HookResult =
 /** #114: shown to the user (not the model) when Gate A was skipped because the session depth could not be read. */
 export const DEPTH_UNKNOWN_NOTICE =
   'jev-gate: Gate A was not asked on this prompt because the session depth could not be read from the transcript (the first prompt of a session and every headless `claude -p` single turn look like this). Recorded as depth_unknown; the turn runs natively. Single-prompt automation therefore never reaches the gate.';
+const CODEX_DEPTH_UNKNOWN_NOTICE =
+  'jev-gate: Gate A was not asked on this prompt because native Codex token usage is unavailable. Recorded as depth_unknown; the turn runs natively. Router application is determined separately from actual model requests.';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -915,7 +917,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (!currentAdmission()) return skip(deps.signal?.aborted ? 'aborted' : 'generation_changed');
     if (Date.now() >= hookDeadline) return skip('deadline_exhausted');
     if (shape === 'direct') {
-      const stdout = reason === 'depth_unknown' ? renderSystemMessage(DEPTH_UNKNOWN_NOTICE) : null;
+      const stdout = reason === 'depth_unknown' ? renderSystemMessage(deps.host?.id === 'codex' ? CODEX_DEPTH_UNKNOWN_NOTICE : DEPTH_UNKNOWN_NOTICE) : null;
       return stdout === null ? skip(reason) : { kind: 'notice', code: reason, stdout };
     }
     // A17: an orchestrated turn keeps its request, because the worker receives it verbatim as the task. Stored whole or
