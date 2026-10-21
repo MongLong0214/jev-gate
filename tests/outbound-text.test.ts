@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { estimateTokens, looksSecret } from '../src/outbound-text.js';
 import { looksSecret as routerLooksSecret } from '../src/router-secret.js';
 
-import { ASSIGNMENT_CONTEXTS, CREDENTIAL_WORDS, KEY_SPELLINGS } from './fixtures/credential-corpus.js';
+import { ASSIGNMENT_CONTEXTS, CLI_CREDENTIAL_CASES, CLI_CREDENTIAL_NEGATIVES, CREDENTIAL_WORDS, KEY_SPELLINGS } from './fixtures/credential-corpus.js';
 
 // Each exclusion has a whole-value negative and a value with literal material beside the same shape.
 // Already anchored masks/thresholds are preservation cases; the partial reference/path/call cases reproduce J1.
@@ -191,10 +191,23 @@ const PERFORMANCE_CASES = [
   { label: 'SAS prefixes', text: 'SharedAccessSignature='.repeat(4_762), secret: false },
   { label: 'Docker prefixes', text: '"auths":{'.repeat(11_111), secret: false },
   { label: 'realistic query', text: ('https://example.test/?' + Array.from({ length: 2_000 }, (_, i) => `item${i}=ordinary${i}`).join('&')).slice(0, 40_000), secret: false },
+  { label: 'CLI repeated tools', text: 'curl --silent '.repeat(7_700), secret: false },
+  { label: 'CLI reference operands', text: 'curl ' + '-u "${USER}:${PASS}" '.repeat(5_000), secret: false },
+  { label: 'CLI failed Basic operand', text: 'curl -u ' + 'u'.repeat(100_000), secret: false },
+  { label: 'CLI literal operand', text: 'curl -u user:' + 'p'.repeat(100_000), secret: true },
+  { label: 'CLI environment references', text: 'PGPASSWORD=${PASS} '.repeat(5_556), secret: false },
   { label: 'minified bundle', text: '(()=>{const a=1,b="ordinary";function f(x){return x+a}window.result=f(b.length)})();'.repeat(1_400).slice(0, 106_000), secret: false },
 ];
 
 describe.each([['core', looksSecret], ['router', routerLooksSecret]] as const)('outbound text — %s credential screen', (_screen, looksSecret) => {
+  it.each(CLI_CREDENTIAL_CASES)('M1 CLI credential corpus | $tool | $label | $variant', ({ text, secret }) => {
+    expect(looksSecret(text)).toBe(secret);
+  });
+
+  it.each(CLI_CREDENTIAL_NEGATIVES)('M1 CLI exclusion | %s', text => {
+    expect(looksSecret(text)).toBe(false);
+  });
+
   it.each(PERFORMANCE_CASES)('performance: screens $label without rescanning overlapping values', ({ text, secret }) => {
     const started = performance.now();
     const result = looksSecret(text);

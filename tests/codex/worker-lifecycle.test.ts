@@ -113,6 +113,7 @@ describe('Codex status collection and deny tracing (#293)', () => {
   });
 
   it.each([false, true].flatMap(background => [
+    ...['-u', '--user'].map(flag => ({ label: `M1 curl ${flag}`, text: `curl ${flag} 'reviewer:synthetic-canary-123' https://example.test`, canaries: ['synthetic-canary-123'] })),
     { label: 'bare Jev key', text: 'jv_live_' + '0123456789abcdef'.repeat(4), canaries: ['jv_live_' + '0123456789abcdef'.repeat(4)] },
     { label: 'K1 quoted JSON Cookie', text: '{"Cookie":"custom_login=a1b2c3d4e5f6g7h8"}', canaries: ['a1b2c3d4e5f6g7h8'] },
     { label: 'K2 quoted password default', text: 'password="${PASSWORD:-hunter2}"', canaries: ['hunter2'] },
@@ -124,7 +125,7 @@ describe('Codex status collection and deny tracing (#293)', () => {
     ...['PASSWORD=correct.horse.battery.staple', 'access_token=ya29.a0AfH6SMBsynthetic1234567890',
       'PASSWORD=CorrectHorseBatteryStaple', 'api_key=abcdefghijklmnopqrstuvwxyz', 'password=abcdefghijklmnop',
       'export API_KEY=abcdefghijklmnopqrstuv', 'DB_PASSWORD=Sup3rSecretValue'].map(text => ({ label: text, text, canaries: [text.split('=')[1]!] })),
-  ].map(test => ({ ...test, background }))))('H1/F1/G1/I1/J1/K1/K2/L1: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
+  ].map(test => ({ ...test, background }))))('H1/F1/G1/I1/J1/K1/K2/L1/M1: removes credentials from Codex foreground, status and background replay ($label, background=$background)', async ({ background, text, canaries }) => {
     const f = await setup('normal'); const launch = f.launch(background);
     await vi.waitFor(() => expect(f.started()).toBe(true)); if (background) await launch;
     f.terminal('completed', JSON.stringify({ status: 'blocked', summary: text, changed_files: ['src/result.ts', text], blockers: [text, 'Needs integration'], interfaces: ['integrate(): void', text], checks: [] }));
