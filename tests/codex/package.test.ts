@@ -47,6 +47,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 describe('installed Codex archive', () => {
   it('B1: ships and executes the isolated worker snapshot helper', () => {
     expect(existsSync(join(installed, 'LICENSE'))).toBe(true);
+    const manifest = JSON.parse(readFileSync(join(installed, '.codex-plugin/plugin.json'), 'utf8'));
+    for (const field of ['logo', 'composerIcon']) {
+      expect(readFileSync(join(installed, manifest.interface[field]))).toEqual(readFileSync(join(root, '.claude-plugin/icon.png')));
+    }
     const cwd = join(tmp, 'snapshot project'); mkdirSync(cwd);
     for (const args of [['init', '-q'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'fixture']]) {
       const run = spawnSync('git', args, { cwd, env: shellEnv, encoding: 'utf8' }); expect(run.status, run.stderr).toBe(0);

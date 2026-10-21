@@ -14,6 +14,7 @@ const hasZip = spawnSync('unzip', ['-v'], { encoding: 'utf8' }).status === 0;
 
 // The root README's install targets (#95, #98).
 const INSTALL_DOCS = [
+  '.claude-plugin/icon.png',
   'LICENSE',
   'README.md',
   'AGENTS.md',
@@ -191,7 +192,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     const list = spawnSync('unzip', ['-Z1', join(outDir, `jev-gate-router-${manifest.version}.zip`)], { encoding: 'utf8' }).stdout.trim().split('\n');
     const modules = readdirSync(join(root, 'mods', 'router', 'hooks')).filter((n) => n.endsWith('.ts'));
     const files = list.filter((f) => !f.endsWith('/')).sort();
-    expect(files).toEqual(['.claude-plugin/plugin.json', 'LICENSE', 'README.md', 'hooks/hooks.json', 'dist/router-observation-hook.js', ...modules.map((n) => `hooks/${n}`), ...['cost','provider-prices','provider-prices-data','route-cost','claude-cache','claude-dispatch','router-answers','router-selection','router-context','router-child-context','router-observation','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
+    expect(files).toEqual(['.claude-plugin/plugin.json', '.claude-plugin/icon.png', 'LICENSE', 'README.md', 'hooks/hooks.json', 'dist/router-observation-hook.js', ...modules.map((n) => `hooks/${n}`), ...['cost','provider-prices','provider-prices-data','route-cost','claude-cache','claude-dispatch','router-answers','router-selection','router-context','router-child-context','router-observation','router-secret','claude-models','claude-candidates','frontier-routing'].map(n => `src/${n}.ts`)].sort());
     // Only the bounded transcript reader is compiled; declarations, host tests and legacy agents stay out.
     expect(list.filter(f => f !== 'dist/router-observation-hook.js').some((f) => /^(types|tests|dist|agents)\//.test(f))).toBe(false);
     const dest = join(tmp, 'router installed', 'jev router');

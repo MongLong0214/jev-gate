@@ -46,7 +46,7 @@ const ROUTER = 'mods/router';
 const routerHooks = () =>
   existsSync(join(root, ROUTER, 'hooks')) ? readdirSync(join(root, ROUTER, 'hooks')).filter((n) => n.endsWith('.ts') || n === 'hooks.json').sort() : [];
 
-const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'dist/worktree.mjs', 'dist/activity-worker.mjs', 'skills/jev-gate/SKILL.md', 'README.md'];
+const CODEX_FILES = ['.codex-plugin/plugin.json', '.agents/plugins/marketplace.json', '.mcp.json', 'hooks/hooks.json', 'dist/hook.mjs', 'dist/server.mjs', 'dist/cli.mjs', 'dist/worktree.mjs', 'dist/activity-worker.mjs', 'skills/jev-gate/SKILL.md', 'README.md', 'assets/icon.png'];
 
 // The one jev-gate plugin (v0.6.0) also carries the two Mods, loaded through hooks/register.ts from their source, and
 // the MCP server bundle, at the paths the manifest and that module name.
@@ -84,6 +84,7 @@ const entries =
     : profile === 'router'
     ? [
         ['LICENSE', 'LICENSE'],
+        ['.claude-plugin/icon.png', '.claude-plugin/icon.png'],
         [`${ROUTER}/.claude-plugin/plugin.json`, '.claude-plugin/plugin.json'],
         [`${ROUTER}/hooks/hooks.json`, 'hooks/hooks.json'],
         ...routerHooks()
@@ -95,6 +96,7 @@ const entries =
       ]
     : [
         ['.claude-plugin/plugin.json', '.claude-plugin/plugin.json'],
+        ['.claude-plugin/icon.png', '.claude-plugin/icon.png'],
         ['hooks/hooks.json', 'hooks/hooks.json'],
         ...agents.map((a) => [`agents/${a}.md`, `agents/${a}.md`]),
         ...['README.md', 'AGENTS.md', '.env.example', 'package.json'].map((f) => [f, f]),
