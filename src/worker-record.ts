@@ -75,7 +75,7 @@ export const workerTraceData = (phase: string, body: Record<string, unknown>): R
   if ('failure_category' in body) out['failure_category'] = CODEX_FAILURE_CATEGORIES.includes(body['failure_category'] as typeof CODEX_FAILURE_CATEGORIES[number]) ? body['failure_category'] : 'worker_failed';
   if ('error_first_line' in body) {
     const value = body['error_first_line'];
-    out['error_first_line'] = typeof value === 'string' && ([...CODEX_FAILURE_CATEGORIES, 'worker_failed', 'worker_cancelled', 'settlement_pending'].includes(value) || /^(?:dispatch_(?:rpc_(?:closed|timeout|unavailable|rejected|write)|aborted|timeout|exception)|connection_(?:state_missing|unreachable|http_error|timeout|aborted|invalid_reply))$/.test(value)) ? value : 'worker_failed';
+    out['error_first_line'] = typeof value === 'string' && ([...CODEX_FAILURE_CATEGORIES, 'worker_failed', 'worker_cancelled', 'settlement_pending'].includes(value) || /^(?:(?:dispatch|collection)_(?:rpc_(?:closed|timeout|unavailable|rejected|write)|aborted|timeout|exception)|connection_(?:state_missing|unreachable|http_error|timeout|aborted|invalid_reply))$/.test(value)) ? value : 'worker_failed';
   }
   const verification = body['verification'];
   if (verification && typeof verification === 'object') {

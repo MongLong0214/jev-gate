@@ -8,7 +8,6 @@ import { CodexRpc, RpcRequestError } from '../../src/codex/rpc.js';
 import { looksSecret } from '../../src/outbound-text.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import { AGENT_TOOL } from '../../src/codex/profiles.js';
-import { readOnlyCommand, writeTargets } from '../../src/codex/write-scope.js';
 import { readJob, updateJob, newGeneration, cleanupJobs, jobPath } from '../../src/job.js';
 import { buildOperations } from '../../src/operations.js';
 import { loadActivity } from '../../src/activity.js';
@@ -32,6 +31,7 @@ const setup = async (scenario = 'uncertain', started = true, workerIsolation?: '
   const notify = (method: string, params: Obj) => input.write(JSON.stringify({ method, params }) + '\n');
   let start: Obj | undefined;
   let collectedTurn: Obj | undefined;
+  let ephemeral = true;
   const env = { HOME: root, ...(workerIsolation === 'worktree' ? { PATH: `${root}:/usr/bin:/bin:${dirname(process.execPath)}` } : {}), JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_GATE_STATE_DIR: join(root, 'state'), ...(scenario !== 'adhoc' ? { JEV_GATE_EXPERIMENT_ADMISSION: 'orchestrated' } : {}) };
   const stateEnv = { JEV_GATE_STATE_DIR: join(env.JEV_GATE_STATE_DIR, 'codex') };
   const policy = new CodexPolicy(rpc, env, undefined, { 'jev-gate:worker': 'Return a result' }, true);
@@ -45,6 +45,7 @@ const setup = async (scenario = 'uncertain', started = true, workerIsolation?: '
       if (m['method'] === 'hooks/list') reply(m['id'], { data: [{ hooks: ['sessionStart','userPromptSubmit','preToolUse','postToolUse','stop'].map(eventName => ({ eventName, key: eventName, source: 'plugin', pluginId: 'jev-gate@fixture', enabled: true })) }] });
       if (m['method'] === 'config/read') reply(m['id'], { config: {} });
       if (m['method'] === 'thread/start') {
+        ephemeral = (m['params'] as Obj)['ephemeral'] === true;
         if (scenario === 'reservation-lock') unlock = lock();
         if (scenario === 'conflict') {
           // Another session's unsettled execution holds this workspace for every attempt.
@@ -55,7 +56,10 @@ const setup = async (scenario = 'uncertain', started = true, workerIsolation?: '
         else reply(m['id'], { model: 'gpt-6.1-sol', cwd: (m['params'] as Obj)['cwd'], sandbox: { type: 'dangerFullAccess' }, thread: { id: 'worker' } });
       }
       if (m['method'] === 'turn/start') { start = m; if (started) notify('turn/started', { threadId: 'worker', turn: { id: 'turn-w' } }); if (['normal', 'adhoc'].includes(scenario)) reply(m['id'], { turn: { id: 'turn-w' } }); }
-      if (m['method'] === 'thread/read') reply(m['id'], { thread: { id: 'worker', turns: collectedTurn ? [collectedTurn] : [] } });
+      if (m['method'] === 'thread/read') {
+        if (ephemeral && (m['params'] as Obj)['includeTurns'] === true) input.write(JSON.stringify({ id: m['id'], error: { code: -32600, message: 'ephemeral threads do not support includeTurns' } }) + '\n');
+        else reply(m['id'], { thread: { id: 'worker', turns: collectedTurn ? [collectedTurn] : [] } });
+      }
       if (m['method'] === 'turn/interrupt' || m['method'] === 'thread/archive') reply(m['id'], {});
     }
   });
@@ -262,7 +266,7 @@ describe('Codex status collection and deny tracing (#293)', () => {
     const f = await setup('normal'); await f.launch(true);
     const text = JSON.stringify({ status, summary: 'collected terminal result', changed_files: [], interfaces: [], checks: [], blockers: status === 'blocked' ? ['blocked'] : [] });
     f.collect({ id: 'turn-w', status: status === 'failed' ? 'failed' : 'completed', items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text }] });
-    expect(JSON.stringify(await write(f))).toContain('deny');
+    expect(await write(f)).toEqual({});
     const first = await f.status('collected-1');
     expect(first).toContain(status === 'failed' ? 'native_failed_turn' : 'collected terminal result');
     expect(await f.status('collected-2')).toBe(first.replace('collected-1', 'collected-2'));
@@ -272,28 +276,27 @@ describe('Codex status collection and deny tracing (#293)', () => {
     expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
     expect(f.sent.filter(m => m['method'] === 'thread/read')).toHaveLength(1);
   });
-  it('keeps a genuinely running worker protected and records the reservation and reason for every deny', async () => {
+  it('retains an unobserved worker reservation without denying native tools', async () => {
     const f = await setup('normal'); await f.launch(true);
     f.collect({ id: 'turn-w', status: 'inProgress', items: [] });
-    expect(await f.status('running')).toContain('still running');
+    expect(await f.status('running')).toContain('terminal_not_observed');
     for (let i = 0; i < 2; i++) {
       const output = JSON.stringify(await write(f));
-      expect(output).toContain('worker'); expect(output).toContain('terminal_not_observed');
+      expect(output).toBe('{}');
     }
     expect(f.job().current.active['dispatch']).toBeDefined();
     expect(f.sent.some(m => m['method'] === 'turn/interrupt')).toBe(false);
-    const rows = f.traces('dispatch_denied'); expect(rows).toHaveLength(2);
-    for (const row of rows) expect(row).toMatchObject({ host: 'codex', session_id: 'parent', prompt_id: 'p', tool_use_id: 'root-write', tool_name: 'Write', reason: 'write_conflict', agent_id: 'worker', reservation_id: 'worker', settlement_reason: 'terminal_not_observed' });
+    const rows = f.traces('dispatch_denied'); expect(rows).toHaveLength(0);
     expect(JSON.stringify(rows)).not.toContain('PRIVATE_CONTENT');
   });
-  it('does not collect a different turn or release protection after collection fails', async () => {
+  it('does not accept a different turn or release the reservation after collection fails', async () => {
     const f = await setup('normal'); await f.launch(true);
     f.collect({ id: 'another-turn', status: 'completed', items: [] });
-    expect(await f.status('wrong-turn')).toContain('still running');
-    expect(JSON.stringify(await write(f))).toContain('terminal_not_observed');
+    expect(await f.status('wrong-turn')).toContain('terminal_not_observed');
+    expect(await write(f)).toEqual({});
     vi.spyOn(f.rpc, 'request').mockRejectedValueOnce(new Error('PRIVATE_EXCEPTION'));
-    expect(await f.status('failed-read')).toContain('collection_failed');
-    expect(JSON.stringify(await write(f))).toContain('collection_failed');
+    expect(await f.status('failed-read')).toContain('collection_exception');
+    expect(await write(f)).toEqual({});
     expect(f.job().current.active['dispatch']).toBeDefined();
     expect(JSON.stringify(f.traces('dispatch_denied'))).not.toContain('PRIVATE_EXCEPTION');
   });
@@ -303,10 +306,10 @@ describe('Codex status collection and deny tracing (#293)', () => {
     f.collect({ id: 'turn-w', status, items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text: JSON.stringify({ status: 'done', summary: 'terminal result kept', checks: [] }) }] });
     const pending = await f.status('pending');
     expect(pending).toContain('Reservation worker: state_locked'); expect(pending).not.toContain('terminal result kept');
-    expect(JSON.stringify(await write(f))).toContain('Reservation worker: state_locked');
+    expect(await write(f)).toEqual({});
     expect(f.job().current.active['dispatch']).toBeDefined(); expect(f.job().current.receipts).toHaveLength(0);
     expect(f.traces('failure')).toContainEqual(expect.objectContaining({ reservation_id: 'worker', settlement_reason: 'state_locked', release_unconfirmed: true }));
-    expect(f.traces('dispatch_denied')).toMatchObject([{ reservation_id: 'worker', settlement_reason: 'state_locked' }]);
+    expect(f.traces('dispatch_denied')).toEqual([]);
     rmSync(`${path}.lock`, { recursive: true });
     expect(await f.status('retry')).toContain(status === 'failed' ? 'native_failed_turn' : 'terminal result kept');
     expect(f.job().current.active).toEqual({}); expect(f.job().current.receipts).toHaveLength(1);
@@ -320,8 +323,10 @@ describe('Codex status collection and deny tracing (#293)', () => {
     f.collect({ id: 'turn-w', status: 'completed', items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text: '{"status":"done"}' }] });
     expect(await f.status('done-1')).toContain('done'); expect(await f.status('done-2')).toContain('done');
     expect(f.job().current.active).toEqual({});
-    expect(JSON.stringify(await write(f))).toContain('Reservation other-worker: host_process_running');
-    expect(f.traces('dispatch_denied')).toMatchObject([{ reservation_id: 'other-worker', settlement_reason: 'host_process_running' }]);
+    expect(await write(f)).toEqual({});
+    expect(f.traces('dispatch_denied')).toEqual([]);
+    const holder = readJob(f.stateEnv, 'holder');
+    expect(holder.ok && holder.value?.current.active['held']?.codex_execution?.thread_id).toBe('other-worker');
   });
   it.each([
     ['jev-gate:worker', 'jev_agent', 'owned_child_dispatch'],
@@ -390,7 +395,7 @@ describe('Codex genuine terminal settlement (#139)', () => {
     expect(f.job().current.active['dispatch']?.codex_execution?.thread_id).toBe('worker');
     expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
     const write = await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_name: 'Write', tool_input: { file_path: join(f.root, 'src/file') } });
-    expect(JSON.stringify(write)).toContain('deny');
+    expect(write).toEqual({});
     expect(await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_name: 'Read', tool_input: { file_path: join(f.root, 'src/file') } })).toEqual({});
     expect(f.sent.some(m => m['method'] === 'thread/archive')).toBe(false);
     f.terminal(); await vi.waitFor(() => expect(Object.keys(f.job().current.active)).toHaveLength(0));
@@ -415,7 +420,7 @@ describe('Codex genuine terminal settlement (#139)', () => {
     expect(cleanupJobs(f.stateEnv, Date.now() + 100 * 24 * 3600000)).toBe(0);
     await f.policy.nativeHook({ hook_event_name: 'Stop', session_id: 'parent' });
     const conflict = await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_name: 'Edit', tool_input: { file_path: join(f.root, 'src/file') } });
-    expect(JSON.stringify(conflict)).toContain('deny');
+    expect(conflict).toEqual({});
     f.terminal(); await vi.waitFor(() => expect(f.job().history.find(g => g.prompt_id === 'p')?.receipts).toHaveLength(1));
     expect(f.job().current.receipts).toHaveLength(0);
     expect(f.parent.controller.signal.aborted).toBe(false);
@@ -449,7 +454,7 @@ describe('Codex genuine terminal settlement (#139)', () => {
     expect(f.job().current.receipts).toHaveLength(1); expect(Object.keys(f.job().current.active)).toHaveLength(0);
     expect(f.sent.some(m => m['method'] === 'thread/read')).toBe(false);
   });
-  it('protects only the managed write paths while allowing unrelated projects and status', async () => {
+  it('leaves both managed paths and unrelated projects to native permissions', async () => {
     const f = await setup(); await f.launch();
     updateJob(f.stateEnv, 'parent', prev => prev ? { ...prev, current: { ...prev.current, active: { ...prev.current.active, dispatch: { ...prev.current.active['dispatch']!, deliverables: ['src/owned.ts'] } } } } : null);
     for (const [tool, tool_input] of [['Write', { file_path: join(f.root, 'src/unrelated.ts') }], ['Bash', { command: 'git status --short' }]] as const) {
@@ -458,7 +463,7 @@ describe('Codex genuine terminal settlement (#139)', () => {
     await f.rpc.onResponse({ model: 'gpt-6.1-sol', cwd: join(f.root, '../different-project'), sandbox: { type: 'dangerFullAccess' }, thread: { id: 'other' } }, 'thread/start', {});
     const other = f.policy.sessions.get('other')!; other.prompt = 'other'; other.controller = new AbortController();
     expect(await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'other', tool_name: 'Write', tool_input: { file_path: join(f.root, '../different-project/src/file.ts') } })).toEqual({});
-    expect(JSON.stringify(await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_name: 'Write', tool_input: { file_path: join(f.root, 'src/owned.ts') } }))).toContain('deny');
+    expect(await f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', tool_name: 'Write', tool_input: { file_path: join(f.root, 'src/owned.ts') } })).toEqual({});
     f.terminal();
     await vi.waitFor(() => expect(f.job().current.receipts).toHaveLength(1));
   });
@@ -547,204 +552,29 @@ describe('Codex dispatch failure reason (#233)', () => {
     expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
   });
 });
-describe('Codex write scope from native tool targets (#234)', () => {
-  // Codex 0.162.1 hook shapes: apply_patch -> { command: patch }; exec_command -> Bash { command }, its workdir not reported.
-  const scoped = async () => {
-    const f = await setup(); await f.launch();
-    const other = mkdtempSync(join(tmpdir(), 'jev-unrelated-')); cleanups.push(() => rmSync(other, { recursive: true, force: true }));
-    const hook = (tool_name: string, tool_input: Obj, cwd = f.root) => f.policy.nativeHook({ hook_event_name: 'PreToolUse', session_id: 'parent', cwd, tool_name, tool_input });
-    const blocked = async (tool_name: string, tool_input: Obj, cwd?: string) => JSON.stringify(await hook(tool_name, tool_input, cwd)).includes('terminal settlement');
-    return { ...f, other, hook, blocked };
-  };
-  const patch = (...lines: string[]) => ({ command: `*** Begin Patch\n${lines.join('\n')}\n*** End Patch\n` });
-  const add = (path: string) => `*** Add File: ${path}\n+export const x = 1;`;
-  it('E1: checks root git grep pagers against an active worker reservation', async () => {
-    const f = await scoped();
-    const protectedFile = join(f.root, 'protected.txt'); writeFileSync(protectedFile, 'original');
-    updateJob(f.stateEnv, 'parent', prev => prev ? { ...prev, current: { ...prev.current, active: { ...prev.current.active,
-      dispatch: { ...prev.current.active['dispatch']!, deliverables: ['protected.txt'] } } } } : null);
-    for (const option of [`--open-files-in-pager='printf PAGER_EXECUTED'`, `-O'printf PAGER_EXECUTED'`, '-Oprintf',
-      `--open-files-in='printf PAGER_EXECUTED'`, `-nO'printf PAGER_EXECUTED'`]) {
-      const command = `git grep --no-textconv ${option} original -- ${protectedFile}`;
-      expect(await f.blocked('Bash', { command }), command).toBe(true);
-      expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other), command).toBe(true);
-      expect(await f.blocked('Bash', { command: `cd ${f.other} && ${command}` }), command).toBe(true);
-      expect(await f.blocked('exec_command', { cmd: `git grep --no-textconv ${option} original -- input.txt`, workdir: f.other }, f.other), option).toBe(true);
+describe('Codex native tools during pending collection (#303)', () => {
+  it('preserves native tool inputs without releasing or duplicating the pending worker', async () => {
+    const f = await setup('normal'); await f.launch(true);
+    vi.spyOn(f.rpc, 'request').mockRejectedValueOnce(new RpcRequestError('rejected', true));
+    expect(await f.status('failed-read')).toContain('collection_rpc_rejected');
+    expect(f.traces('failure')).toContainEqual(expect.objectContaining({ error_first_line: 'collection_rpc_rejected', release_unconfirmed: true }));
+    for (const [tool_name, tool_input] of [
+      ['Bash', { command: 'node -e "console.log(1)"' }],
+      ['exec_command', { cmd: 'python3 diagnostic.py', workdir: f.root }],
+      ['Bash', { command: 'codex resume --all' }],
+      ['apply_patch', { command: '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch' }],
+      ['Write', { file_path: join(f.root, 'src/a.ts'), content: 'changed' }],
+    ] as const) {
+      const input = { hook_event_name: 'PreToolUse', session_id: 'parent', cwd: f.root, tool_name, tool_input };
+      const before = JSON.stringify(input);
+      expect(await f.policy.nativeHook(input)).toEqual({});
+      expect(JSON.stringify(input)).toBe(before);
     }
-    expect(f.traces('dispatch_denied')).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'write_conflict', reservation_id: 'worker' })]));
     expect(f.job().current.active['dispatch']).toBeDefined();
-    expect(readFileSync(protectedFile, 'utf8')).toBe('original');
-  });
-  it('treats repository-configured textconv as an unknown write target from unrelated directories (R2)', async () => {
-    const f = await scoped();
-    // The callback deliberately targets the protected reservation, outside the repository invoking it.
-    const protectedFile = join(f.root, 'protected.txt');
-    writeFileSync(protectedFile, 'original');
-    mkdirSync(join(f.other, '.git', 'info'), { recursive: true });
-    writeFileSync(join(f.other, '.git', 'config'), `[diff "review"]\n\ttextconv = touch ${protectedFile}\n`);
-    writeFileSync(join(f.other, '.git', 'info', 'attributes'), '*.txt diff=review\n');
-    for (const command of ['git blame a.txt', 'git diff', 'git log -p', 'git show HEAD', 'git grep --textconv pattern', 'git cat-file --filters HEAD:a.txt',
-      'git diff --no-ext-diff', 'git diff --no-textconv', 'git blame -- a.txt --no-textconv', 'git diff -- --no-ext-diff --no-textconv',
-      'git diff --src-prefix --no-textconv --no-ext-diff', 'git --git-dir=.git blame a.txt', 'git diff --no-ext-diff --no-textconv --textc',
-      'git show --no-ext-diff --no-textconv --ext', 'git blame --no-textconv --no-no-textconv a.txt', 'git cat-file --filt HEAD:a.txt']) {
-      expect(readOnlyCommand(command), command).toBe(false);
-      expect(writeTargets(f.other, 'exec_command', { cmd: command, workdir: f.other }), command).toEqual(['/']);
-      expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other), command).toBe(true);
-      expect(await f.blocked('Bash', { command: `cd ${f.other} && ${command}` }), command).toBe(true);
-    }
-    expect(readFileSync(protectedFile, 'utf8')).toBe('original');
-  });
-  it('allows a patch or edit whose every target is unrelated and denies any overlapping target', async () => {
-    const f = await scoped();
-    expect(await f.hook('apply_patch', patch(add(join(f.other, 'a.ts')), add(join(f.other, 'nested/b.ts'))))).toEqual({});
-    expect(await f.blocked('apply_patch', patch(add(join(f.other, 'a.ts')), add(join(f.root, 'src/x.ts'))))).toBe(true);
-    expect(await f.blocked('apply_patch', patch(`*** Update File: ${join(f.other, 'a.ts')}`, `*** Move to: ${join(f.root, 'a.ts')}`, '@@', '-a', '+b'))).toBe(true);
-    expect(await f.blocked('apply_patch', patch('*** Delete File: gone.ts'))).toBe(true);
-    expect(await f.blocked('apply_patch', { command: 'not a patch' })).toBe(true);
-    expect(await f.blocked('Write', { file_path: join(f.root, 'src/x.ts') })).toBe(true);
-    // Relative targets resolve against the hook cwd, not against the protected root.
-    expect(await f.hook('apply_patch', patch('*** Delete File: gone.ts'), f.other)).toEqual({});
-    expect(await f.hook('Edit', { file_path: 'src/x.ts' }, f.other)).toEqual({});
-    expect(await f.blocked('Edit', { file_path: `../${basename(f.root)}/src/x.ts` }, f.other)).toBe(true);
-  });
-  it('compares symlink aliases and traversal by the paths they reach', async () => {
-    const f = await scoped();
-    mkdirSync(join(f.root, 'sub')); symlinkSync(f.root, join(f.other, 'alias')); symlinkSync(join(f.root, 'sub'), join(f.other, 'deep'));
-    expect(await f.blocked('apply_patch', patch(add(join(f.other, 'alias/new.ts'))))).toBe(true);
-    expect(await f.blocked('Write', { file_path: join(realpathSync(f.root), 'src/x.ts') }, f.other)).toBe(true);
-    // Lexically other/x.ts, but the kernel leaves the symlink target: root/x.ts.
-    expect(await f.blocked('apply_patch', patch(add(`${f.other}/deep/../x.ts`)), f.other)).toBe(true);
-    expect(await f.blocked('apply_patch', patch(add(`${f.other}/alias/missing/../x.ts`)), f.other)).toBe(true);
-    expect(await f.hook('apply_patch', patch(add(`${f.other}/alias/../unrelated.ts`), add(`${f.other}/plain/../unrelated.ts`)), f.other)).toEqual({});
-  });
-  it('keeps read/status diagnostics with quoted search patterns available inside the protected root', async () => {
-    const f = await scoped();
-    for (const command of ['ps aux', 'gh issue view 234 --repo MongLong0214/jev-gate --comments', 'gh pr list --state open', 'git status --short', 'git diff --no-ext-diff --no-textconv --check',
-      `rg -n "write|conflict; rm -rf src > hits" src`, `grep -rn 'a && b $(c)' ${f.root}`, 'ps aux | grep -i "codex" 2>/dev/null', `cd ${f.root} && git --no-pager log --no-ext-diff --no-textconv --oneline -3`,
-      `find . -name '*.ts' -not -path './node_modules/*'`, 'cat src/file | wc -l', 'pwd']) {
-      expect(await f.hook('Bash', { command }), command).toEqual({});
-    }
-    for (const command of ['rg foo $(cat list)', 'rg foo `cat list`', 'rg foo > hits.txt', 'git status; touch src/x', 'find . -name x -delete', 'find . -exec rm {} ;',
-      'git diff --output=change.diff', 'ps aux | tee ps.txt', 'gh pr merge 1', 'git -c core.pager=sh log', 'rg --pre ./run.sh foo', 'rg "foo', 'echo "$PATH"']) {
-      expect(await f.blocked('Bash', { command }), command).toBe(true);
-    }
-  });
-  it('keeps the read commands Codex workers ran during a settlement available and their writing forms blocked (#287)', async () => {
-    const f = await scoped();
-    for (const command of ['nl -ba src/file.ts', `sed -n '1,80p' src/file.ts`, `sed -n -e '10p;20,30p' -e '$p' a b`, `rg -n foo src | nl -ba | sed -n '1,40p'`, 'command -v codex', 'command -V node',
-      'which node', 'node --version', 'git rev-parse --show-toplevel', 'git ls-files src', 'git branch --show-current', 'git blame --no-textconv -L 1,9 src/a.ts',
-      'git cat-file -p HEAD', 'git merge-base HEAD origin/main', 'git describe --tags', 'git remote -v', 'git remote get-url origin', 'git config --get user.name',
-      'sort -u a', 'uniq -c a', 'cut -d: -f1 a', 'tr a-z A-Z < a', 'stat a', 'file a', 'diff a b', 'jq .x a.json', 'basename a/b', 'dirname a/b', 'realpath a',
-      'echo ok', `printf '%s\\n' a`, 'true', 'test -f a', '[ -d src ]', 'date +%s', 'date -u']) {
-      expect(await f.hook('Bash', { command }), command).toEqual({});
-    }
-    for (const command of ['sed -i s/a/b/ src/file.ts', `sed -n '1,80p' -i src/file.ts`, 'sed --in-place -n 1p a', `sed -n 'w out' a`, `sed -n '1w out' a`, `sed -n '1e touch x' a`,
-      `sed -n -f script.sed a`, `sed '1,80p' a`, 'sort -o out a', 'sort --output=out a', 'sort -no out a', 'uniq a b', 'date -s 2026-01-01', 'date 0101000026', 'printf -v x y',
-      'nl a > out', 'echo x >> src/file.ts', 'jq . a > b', 'command node x.js', 'node --version extra', 'npm -v', 'python -v', 'bash -V', './run.sh --version', 'file -C -m magic', 'git branch -D main', 'git branch new',
-      'git remote add x y', 'git config user.name x', 'git config --unset user.name', 'awk 1 a', 'xargs rm', 'env', 'tee out', `cd ${f.root} && node script.mjs`]) {
-      expect(await f.blocked('Bash', { command }), command).toBe(true);
-    }
-  });
-  it('counts a dash-led operand after `--` or after the first operand as a file, and an abbreviated writing option as that option (#287)', async () => {
-    const f = await scoped();
-    for (const command of ['uniq -c -- a', 'uniq -- a', 'uniq -d a', 'sort -r -- a', 'file -b a']) expect(await f.hook('Bash', { command }), command).toEqual({});
-    // BSD uniq (macOS) stops options at its first operand and GNU at `--`, so `-out` is the output file; getopt_long takes any unique prefix.
-    for (const command of ['uniq -- package.json -out', 'uniq package.json -out', 'uniq -c a -', 'uniq - out', 'sort --out=x a', 'sort --o=x a', 'sort --temp=d a', 'sort --compress=gzip a',
-      'file --comp -m magic', 'rg --hostname-bin=x foo']) {
-      expect(await f.blocked('Bash', { command }), command).toBe(true);
-    }
-  });
-  it('blocks the git read options that run configured filters, textconv, external diff or gpg, prefixes included (#287)', async () => {
-    const f = await scoped();
-    for (const command of ['git cat-file -p HEAD:package.json', 'git diff --no-ext-diff --no-textconv', 'git log --no-ext-diff --no-textconv --format=%H -1', 'git show --no-ext-diff --no-textconv --stat HEAD',
-      'git log --no-show-signature --no-ext-diff --no-textconv -p', 'git show --no-ext-diff --no-textconv HEAD', 'git blame --no-textconv a',
-      'git status --short', 'git rev-parse HEAD', 'git ls-files', 'git merge-base HEAD main', 'git describe HEAD',
-      'git branch --show-current', 'git remote get-url origin', 'git config --get user.name']) {
-      expect(await f.hook('Bash', { command }), command).toEqual({});
-    }
-    for (const command of ['git cat-file --filters --path=package.json HEAD:package.json', 'git cat-file --textconv HEAD:package.json', 'git cat-file --textc HEAD:a', 'git cat-file --text HEAD:a',
-      'git cat-file --filt --path=a HEAD:a', 'git cat-file --batch --filters', 'git diff --ext-diff', 'git diff --textconv', 'git log -p --ext-diff', 'git show --textconv HEAD',
-      'git -C . blame --textconv a', 'git log --show-signature -1', 'git log --format=%G? -1', 'git show --pretty=format:%GS HEAD',
-      'git diff --no-no-textconv', 'git diff --no-no-ext-diff', 'git log --no-no-textc -p', 'git show --no-no-ext HEAD',
-      'git cat-file --no-no-filt --path=a HEAD:a', 'git log --no-no-show-signature -1', 'git diff --textconv=true',
-      'git diff --ext', 'git log -p --textc', 'git show --ext-diff HEAD', 'git grep --textconv pattern', 'git grep --textc pattern',
-      'git grep --ext-diff pattern', 'git grep --no-no-textconv pattern']) {
-      expect(await f.blocked('Bash', { command }), command).toBe(true);
-    }
-  });
-  describe('ROUND1-ESCAPE-1 Git configuration callbacks', () => {
-    const keys = ['GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_EXTERNAL_DIFF'] as const;
-    const cleanEnv = () => {
-      for (const key of keys) {
-        const old = process.env[key];
-        cleanups.push(() => { if (old === undefined) delete process.env[key]; else process.env[key] = old; });
-        delete process.env[key];
-      }
-    };
-    it.each([
-      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0='printf FILTER_EXECUTED' git diff --no-ext-diff --no-textconv --no-index -- a b`,
-      `GIT_EXTERNAL_DIFF='printf FILTER_EXECUTED' git diff --no-ext-diff --no-textconv --no-index -- a b`,
-      'GIT_CONFIG_GLOBAL=callbacks.config git diff --no-ext-diff --no-textconv --no-index -- a b',
-      `GIT_CONFIG_PARAMETERS="'diff.external=printf FILTER_EXECUTED'" git diff --no-ext-diff --no-textconv --no-index -- a b`,
-      'ARBITRARY=1 git diff --no-ext-diff --no-textconv --no-index -- a b',
-      'ARBITRARY= git status --short',
-      `git -c diff.external='printf FILTER_EXECUTED' diff --no-index -- a b`,
-      `git -cdiff.external='printf FILTER_EXECUTED' diff --no-index -- a b`,
-      'git --config-env=diff.external=CALLBACK diff --no-index -- a b',
-      'git --config-env diff.external=CALLBACK diff --no-index -- a b',
-      'git -c color.ui=false status --short',
-    ])('blocks unknown targets from an unrelated directory: %s', async command => {
-      cleanEnv(); const f = await scoped();
-      expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other)).toBe(true);
-      expect(await f.blocked('Bash', { command: `cd ${f.other} && ${command}` })).toBe(true);
-    });
-    it.each(keys.flatMap(key => ['', key === 'GIT_CONFIG_COUNT' ? '1' : 'callback'].map(value => [key, value] as const)))('blocks inherited %s=%s including empty presence', async (key, value) => {
-      cleanEnv(); const f = await scoped(); process.env[key] = value;
-      for (const command of ['git diff --no-ext-diff --no-textconv --no-index -- a b', 'git status --short']) {
-        expect(await f.blocked('exec_command', { cmd: command, workdir: f.other }, f.other), command).toBe(true);
-        expect(await f.blocked('Bash', { command }), command).toBe(true);
-      }
-    });
-    it.each(['git diff --no-ext-diff --no-textconv --no-index -- a b', 'git status --short'])('allows clean-env plain reads: %s', async command => {
-      cleanEnv(); const f = await scoped();
-      expect(await f.hook('Bash', { command })).toEqual({});
-      expect(await f.hook('exec_command', { cmd: command, workdir: f.other }, f.other)).toEqual({});
-    });
-  });
-  it('confines an unknown shell command by its reported workdir, a leading absolute cd or the session cwd, and the paths it names', async () => {
-    const f = await scoped();
-    expect(await f.hook('exec_command', { cmd: 'npx vitest run tests/a.test.ts', workdir: f.other })).toEqual({});
-    expect(await f.hook('Bash', { command: `cd ${f.other} && npx vitest run tests/a.test.ts --reporter=dot` })).toEqual({});
-    expect(await f.hook('Bash', { command: `cd ${f.other} && cd nested && touch out.txt` })).toEqual({});
-    // Without a reported workdir the session cwd stands in, as before #234: a session outside every scope keeps its shell.
-    expect(await f.hook('Bash', { command: 'npx vitest run' }, f.other)).toEqual({});
-    expect(await f.hook('Bash', { command: 'cd nested && touch x' }, f.other)).toEqual({});
-    expect(await f.hook('write_stdin', { session_id: 1, chars: 'y\n' }, f.other)).toEqual({});
-    for (const [tool, input, cwd] of [
-      ['exec_command', { cmd: 'npx vitest run' }, f.root], ['exec_command', { cmd: 'touch x', workdir: join(f.root, 'src') }, f.other],
-      ['Bash', { command: 'npx vitest run' }, f.root], ['Bash', { command: 'cd nested && touch x' }, f.root],
-      ['Bash', { command: `cd ${f.other} && rm -rf ${join(f.root, 'src')}` }, f.root], ['Bash', { command: `cd ${f.other} && cp a.ts ../${basename(f.root)}/a.ts` }, f.root],
-      ['Bash', { command: `cd ${f.other} && touch --out=../${basename(f.root)}/x` }, f.root], ['Bash', { command: `cd ${f.other} && rm -rf ../*` }, f.root],
-      ['Bash', { command: `cd ${f.other} && touch "$HOME/x"` }, f.root], ['Bash', { command: `cd ${f.other} && bash -c 'cd ..; rm -rf x'` }, f.root],
-      ['Bash', { command: `cd ${f.other} && (cd .. && rm x)` }, f.root], ['Bash', { command: `cd ${f.other}; rm x` }, f.root], ['Bash', { command: `cd ${f.other} && touch ~/x` }, f.root],
-      ['write_stdin', { session_id: 1, chars: 'rm -rf src\n' }, f.root],
-    ] as const) expect(await f.blocked(tool, input, cwd), JSON.stringify(input)).toBe(true);
-  });
-  it('protects several managed workers by their own scopes and releases one only at its observed terminal settlement', async () => {
-    const f = await scoped(); const state = f.job(); const held = state.current.active['dispatch']!;
-    updateJob(f.stateEnv, 'holder', () => ({ ...state, session_id: 'holder', history: [], current: { ...state.current, active: { held: { ...held, deliverables: ['owned.ts'], codex_execution: { thread_id: 'held', turn_id: 'held-turn', cwd: f.other, root_cwd: f.other } } } } }));
-    expect(await f.blocked('Write', { file_path: join(f.other, 'owned.ts') }, f.other)).toBe(true);
-    expect(await f.blocked('Bash', { command: `cd ${f.other} && touch free.ts` })).toBe(true);
-    expect(await f.hook('Bash', { command: `cd ${join(f.other, 'nested')} && touch free.ts` })).toEqual({});
-    expect(await f.hook('Write', { file_path: join(f.other, 'free.ts') }, f.other)).toEqual({});
-    expect(await f.blocked('Write', { file_path: join(f.root, 'src/x.ts') }, f.other)).toBe(true);
-    // An unconfirmed execution keeps its reservation through status queries; only the observed terminal releases it.
-    expect(await f.status('s1')).toContain('termination unconfirmed');
-    expect(await f.blocked('Write', { file_path: join(f.root, 'src/x.ts') }, f.other)).toBe(true);
-    f.terminal(); await vi.waitFor(() => expect(f.job().current.active).toEqual({}));
-    expect(await f.hook('Write', { file_path: join(f.root, 'src/x.ts') }, f.other)).toEqual({});
-    expect(await f.blocked('Write', { file_path: join(f.other, 'owned.ts') }, f.other)).toBe(true);
-    expect(f.job().current.receipts).toHaveLength(1); expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
+    expect(f.job().current.receipts).toHaveLength(0);
+    expect(f.sent.filter(m => m['method'] === 'turn/start')).toHaveLength(1);
+    expect(f.sent.some(m => m['method'] === 'turn/interrupt')).toBe(false);
+    expect(f.traces('dispatch_denied')).toEqual([]);
   });
 });
 
@@ -764,7 +594,7 @@ describe('Codex reservation across a host restart (#239)', () => {
   it('settles a worker whose app-server exited, stops protecting its scope and answers status with that result', async () => {
     const f = await setup('uncertain'); f.policy.hostPid = process.pid; await f.launch();
     expect(f.job().current.active['dispatch']?.codex_execution?.host_pid).toBe(process.pid);
-    expect(JSON.stringify(await write(f))).toContain('deny');
+    expect(await write(f)).toEqual({});
     restartHost(f, exitedPid());
     expect(JSON.stringify(await write(f))).not.toContain('deny');
     expect(f.job().current.active).toEqual({});
@@ -776,7 +606,7 @@ describe('Codex reservation across a host restart (#239)', () => {
   it('keeps protection while the recorded app-server still runs elsewhere; an exited host in another session never blocks and ages out', async () => {
     const f = await setup('uncertain'); f.policy.hostPid = process.pid; await f.launch();
     restartHost(f, process.ppid);
-    expect(JSON.stringify(await write(f))).toContain('deny');
+    expect(await write(f)).toEqual({});
     expect(await f.status('s1')).toContain('still running');
     expect(f.job().current.active['dispatch']).toBeDefined();
     const state = f.job(); const held = state.current.active['dispatch']!;
@@ -790,7 +620,7 @@ describe('Codex reservation across a host restart (#239)', () => {
     const f = await setup('uncertain'); await f.launch();
     expect(f.job().current.active['dispatch']?.codex_execution?.host_pid).toBeUndefined();
     restartHost(f, undefined);
-    expect(JSON.stringify(await write(f))).toContain('deny');
+    expect(await write(f)).toEqual({});
     expect(await f.status('s1')).toContain('did not record its Codex host');
     expect(f.job().current.active['dispatch']).toBeDefined();
     await f.rpc.onRequest({ id: 'cancel', method: 'item/tool/call', params: { threadId: 'parent', tool: 'jev_agent', arguments: { action: 'cancel', agent_id: 'worker' } } });

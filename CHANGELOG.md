@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.35 — 2026-10-21 — Native worker collection and tool access
+
+- Fix owned-worker result recovery against the native Codex API (#303). Workers now use native history because ephemeral threads reject includeTurns reads. Status still requires the exact thread and terminal turn; a collection error does not establish execution failure or acceptance. Worker conversations follow native local history retention and are archived after settlement.
+- Remove the broad pending-worker tool guard and its shell parser. Native commands and edits keep Codex permissions; existing reservations prevent duplicate managed dispatches. Existing workers and files are preserved.
+- Record safe collection failure codes instead of losing every RPC error behind collection_failed. No prompt, credential or raw exception is added to diagnostics.
+- Verify missed-notification recovery and tool access in lifecycle regressions, plus persistent terminal turn/items reads with the installed native Codex host and a local scripted API. This does not recover missing history from old ephemeral workers or establish measured token savings.
+
 ## v0.8.34 — 2026-10-21 — Codex hook deadlines
 
 - Keep native Codex hooks within their host deadlines (#305). SessionEnd and Interrupt now share a 2.2-second internal budget; other events share 4.2 seconds. Startup health checks, credential provisioning, connection polling and the helper request consume the same budget, leaving time for process startup and the baseline JSON response before the host's 3/5-second limits.
