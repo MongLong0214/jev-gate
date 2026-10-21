@@ -28,6 +28,7 @@ export interface ActivityMetrics {
   fired: number; applied: number | null; regression: number; effect: number | [number, number] | null;
   accepted?: number; rejected?: number; pending?: number; cancelled?: number; failed?: number; checksUnknown?: number;
   restored?: number; budgetUsed?: number | null; budget?: number | null;
+  codexAssessed?: number; codexSubmitted?: number; codexCompleted?: number;
 }
 export interface ActivityCheck { level: DoctorLevel; message: string; action: string | null; feature?: 'admission' | 'allocation' | 'workers' | 'router' | 'compact'; metrics?: ActivityMetrics }
 /** Read from the Codex connection owner record: its root and pid only, never its token; `since` is when it was written. */
@@ -366,13 +367,15 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   if (input.traces.codex) {
     const rows = byHost.codex.filter(r => r['phase'] === 'codex_compact');
     const selected = rows.filter(r => r['stage'] === 'selection_result');
+    const assessed = selected.filter(r => r['reason'] === 'assessed');
     const sent = rows.filter(r => r['stage'] === 'submitted' && r['applied'] === true);
     const confirmed = rows.filter(r => r['stage'] === 'result' && r['applied'] === true && r['outcome'] === 'completed');
     const failed = selected.filter(r => !['assessed', 'stale'].includes(String(r['reason']))).length + rows.filter(r => r['stage'] === 'result' && r['outcome'] === 'failed').length;
     say(failed ? 'warn' : selected.length || sent.length ? 'ok' : 'info',
-      `compact: Codex Jev ${selected.length} assessed / ${sent.length} applied submissions / ${confirmed.length} completed responses; ${failed} failures; native hooks ${byHost.codex.filter(r => r['phase'] === 'codex_event' && r['event'] === 'PreCompact').length}; total token savings unmeasured`,
+      `compact: Codex Jev ${assessed.length} assessed / ${selected.length} attempts / ${sent.length} applied submissions / ${confirmed.length} completed responses; ${failed} failures; native hooks ${byHost.codex.filter(r => r['phase'] === 'codex_event' && r['event'] === 'PreCompact').length}; total token savings unmeasured`,
       'Compare matched native-only tasks including Jev, retries and re-reads; removed characters are not total token savings.', 'compact',
-      { fired: selected.length, applied: sent.length, effect: null, regression: failed });
+      { fired: selected.length, applied: sent.length, effect: null, regression: failed,
+        codexAssessed: assessed.length, codexSubmitted: sent.length, codexCompleted: confirmed.length });
   }
 
   // A session reads its provider when it starts, so one started before the current connection was written keeps the old

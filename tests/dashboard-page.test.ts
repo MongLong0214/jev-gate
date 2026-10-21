@@ -92,6 +92,25 @@ it('renders doctor activity facts and unknown measurements in existing node line
   p.click('[data-host=codex]'); expect(node(p, 'router').querySelector('.ds')!.textContent).toBe('24h untrackable');
 });
 
+it('shows each host Compact facts without borrowing Claude restore metrics for Codex', () => {
+  const p = page(), s = snapshot([]);
+  const claude = { feature: 'compact', level: 'ok', metrics: { fired: 2, applied: 1, effect: null, regression: 0, restored: 2, budgetUsed: 1200, budget: 8000 } };
+  const codex = { feature: 'compact', level: 'warn', metrics: { fired: 4, applied: 3, effect: null, regression: 1, codexAssessed: 2, codexSubmitted: 3, codexCompleted: 1 } };
+  p.push({ ...s, activity24h: { all: [claude, codex], claude: [claude], codex: [codex] } });
+  p.click('.node[data-feature=compact]');
+  expect(node(p, 'compact').querySelector('.ds')!.textContent).toContain('발화 6 · 적용 4 · 회귀 1');
+  expect(text(p, 'circuit-inspector')).toContain('Claude 복원 2');
+  expect(text(p, 'circuit-inspector')).toContain('Codex Jev 판정 2 · 전송 적용 3 · 응답 완료 1');
+  p.click('[data-host=codex]');
+  expect(text(p, 'circuit-inspector')).not.toMatch(/복원|예산/);
+  expect(text(p, 'circuit-inspector')).toContain('총 토큰 효과 미측정');
+  p.click('#language');
+  expect(text(p, 'circuit-inspector')).toContain('Jev assessed 2 · applied submissions 3 · completed responses 1');
+  p.click('[data-host=claude]');
+  expect(text(p, 'circuit-inspector')).toContain('restored 2 · budget 1,200 / 8,000');
+  expect(text(p, 'circuit-inspector')).not.toContain('Jev assessed');
+});
+
 it.each([[0, '+$0.00'], [-.67486, '−$0.67'], [[-.1, .2], '−$0.10 / +$0.20']])('renders Router net %j without cache-price assumptions', (effect, expected) => {
   const p = page(), s = snapshot([]), facts = [{ feature: 'router', level: 'ok', metrics: { fired: 1, applied: 1, regression: 0, effect } }];
   p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });

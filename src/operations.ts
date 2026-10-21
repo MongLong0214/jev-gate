@@ -210,6 +210,7 @@ const traceTitle = (phase: string, r: Rec): string => ({
 } as Record<string, string>)[phase] ?? phase;
 
 const compactSelectionReason = (value: unknown): string | null => ({
+  assessment_not_amortized: '판정 비용 회수 여지 부족 · 원본 유지',
   current_dependencies: '현재 작업에 필요한 근거 선택', recency_kept: '기존 최근순 유지', no_candidates: '선별할 과거 결과 없음',
   no_current_task: '사람이 입력한 현재 작업 없음', no_prior_assistant: '이전 assistant 메시지 없음',
   no_key: 'Jev API 키 없음', disabled: 'Jev 선별 꺼짐', not_eligible: '로컬 추출 조건 미충족 · Jev 선별 미실행', input_secret: '민감정보 감지 · 로컬 유지', input_too_large: '판정 입력 한도 초과 · 로컬 유지', context_exceeded: 'Jev 컨텍스트 길이 초과 · 로컬 유지', rejected_input: 'Jev가 입력을 거절 · 로컬 유지',
@@ -294,13 +295,13 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     const unknown = stage === 'result' && r['outcome'] !== 'completed' && !failed;
     const selectionIds = Array.isArray(r['selection_ids']) ? r['selection_ids'].flatMap(v => token(v) ? [token(v)!] : []) : [];
     return { id: id(`codex-compact:${token(r['invocation_id']) ?? at}:${token(r['request_id'])}:${stage}`), at, feature: 'compact',
-      ...(stage === 'selection_intent' || prepared ? { lifecycle: true } : {}),
+      ...(stage === 'selection_intent' || prepared && reason !== 'assessment_not_amortized' ? { lifecycle: true } : {}),
       ...(token(r['selection_id']) || selectionIds.length === 1 ? { callId: token(r['selection_id']) ?? selectionIds[0]! } : {}),
       state: failed ? 'error' : unknown ? 'unconfirmed' : prepared && !r['applied'] ? 'skipped' : 'done',
       lane: selection || stage === 'selection_intent' ? 'jev' : submitted || stage === 'result' ? 'host' : 'policy',
       title: selection ? 'Compact · Jev 선별' : submitted ? 'Compact · 실제 전송' : stage === 'result' ? 'Compact · 모델 응답' : prepared ? 'Compact · 입력 준비' : 'Compact · Jev 요청',
       summary: selection ? `선별 후보 ${n(number(r['candidates']))} · 제외 선택 ${n(number(r['selected']))} · ${reason ?? '미확인'}`
-        : r['applied'] === true ? `오래된 도구 텍스트 ${n(number(r['removed_chars']))}자 제외 · ${r['path'] === 'native' ? '네이티브 압축' : '일반 추론'}${stage === 'result' ? ` · ${token(r['outcome']) ?? '미확인'}` : ''}` : `네이티브 문맥 유지 · ${reason ?? token(r['outcome']) ?? stage}`,
+        : r['applied'] === true ? `오래된 도구 텍스트 ${n(number(r['removed_chars']))}자 제외 · ${r['path'] === 'native' ? '네이티브 압축' : '일반 추론'}${stage === 'result' ? ` · ${token(r['outcome']) ?? '미확인'}` : ''}` : `네이티브 문맥 유지 · ${compactSelectionReason(reason) ?? token(r['outcome']) ?? stage}`,
       details: ['암호화 문맥·최근 도구 결과·호출 연결 보존', '제외 문자 수는 총 토큰 절감이 아닙니다. Jev·재시도·재조회 포함 총 절감 미측정.'],
       ...(selection && number(r['duration_ms']) !== null ? { durationMs: number(r['duration_ms'])! } : {}),
       ...(selection ? { receipt: { status: null, code: reason, model: token(jev?.['model']), input: number(usage?.['input_tokens']), output: number(usage?.['output_tokens']), costUsd: null, choice: number(r['selected']) !== null ? `제외 선택 ${n(number(r['selected']))}` : null, confidence: null, threshold: .9, direction: null } } : {}),

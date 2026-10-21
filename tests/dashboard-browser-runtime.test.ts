@@ -88,7 +88,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   const motion = (p: Page) => p.evaluate(() => (globalThis as unknown as {motion:Array<[string,number]>}).motion);
   const count = (log: Array<[string,number]>, kind: string) => log.filter(([k]) => k===kind).length;
 
-  it('shows doctor Router failures and worker execution failures from the actual snapshot API (#297-299)', async () => {
+  it('shows doctor failures and host-specific Compact facts from the actual snapshot API (#297-299, #319)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-activity-'));
     const env = { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_STATE_HOME: join(home, '.local/state'), JEV_GATE_TRACE_DIR: join(home, 'claude'), JEV_CODEX_TRACE_DIR: join(home, 'codex') };
     for (const host of ['claude', 'codex'] as const) {
@@ -101,6 +101,17 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
         { ...base, phase: 'post', tool_use_id: 'readonly', subagent_type: 'jev-gate:worker-fast', verdict: 'accept', changed_files_count: 0, reported_checks: { pass: 0, fail: 0, not_run: 0 } },
         host === 'claude' ? { ...base, phase: 'mod_router', event: 'root_result', requested: 'claude-sonnet-5-5', observed: 'claude-opus-5-5' }
           : { ...base, phase: 'codex_router_response', selected_model: 'gpt-6-luna', observed_model: 'gpt-6.1-sol' },
+        ...(host === 'claude' ? [
+          { ...base, phase: 'mod_compact', run_id: 'compact-example', stage: 'started' },
+          { ...base, phase: 'mod_compact', run_id: 'compact-example', stage: 'completed', applied: true, budget: 8000, digestChars: 400, tailChars: 800 },
+        ] : [
+          { ...base, phase: 'codex_compact', stage: 'selection_result', reason: 'assessed' },
+          { ...base, phase: 'codex_compact', stage: 'selection_result', reason: 'timeout' },
+          { ...base, phase: 'codex_compact', stage: 'submitted', applied: true },
+          { ...base, phase: 'codex_compact', stage: 'submitted', applied: true },
+          { ...base, phase: 'codex_compact', stage: 'result', applied: true, outcome: 'completed' },
+          { ...base, phase: 'codex_compact', stage: 'result', applied: true, outcome: 'failed' },
+        ]),
       ];
       records.forEach((r, i) => writeFileSync(join(dir, i + '.json'), JSON.stringify(r)));
     }
@@ -118,6 +129,20 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       }
       await expect.poll(() => p.locator('#pipeline .node[data-feature=router] .ds').textContent()).toContain('24h 오류');
       expect(await p.locator('#pipeline .node[data-feature=workers] .nt').textContent()).toContain('실행 실패 2');
+      expect(data.activity24h.codex.find((c: { feature: string }) => c.feature === 'compact').metrics).toMatchObject({ codexAssessed: 1, codexSubmitted: 2, codexCompleted: 1 });
+      await p.locator('[data-feature=compact]').click();
+      await expect.poll(() => p.locator('#pipeline .node[data-feature=compact] .ds').textContent()).toContain('발화 3 · 적용 3 · 회귀 2');
+      expect(await p.locator('#circuit-inspector').textContent()).toContain('Claude 복원 0 · 예산 1,200 / 8,000');
+      expect(await p.locator('#circuit-inspector').textContent()).toContain('Codex Jev 판정 1 · 전송 적용 2 · 응답 완료 1');
+      await p.locator('[data-host=codex]').click();
+      for (const width of [320, 1440]) {
+        await p.setViewportSize({ width, height: 1000 }); await settle(p);
+        const detail = await p.locator('#circuit-inspector').textContent();
+        expect(detail).toContain('Jev 판정 1 · 전송 적용 2 · 응답 완료 1 · 총 토큰 효과 미측정');
+        expect(detail).not.toMatch(/복원|예산/);
+        expect(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+        await p.screenshot({ path: join(output, `compact-facts-${width}.png`), fullPage: true });
+      }
     } finally { await p.close(); await local.close(); rmSync(home, { recursive: true, force: true }); }
   });
 

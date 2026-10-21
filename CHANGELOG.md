@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.40 — 2026-10-21 — Compact assessment overhead and host activity
+
+- Skip new Compact judgments whose best-case current-request reduction cannot repay their estimated request and typed-answer overhead (#321). Prefer the useful repeated prefix of a batch, retain exact verified decisions and expose the preserve reason. Estimates do not prove total-token savings or assume future reuse.
+- Show Codex Compact assessments, applied submissions and completed responses instead of Claude-only restore/budget metrics (#319). Combine both hosts' actual counts in the All view and retain unknown token effects.
+- Use context-selection labels for Compact and regenerate the README previews. Preserve the existing fixed circuit geometry and readable status fields.
+- A further bounded OAuth OFF/ON comparison completed actual native compaction and a subsequent turn with all required parser facts preserved. Total usage including Jev was 81,978 versus 53,134, a 35.2% reduction for this pair. This differs from the earlier first-response experiment; representative quality and the 50% target remain unproven in #300 and #317.
+
 ## v0.8.39 — 2026-10-21 — OAuth routing and Codex Jev Compact
 
 - Separate OAuth Codex credit-rate comparisons from API cache-write estimates (#300). Permit an eligible cold Luna downgrade when even its uncached input/output rates do not exceed the best cached baseline rates. Preserve confidence, explicit pins, account catalog, context capacity and unknown-billing fallbacks. Do not infer included subscription allowance or token savings from credit prices.
