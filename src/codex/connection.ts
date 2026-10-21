@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants, existsSync, lstatSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { codexConnectionOwnerPath, codexHome } from '../codex-paths.js';
 import { startCodexSession } from './launch.js';
 import { obj, type Obj } from './source.js';
@@ -101,15 +102,16 @@ export const helperRequest = async (url: string, token: string, input: Obj, sign
 };
 export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<HelperReply> => {
   const state = read(env); if (!state) return { ok: false, reason: 'state_missing' };
-  try { await provision(state, env); } catch (e) { return { ok: false, reason: stopped(e, 'unreachable') }; }
+  try { await provision(state, env, signal); } catch (e) { return { ok: false, reason: stopped(e, 'unreachable', signal) }; }
   return helperRequest(`http://127.0.0.1:${state.port}${path}`, state.token, input, signal);
 };
 /** #287: every unanswered helper call leaves one failure row named by its closed reason, never by its exception or reply body. */
 export const recordConnectionFailure = (trace: TraceWriter | undefined, reason: ConnectionFailure, fields: Obj): boolean =>
   trace?.write('failure', { host: 'codex', ...fields, error_first_line: `connection_${reason}`, connection_failure: reason }).ok === true;
-const healthy = async (state: Connection): Promise<boolean> => {
+const healthy = async (state: Connection, signal?: AbortSignal): Promise<boolean> => {
   try {
-    const response = await fetch(`http://127.0.0.1:${state.port}/health`, { headers: { authorization: `Bearer ${state.token}` }, signal: AbortSignal.timeout(250) });
+    const timeout = AbortSignal.timeout(250);
+    const response = await fetch(`http://127.0.0.1:${state.port}/health`, { headers: { authorization: `Bearer ${state.token}` }, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     return response.ok && obj(await response.json())?.['ready'] === true;
   } catch { return false; }
 };
@@ -128,31 +130,37 @@ const packageVersion = (root: string): number => {
   catch { return -1; }
 };
 let provisioned: string | null = null;
-const provision = async (state: Connection, env: Env): Promise<void> => {
+const provision = async (state: Connection, env: Env, signal?: AbortSignal): Promise<void> => {
+  signal?.throwIfAborted();
   const key = resolveApiKey(env);
   if (!key || provisioned === `${state.pid}:${key}`) return;
-  const response = await fetch(`http://127.0.0.1:${state.port}/credentials`, { method: 'POST', headers: { authorization: `Bearer ${state.token}.${Buffer.from(key).toString('base64url')}` }, signal: AbortSignal.timeout(500) });
+  const timeout = AbortSignal.timeout(500);
+  const response = await fetch(`http://127.0.0.1:${state.port}/credentials`, { method: 'POST', headers: { authorization: `Bearer ${state.token}.${Buffer.from(key).toString('base64url')}` }, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
   if (response.ok) provisioned = `${state.pid}:${key}`;
 };
 /** Called by the installed MCP and trusted startup hook; the user keeps using the ordinary native host. */
-export const ensureConnection = async (root: string, env: Env): Promise<boolean> => {
+export const ensureConnection = async (root: string, env: Env, signal?: AbortSignal): Promise<boolean> => {
   if (!enabled(env) || !existsSync(join(root, '.codex-plugin', 'plugin.json'))) return false;
-  const previous = read(env);
-  if (previous && await healthy(previous)) {
-    if (previous.root === root || packageVersion(root) <= packageVersion(previous.root)) { await provision(previous, env); return true; }
-    // Only a newer installed package can replace an older helper. Old MCP clients cannot downgrade it.
-    try { await fetch(`http://127.0.0.1:${previous.port}/restart`, { method: 'POST', headers: { authorization: `Bearer ${previous.token}` }, signal: AbortSignal.timeout(500) }); }
-    catch { return false; }
-    return false; // The next supervisor/startup attempt starts the new package after the old lock is released.
-  }
-  const child = spawn(process.execPath, [join(root, 'dist', 'cli.mjs'), 'connection-serve'], { cwd: root, env, detached: true, stdio: 'ignore' });
-  child.on('error', () => undefined); child.unref();
-  const until = Date.now() + 3200;
-  do {
-    const state = read(env); if (state && await healthy(state)) { await provision(state, env); return true; }
-    await new Promise<void>(resolve => setTimeout(resolve, 50));
-  } while (Date.now() < until);
-  return false;
+  signal = signal ? AbortSignal.any([signal, AbortSignal.timeout(3200)]) : AbortSignal.timeout(3200);
+  try {
+    signal.throwIfAborted();
+    const previous = read(env);
+    if (previous && await healthy(previous, signal)) {
+      if (previous.root === root || packageVersion(root) <= packageVersion(previous.root)) { await provision(previous, env, signal); return true; }
+      // Only a newer installed package can replace an older helper. Old MCP clients cannot downgrade it.
+      try { await fetch(`http://127.0.0.1:${previous.port}/restart`, { method: 'POST', headers: { authorization: `Bearer ${previous.token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(500)]) }); }
+      catch { return false; }
+      return false; // The next supervisor/startup attempt starts the new package after the old lock is released.
+    }
+    signal.throwIfAborted();
+    const child = spawn(process.execPath, [join(root, 'dist', 'cli.mjs'), 'connection-serve'], { cwd: root, env, detached: true, stdio: 'ignore' });
+    child.on('error', () => undefined); child.unref();
+    do {
+      const state = read(env); if (state && await healthy(state, signal)) { await provision(state, env, signal); return true; }
+      await delay(50, undefined, { signal });
+    } while (!signal.aborted);
+    return false;
+  } catch { return false; }
 };
 
 /** One local helper per Codex home; active MCP clients restart it if it exits. It owns no UI or model harness. */

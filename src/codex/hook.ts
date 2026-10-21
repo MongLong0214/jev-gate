@@ -82,6 +82,7 @@ const recordOnce = (dir: string, trace: TraceWriter, reason: ConnectionFailure, 
 };
 
 export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
+  const startedAt = performance.now();
   try {
     if (deps.env['JEV_CODEX_ENABLED'] === '0') return {};
     const chunks: Buffer[] = [];
@@ -93,6 +94,10 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     }
     const input = record(JSON.parse(Buffer.concat(chunks).toString('utf8')));
     if (!input) return {};
+    // Native hooks allow 3s for termination events and 5s otherwise. Leave 800ms for
+    // process startup and stdout, and share the remaining budget across every await.
+    const budget = input['hook_event_name'] === 'SessionEnd' || input['hook_event_name'] === 'Interrupt' ? 2200 : 4200;
+    const signal = AbortSignal.timeout(Math.max(1, Math.ceil(budget - (performance.now() - startedAt))));
     const bridge = deps.env['JEV_CODEX_BRIDGE_URL'];
     const secret = deps.env['JEV_CODEX_BRIDGE_TOKEN'];
     const startup = (!bridge || !secret) && deps.env['JEV_CODEX_AUTO_CONNECT'] !== '0' && input['hook_event_name'] === 'SessionStart' && input['source'] === 'startup';
@@ -112,12 +117,12 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     const automatic = !bridge || !secret;
     if (automatic) {
       if (deps.env['JEV_CODEX_AUTO_CONNECT'] === '0') return recorded;
-      if (input['hook_event_name'] === 'SessionStart' && typeof input['model'] === 'string' && typeof input['cwd'] === 'string') await ensureConnection(dirname(dirname(fileURLToPath(import.meta.url))), deps.env);
+      if (input['hook_event_name'] === 'SessionStart' && typeof input['model'] === 'string' && typeof input['cwd'] === 'string') await ensureConnection(dirname(dirname(fileURLToPath(import.meta.url))), deps.env, signal);
     } else {
       const url = new URL(bridge);
       if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return recorded;
     }
-    const reply = automatic ? await connectionRequest(deps.env, '/hook', input, AbortSignal.timeout(4200)) : await helperRequest(new URL('/hook', bridge).href, secret, input, AbortSignal.timeout(4200));
+    const reply = automatic ? await connectionRequest(deps.env, '/hook', input, signal) : await helperRequest(new URL('/hook', bridge).href, secret, input, signal);
     if (!reply.ok) {
       if (opened.ok) recordOnce(codexTraceDir(deps.env), opened.writer, reply.reason, { session_id: token(input['session_id']), event: token(input['hook_event_name']), tool_name: token(input['tool_name']) });
       return { ...recorded, ...notice };
