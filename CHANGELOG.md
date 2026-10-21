@@ -2,6 +2,7 @@
 
 ## v0.8.42 — 2026-10-21 — Retain exact tool evidence without repeated input
 
+- Observe native Compact SSE even when OpenAI omits Content-Type; do not label a terminal client close as a failed compaction before buffered observation finishes (#325). Keep explicit JSON responses, real upstream failures and response usage distinct.
 - Reference byte-identical older plaintext tool results to an original retained in the same request, without a paid Jev judgment (#317). Preserve call/result topology, recent results, media, failures and secrets; prevent cross-boundary references and semantic removal of referenced originals.
 - Represent a wholly repeated canonical original with its exact unit and count, verifying reconstruction locally. Retain all distinct content and occurrence counts; no transcript rewrite or external retrieval is introduced.
 - The unchanged bounded OAuth repeated-context comparison completed both reversed-order pairs with all required facts and no extra tools: native total 35,470 OFF versus 17,534 ON, no Jev calls, a 50.57% reduction for that fixture. This is not Router-only savings or representative work-quality proof; #300 and #317 retain their broader completion criteria.
