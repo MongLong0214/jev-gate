@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.45 — 2026-10-22 — Let the dashboard idle and stop promptly
+
+- Replace 50 ms dashboard polling and unconditional one-second activity rebuilds with file/preferences watchers, actual expiry timers and shared coalesced refreshes (#327). Quiet connections send a five-second heartbeat; a constant number of metadata checks every 500 ms recovers missed filesystem notifications without rereading unchanged trace history. A 30-second filename reconciliation remains as a safety net.
+- Preserve records arriving during a rebuild and follow missing or atomically replaced directories. Bound slow-viewer output with stream backpressure instead of queuing every intermediate frame.
+- Close open SSE sockets and the activity thread on authenticated shutdown, dashboard off and SIGTERM. The compiled CLI tests with an open stream terminate naturally within one second.
+- A fixed 32 MB / 6,000-file quiet fixture measured substantially lower CPU over 12 seconds. That short sample does not reproduce the reported 15-hour memory growth or establish a long-term RSS bound; installed-runtime monitoring continues. Router and Compact actual subscription-saving goals remain open in #300 and #317.
+
 ## v0.8.44 — 2026-10-22 — Route observable root continuations
 
 - Allow Codex to reassess model and effort within a long root tool loop instead of reusing its first whole-task selection for every inference (#300). Retain the original contract and use only screened visible progress and closed tool metadata for a next-step judgment; uncertain judgments preserve native execution. Missing continuation context retains the initial whole-task decision.
