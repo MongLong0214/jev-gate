@@ -29,10 +29,11 @@ export const packageVersion = (root: string, host?: 'claude' | 'codex'): string 
   return null;
 };
 /** Fixed public endpoint, no credentials or local metadata. Body and headers share one deadline. */
-export const checkRelease = async (request: typeof fetch = fetch, now: () => number = Date.now): Promise<ReleaseInfo> => {
+export const checkRelease = async (request: typeof fetch = fetch, now: () => number = Date.now, signal?: AbortSignal): Promise<ReleaseInfo> => {
   const info = { ...unknownRelease(), checkedAt: new Date(now()).toISOString() };
   try {
-    const reply = await request(RELEASE_SOURCE, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'jev-gate-version-check' }, redirect: 'error', signal: AbortSignal.timeout(1500) });
+    const deadline = AbortSignal.timeout(1500);
+    const reply = await request(RELEASE_SOURCE, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'jev-gate-version-check' }, redirect: 'error', signal: signal ? AbortSignal.any([signal, deadline]) : deadline });
     if (!reply.ok) { await reply.body?.cancel(); return { ...info, error: reply.status === 403 || reply.status === 429 ? 'rate_limited' : 'offline' }; }
     const reader = reply.body?.getReader(); if (!reader) return { ...info, error: 'invalid_response' };
     const chunks: Uint8Array[] = []; let size = 0;
@@ -45,12 +46,12 @@ export const checkRelease = async (request: typeof fetch = fetch, now: () => num
   } catch { return { ...info, error: 'offline' }; }
 };
 /** A dashboard shares one in-flight check; failures never become a claim of being current. */
-export const releaseChecker = (request: typeof fetch = fetch, now: () => number = Date.now) => {
+export const releaseChecker = (request: typeof fetch = fetch, now: () => number = Date.now, signal?: AbortSignal) => {
   let result = unknownRelease(), expires = 0, pending: Promise<ReleaseInfo> | null = null;
   return { current: () => result, refresh: (): Promise<ReleaseInfo> => {
     if (pending) return pending;
     if (now() < expires) return Promise.resolve(result);
-    pending = checkRelease(request, now).then(value => { result = value; expires = now() + (value.error ? 30_000 : 300_000); return value; }).finally(() => { pending = null; });
+    pending = checkRelease(request, now, signal).then(value => { result = value; expires = now() + (value.error ? 30_000 : 300_000); return value; }).finally(() => { pending = null; });
     return pending;
   } };
 };
