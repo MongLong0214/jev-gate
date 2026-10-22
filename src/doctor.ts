@@ -92,7 +92,7 @@ export const dashboardDiagnostic = async (env: Env): Promise<{ level: DoctorLeve
   if (!state) return { level: 'info', message: 'Dashboard runtime: no readable owner record; active runtime is unverified' };
   if (typeof state['url'] !== 'string' || !/^http:\/\/127\.0\.0\.1:\d{1,5}\/$/.test(state['url']) || typeof state['token'] !== 'string') return { level: 'warn', message: 'Dashboard runtime: invalid owner metadata' };
   try {
-    const response = await fetch(`${state['url']}api/health`, { signal: AbortSignal.timeout(1000), redirect: 'error' });
+    const response = await fetch(`${state['url']}api/health`, { headers: { authorization: `Bearer ${state['token']}` }, signal: AbortSignal.timeout(1000), redirect: 'error' });
     const body = await response.json() as Record<string, unknown>;
     if (!response.ok || body['service'] !== 'jev-gate-dashboard' || body['token'] !== state['token']) return { level: 'warn', message: 'Dashboard runtime: owner identity could not be confirmed' };
     return { level: 'ok', message: `Dashboard runtime: responding at ${state['url']}; running package ${typeof state['version'] === 'string' ? state['version'] : 'unknown'}` };

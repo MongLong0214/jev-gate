@@ -12,6 +12,7 @@ import { credentialsDir, readPrivateJson, writePrivateJson } from '../src/creden
 import { openTraceDir } from '../src/trace.js';
 import { loadActivity } from '../src/activity.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
+import { dashboardDiagnostic } from '../src/doctor.js';
 import { createRecorder } from '../mods/router/hooks/recording.ts';
 
 const dirs: string[] = [];const servers: Array<{close:()=>Promise<void>}> = [];
@@ -26,6 +27,68 @@ describe('automatic shared dashboard',()=>{
     const sources=dashboardSources(env);expect(sources.traceDirs?.map(s=>s.host)).toEqual(['claude','codex']);
     setDashboard(env,false);expect(dashboardStatus(env).enabled).toBe(false);expect(recordingStatus(env).enabled).toBe(true);
     setRecording(env,false);setDashboard(env,true);expect(recordingStatus(env).enabled).toBe(false);expect(dashboardStatus(env).enabled).toBe(true);
+  });
+  it.each([undefined, 'a'.repeat(32)])('keeps public health free of the owner capability (owner: %s)', async token => {
+    const env = environment();
+    const server = await startDashboard(dashboardSources(env), 0, { ...(token ? { token } : {}) }); servers.push(server);
+    const probes: Record<string, string>[] = [{}, { authorization: 'Bearer wrong' }, ...(token ? [{ authorization: `Bearer ${token}` }] : [])];
+    for (const headers of probes) {
+      const response = await fetch(server.url + 'api/health', { headers });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      const body = await response.json() as Record<string, unknown>;
+      expect(body['service']).toBe('jev-gate-dashboard');
+      if (token && headers['authorization'] === `Bearer ${token}`) expect(body['token']).toBe(token);
+      else expect(body).not.toHaveProperty('token');
+    }
+  });
+  it('authenticates the doctor owner probe and keeps the capability out of its report', async () => {
+    const env = environment(), token = 'd'.repeat(32);
+    const server = await startDashboard(dashboardSources(env), 0, { token }); servers.push(server);
+    writePrivateJson(join(credentialsDir(env), 'dashboard-runtime.json'), { token, version: '0.8.1', url: server.url, pid: process.pid });
+    const report = await dashboardDiagnostic(env);
+    expect(report.level).toBe('ok');
+    expect(report.message).toContain('running package 0.8.1');
+    expect(JSON.stringify(report)).not.toContain(token);
+  });
+  it('preserves a live owner whose health does not match the recorded capability', async () => {
+    const env = environment(), token = 'a'.repeat(32); let launches = 0;
+    const server = await startDashboard(dashboardSources(env), 0, { token }); servers.push(server);
+    const runtime = join(credentialsDir(env), 'dashboard-runtime.json');
+    const previous = { token: 'b'.repeat(32), version: '0.0.1', url: server.url, pid: process.pid };
+    writePrivateJson(runtime, previous);
+    expect(await ensureDashboard(plugin(), env, { launch: () => { launches++; } })).toBe(false);
+    expect(launches).toBe(0); expect(readPrivateJson(runtime)).toEqual(previous);
+    expect((await dashboardDiagnostic(env)).level).toBe('warn');
+    expect((await fetch(server.url + 'api/health')).status).toBe(200);
+  });
+  it('does not follow owner-probe redirects or send the capability to another listener', async () => {
+    const env = environment(), token = 'e'.repeat(32); let redirected = 0, launches = 0;
+    const target = createServer((_req, res) => { redirected++; res.end(JSON.stringify({ service: 'jev-gate-dashboard', token })); });
+    await new Promise<void>(resolve => target.listen(0, '127.0.0.1', resolve));
+    servers.push({ close: () => new Promise<void>(resolve => { target.closeAllConnections(); target.close(() => resolve()); }) });
+    const address = target.address(); if (!address || typeof address === 'string') throw Error('Missing address');
+    const owner = createServer((_req, res) => { res.writeHead(302, { location: `http://127.0.0.1:${address.port}/api/health` }); res.end(); });
+    await new Promise<void>(resolve => owner.listen(0, '127.0.0.1', resolve));
+    servers.push({ close: () => new Promise<void>(resolve => { owner.closeAllConnections(); owner.close(() => resolve()); }) });
+    const source = owner.address(); if (!source || typeof source === 'string') throw Error('Missing address');
+    const runtime = join(credentialsDir(env), 'dashboard-runtime.json');
+    const previous = { token, version: '0.8.1', url: `http://127.0.0.1:${source.port}/`, pid: process.pid };
+    writePrivateJson(runtime, previous);
+    expect(await ensureDashboard(plugin(), env, { launch: () => { launches++; } })).toBe(false);
+    expect((await dashboardDiagnostic(env)).level).toBe('warn');
+    expect(launches).toBe(0); expect(redirected).toBe(0); expect(readPrivateJson(runtime)).toEqual(previous);
+  });
+  it('replaces a dead owner without carrying its capability into the new owner', async () => {
+    const env = environment(), previousToken = 'f'.repeat(32); let launches = 0;
+    const runtime = join(credentialsDir(env), 'dashboard-runtime.json');
+    writePrivateJson(runtime, { token: previousToken, version: '0.8.1', url: 'http://127.0.0.1:0/', pid: 2147483647 });
+    const launch = (_entry: string, token: string) => {
+      launches++;
+      void startDashboard(dashboardSources(env), 0, { token }).then(server => { servers.push(server); writePrivateJson(runtime, { token, version: '0.8.1', url: server.url, pid: process.pid }); });
+    };
+    expect(await ensureDashboard(plugin(), env, { launch })).toBe(true);
+    expect(launches).toBe(1); expect(readPrivateJson(runtime)?.['token']).not.toBe(previousToken);
   });
   it('reuses one live dashboard across hosts, replaces an older build and never downgrades it',async()=>{
     const env=environment();let launched=0;
