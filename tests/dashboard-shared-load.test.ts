@@ -225,8 +225,8 @@ describe('dashboard snapshot latency (#215)', () => {
 describe('dashboard rebuild pacing', () => {
   const record = (dir: string, name: string): void => writeFileSync(join(dir, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
 
-  it('draws a record stream once a second, keeps rebuilds to a tenth of the activity thread, and never paces more than two seconds', () => {
-    expect([0, 1, 100, 150, 400, 9000].map(rebuildWait)).toEqual([1000, 1000, 1000, 1500, 2000, 2000]);
+  it('keeps rebuilds to a tenth of the activity thread and never paces a record more than two seconds', () => {
+    expect([0, 1, 30, 100, 400, 9000].map(rebuildWait)).toEqual([16, 16, 300, 1000, 2000, 2000]);
   });
 
   it('starts the first load at once, then keeps each pause and still shows a new record within seconds', async () => {

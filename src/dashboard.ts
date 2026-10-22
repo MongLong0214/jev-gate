@@ -34,9 +34,9 @@ export const pruneViewers = (viewers: Map<string, number>, now: number): void =>
     if (Number.isFinite(expires) && (expires <= now || leases > VIEWER_LEASES)) { viewers.delete(id); leases--; }
   }
 };
-/** Time between rebuild starts while records keep arriving. A record after a quiet second shows at once; a stream is drawn
- * once a second, or less often when a rebuild is slow, so the activity thread works at most a tenth of the time. */
-export const rebuildWait = (lastMs: number): number => Math.min(2000, Math.max(1000, lastMs * 10));
+/** Time between rebuild starts while records keep arriving: ten times the last rebuild keeps the activity thread busy at
+ * most a tenth of the time, and a record still shows within two seconds plus one rebuild. Rebuilds stay shared. */
+export const rebuildWait = (lastMs: number): number => Math.min(2000, Math.max(16, lastMs * 10));
 
 export interface DashboardSources {
   host?: Host;

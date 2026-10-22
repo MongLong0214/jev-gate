@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.50 — 2026-10-22 — Keep a live dashboard light while records stream in
+
+- Keep a record stream from rebuilding and relisting the whole history. On a copy of the owner's 48-hour history (60k records) with one viewer and two new records a second for 60 s, the dashboard used 49.9% of a core on v0.8.49 and 11.4% now. Three causes: the pause between rebuilds was capped at 100 ms from the previous start, so a 122 ms rebuild started again 20 ms after it ended; two thirds of each rebuild recomputed the 24-hour summary over every record; and each directory change the OS had already named still listed every file name again.
+- The pause between rebuilds during a stream is now ten times the last rebuild (16 ms to 2 s), so the activity thread works at most a tenth of the time and a record after a quiet moment still shows at once. The 24-hour summary is reused for up to 10 s while records arrive, then recomputed, and at once when a record leaves the 24-hour window or a preference changes.
+- Live patches still resend each changed run's full step list (about 57 KB a patch in this measurement); a smaller patch encoding needs a page protocol change and is left for a later release.
+- Restore a readable circuit and stage detail row, with the startup status's five lines reserved so nothing shifts (#338, #342).
+- Keep a live dashboard owner whose health check is slow instead of starting a second one, and recover a dead owner (#341, #343).
+
 ## v0.8.49 — 2026-10-22 — Keep the dashboard light while it runs
 
 - Stop the dashboard's activity thread from rescanning and rebuilding history every few seconds (#339). The trace reader listed thousands of file names every second although file-watch notifications and the server's 30 s reconcile already cover new records, and each record leaving the 24-hour window alone triggered a full history rebuild. The reader now lists directories every 30 s by default, and records leave the window together on a 60 s step. On the owner's machine with an open dashboard, the server's CPU went from 16% to 1.9% and its live stream from 355 KB to 19 KB over the same interval.

@@ -502,7 +502,7 @@ describe('dashboard day summary under a record stream', () => {
   it('reuses the summary for CHECKS_MS while records arrive, then counts them all on its due rebuild', () => {
     const trace = make(), env = { HOME: make(), JEV_GATE_STATE_DIR: make() }, checks = checksMemo(), start = Date.parse('2026-10-22T03:00:00Z');
     const admit = (n: number, at: number): void => writeFileSync(join(trace, `a${n}.json`), JSON.stringify({ phase: 'admission_result', session_id: 's', written_at: new Date(at).toISOString(), decision: { shape: 'direct' } }));
-    const fired = (at: number): number | undefined => loadActivity({ traceDir: trace, env, now: new Date(at), feed: false, checks }).activity24h.claude.find(c => c.feature === 'admission')?.metrics['fired'] as number | undefined;
+    const fired = (at: number): number | undefined => loadActivity({ traceDir: trace, env, now: new Date(at), feed: false, checks }).activity24h.claude.find(c => c.feature === 'admission')?.metrics?.fired;
     admit(0, start - 1000);
     expect(fired(start)).toBe(1);
     expect(checks.due).toBe(Infinity);
