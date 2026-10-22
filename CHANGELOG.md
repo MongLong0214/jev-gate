@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.52 — 2026-10-22 — Assess old Codex evidence with separate OAuth accounting
+
+- Let confirmed ChatGPT OAuth traffic use Compact's existing bounded Jev assessment budget for older unique tool evidence (#317). The previous preflight added external Jev raw tokens one-for-one to OpenAI tokens and excluded those candidates before assessment. API and unknown traffic retain the conservative combined-token preflight. Decisions are isolated by billing family; recent results, instructions, request topology, native compact windows, confidence and failure preservation stay intact.
+- Preserve Unicode scalar boundaries when extracting an optional interior, including an emoji crossing the preserved head boundary.
+- Record the accounting basis and keep actual included-allowance savings unmeasured. A fixed OAuth function check preserved the required facts while removing eligible old evidence; this is not proof of subscription savings. #300's Router-only 40% goal and #317's representative quality and actual allowance validation remain open.
+- Claude behavior is unchanged; common version and archive metadata advance together under the existing release contract.
+
 ## v0.8.51 — 2026-10-22 — Router sees the requests it routes
 
 - Find the session transcript by session id when the host skips the SessionStart and UserPromptSubmit events that used to supply its path (another plugin earlier in the chain can do this). In the installed trace of 2026-10-20 to 22, one root step of 1,245 since v0.8.32 had a transcript observation, so the Router never learned cache TTLs or confirmed an applied effort. The lookup runs once per step and stops once the file is found.
