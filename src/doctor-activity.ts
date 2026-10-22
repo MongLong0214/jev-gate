@@ -50,11 +50,14 @@ const sub = (r: Rec, k: string): Rec => (isRecord(r[k]) ? r[k] as Rec : {});
 // Trace readers retain immutable record objects between notifications. Parse each timestamp once.
 const recordTimes = new WeakMap<Rec, { text: unknown; time: number }>();
 const at = (r: Rec): number => { const known = recordTimes.get(r), text = r['written_at']; if (known && known.text === text) return known.time; const time = Date.parse(str(text) ?? ''); recordTimes.set(r, { text, time }); return time; };
+/** Records leave the 24 h window together on this step: each one leaving alone rebuilt the whole history, every few
+ * seconds over two days of busy traces. A count stays at most this long after its record left the window. */
+export const WINDOW_STEP_MS = 60_000;
 /** Dashboard facts can change at a 24 h boundary or when an unfinished compaction leaves its grace period. */
 export const activityStableUntil = (records: Rec[], now: number): number => {
   let next = Infinity;
   for (const r of records) {
-    const time = at(r), boundary = time > now ? time : time + DAY_MS;
+    const time = at(r), boundary = time > now ? time : Math.ceil((time + DAY_MS) / WINDOW_STEP_MS) * WINDOW_STEP_MS;
     if (boundary > now) next = Math.min(next, boundary);
     if ((r['phase'] === 'mod_compact' || r['phase'] === 'claude_compact') && (r['stage'] === 'pre' || r['stage'] === 'started' && r['path'] !== 'classic') && !('deferred' in r)) {
       const settled = time + COMPACT_GRACE_MS + 1;
