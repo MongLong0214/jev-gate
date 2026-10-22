@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { loadActivity } from './activity.js';
+import { checksMemo, loadActivity } from './activity.js';
 import { activityStableUntil } from './doctor-activity.js';
 import type { DashboardSources } from './dashboard.js';
 import { diffFrame, frameOperations, type FrameMemo, type FrameSnapshot } from './dashboard-patch.js';
@@ -27,6 +27,7 @@ export const activityHandler = (sources: DashboardSources) => {
   const epoch = randomUUID().slice(0, 8);
   let sequence = 0, memo: FrameMemo | null = null, current: FrameSnapshot | null = null, whole: { key: string; json: string } | null = null;
   let operations: OperationsView | null = null;
+  const checks = checksMemo();
   let last: { loaded: LoadedActivity; reads: TraceRead[]; liveness: string; preferences: string } | null = null;
   // The liveness ring is read on every rebuild; it is rewritten by rename, so a new inode or mtime marks a change.
   const livenessFile = sources.host === 'codex' ? null : livenessPath(sources.env);
@@ -43,11 +44,12 @@ export const activityHandler = (sources: DashboardSources) => {
       // No record changed and no age or window edge passed: a rebuild would draw the same frame, so it is skipped.
       const reads = dirs.map(dir => traceReader.read(dir)), liveness = livenessStamp(), preferences = preferenceStamp();
       if (last && Date.now() < last.loaded.until && liveness === last.liveness && preferences === last.preferences && reads.every((read, i) => read === last!.reads[i])) return { ...last.loaded, base: null, patch: null };
-      const now = new Date(), activity = loadActivity({ ...sources, traceReader, now, feed: false });
+      const now = new Date(), activity = loadActivity({ ...sources, traceReader, now, feed: false, checks });
       const { events: _events, live: _live, ...rest } = activity, shown = { ...rest, operations: frameOperations(activity.operations) };
       const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
       memo = diff.memo; current = shown; whole = null; operations = activity.operations;
-      const until = Math.min(operationsStableUntil(), ...reads.map(read => activityStableUntil(read.records, now.getTime())));
+      checks.edge = Math.min(...reads.map(read => activityStableUntil(read.records, now.getTime())));
+      const until = Math.min(operationsStableUntil(), checks.due, checks.edge);
       const loaded = { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until, ms: performance.now() - started };
       last = { loaded, reads, liveness, preferences };
       return loaded;

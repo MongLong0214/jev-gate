@@ -537,7 +537,13 @@ const deriveRows = (records: Rec[], host: Host, only: Host | undefined, feed: bo
   return rows;
 };
 
-export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; feed?: boolean }): ActivitySnapshot => {
+/** A dashboard's day summary between rebuilds. `due` is when one reused over newer records is computed again; `edge`,
+ * set by the caller, is when the records last read change the summary without a new one (a record leaves the day). */
+export interface ChecksMemo { at: number; settings: string; checks: Partial<Record<Host | 'all', ActivityCheck[]>>; due: number; edge: number }
+export const checksMemo = (): ChecksMemo => ({ at: -Infinity, settings: '', checks: {}, due: Infinity, edge: Infinity });
+export const CHECKS_MS = 10_000;
+
+export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readonly { host: Host; dir: string }[] | undefined; env: Env; now?: Date; host?: Host; traceCache?: TraceCache; traceReader?: TraceDirectoryReader; feed?: boolean; checks?: ChecksMemo }): ActivitySnapshot => {
   memoGeneration();
   const notes = [...NOTES];
   // The dashboard draws neither the event list nor the live board, and both cost a pass over every record.
@@ -593,8 +599,20 @@ export const loadActivity = (opts: { traceDir: string | null; traceDirs?: readon
     const step = operations.feed.find(s => s.feature === 'router' && s.routing?.scope === 'root' && (s.model || s.receipt?.choice) && (!only || s.host === only));
     return step ? { at: step.at, ...(step.host ? { host: step.host } : {}), runId: step.runId, ...(step.model ? { model: step.model } : {}), ...(step.receipt ? { receipt: step.receipt } : {}) } : undefined;
   };
-  const check = (only?: Host): ActivitySnapshot['activity24h']['all'] => activityChecks({ traces: only ? { [only]: traces[only] } : traces,
-    now: now.getTime(), installed: null, recording, keyPresent, codexOwner: null, liveness: only === 'codex' ? null : liveness })
+  // The day summary rescans every record of the day: in a real 48 h history it was two thirds of each dashboard rebuild.
+  // While records stream in, a dashboard reuses it for up to CHECKS_MS, then computes it once more (`due`).
+  const memo = opts.checks, settings = `${recording}|${keyPresent}`;
+  const fresh = !memo || memo.settings !== settings || now.getTime() - memo.at >= CHECKS_MS || now.getTime() >= memo.edge;
+  if (memo) { if (fresh) Object.assign(memo, { at: now.getTime(), settings, checks: {}, due: Infinity }); else memo.due = memo.at + CHECKS_MS; }
+  const checksOf = (only?: Host): ActivityCheck[] => {
+    const kept = !fresh ? memo?.checks[only ?? 'all'] : undefined;
+    if (kept) return kept;
+    const value = activityChecks({ traces: only ? { [only]: traces[only] } : traces,
+      now: now.getTime(), installed: null, recording, keyPresent, codexOwner: null, liveness: only === 'codex' ? null : liveness });
+    if (memo) memo.checks[only ?? 'all'] = value;
+    return value;
+  };
+  const check = (only?: Host): ActivitySnapshot['activity24h']['all'] => checksOf(only)
     .filter(c => c.feature && c.metrics).map(c => {
       const current = c.feature === 'router' ? currentRouter(only) : undefined;
       return { feature: c.feature!, level: c.level, metrics: c.metrics!, ...(current ? { current } : {}) };

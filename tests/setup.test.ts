@@ -1,8 +1,9 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { credentialsDir, credentialsPath, resolveApiKey, saveApiKey, withApiKey } from '../src/credentials.js';
+import { credentialsDir, credentialsPath, readPrivateJson, resolveApiKey, saveApiKey, withApiKey, writePrivateJson } from '../src/credentials.js';
 import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
 import { startOnboarding, type Onboarding } from '../src/onboarding.js';
 
@@ -71,6 +72,62 @@ describe('Claude automatic initialization', () => {
 });
 
 describe('automatic local key entry', () => {
+  it.each([process.pid, undefined])('preserves a slow owner without inventing readiness (pid %s, #341)', async pid => {
+    const env = fixture(), token = 'a'.repeat(64), opened: string[] = [];
+    const server = createServer((req, res) => {
+      const timer = setTimeout(() => res.end('jev-gate-setup'), 600);
+      res.once('close', () => clearTimeout(timer));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    const path = join(credentialsDir(env), 'setup.json');
+    writePrivateJson(path, { pid, port, token });
+    const before = readFileSync(path, 'utf8');
+    try {
+      const result = await startOnboarding(env, { open: url => opened.push(url) });
+      if (result) pages.push(result);
+      expect(result).toBeNull(); // A timeout is unknown readiness, not a stopped server.
+      expect(readFileSync(path, 'utf8')).toBe(before); expect(opened).toEqual([]);
+      expect(existsSync(join(credentialsDir(env), 'setup.lock'))).toBe(false);
+      expect(await (await fetch(`http://127.0.0.1:${port}/${token}/health`, { signal: AbortSignal.timeout(2000) })).text()).toBe('jev-gate-setup');
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
+  it.each([503, 200, 302])('preserves owner identity on an unexpected health response (%s, #341)', async status => {
+    const env = fixture(), token = 'c'.repeat(64), opened: string[] = [], requests: string[] = [];
+    const server = createServer((req, res) => {
+      requests.push(req.url!); res.writeHead(status, status === 302 ? { location: '/redirected' } : {}); res.end('not-the-setup-identity');
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const path = join(credentialsDir(env), 'setup.json');
+    writePrivateJson(path, { pid: process.pid, port: (server.address() as { port: number }).port, token });
+    const before = readFileSync(path, 'utf8');
+    try {
+      const result = await startOnboarding(env, { open: url => opened.push(url) }); if (result) pages.push(result);
+      expect(result).toBeNull(); expect(readFileSync(path, 'utf8')).toBe(before); expect(opened).toEqual([]);
+      expect(requests).toEqual([`/${token}/health`]);
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
+  it.each([process.pid, 2147483647])('recovers a closed endpoint owned by pid %s and cleans up only its own page (#341)', async pid => {
+    const env = fixture(), opened: string[] = [];
+    const first = await startOnboarding(env, { open: url => opened.push(url) }); expect(first).not.toBeNull();
+    const path = join(credentialsDir(env), 'setup.json'), original = readPrivateJson(path)!;
+    await first!.close();
+    writePrivateJson(path, { ...original, pid });
+    const second = await startOnboarding(env, { open: url => opened.push(url) }); expect(second).not.toBeNull();
+    pages.push(second!); expect(second!.url).not.toBe(first!.url); expect(opened).toHaveLength(2);
+    expect(await (await fetch(second!.url + '/health')).text()).toBe('jev-gate-setup');
+    expect(readPrivateJson(path)).toMatchObject({ pid: process.pid });
+    await first!.close(); expect(readPrivateJson(path)).not.toBeNull();
+    await second!.close(); expect(readPrivateJson(path)).toBeNull();
+  });
+  it('serializes simultaneous initializers without duplicate owners or browser opens (#341)', async () => {
+    const env = fixture(), opened: string[] = [];
+    const results = await Promise.all(Array.from({ length: 3 }, () => startOnboarding(env, { open: url => opened.push(url) })));
+    const created = results.filter((p): p is Onboarding => p !== null); pages.push(...created);
+    expect(created).toHaveLength(1); expect(opened).toEqual([created[0]!.url]);
+    const reused = await startOnboarding(env, { open: url => opened.push(url) }); expect(reused?.url).toBe(created[0]!.url);
+    expect(opened).toHaveLength(1); expect(existsSync(join(credentialsDir(env), 'setup.lock'))).toBe(false);
+  });
   it('opens one authenticated local page and rejects cross-site/oversized input without echoing the key', async () => {
     const env = fixture(); const opened: string[] = [];
     const first = await startOnboarding(env, { open: url => opened.push(url), note: '<restart once>' }); expect(first).not.toBeNull(); pages.push(first!);
