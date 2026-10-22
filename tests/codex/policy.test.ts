@@ -155,7 +155,7 @@ describe('Codex ordered routing and recorded application', () => {
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => { const req = JSON.parse(String(init?.body)); return response({ model: req.model, answers: answersFor(req, 'mechanical') }); });
     // An unobserved thread's prefix is unknown, and Luna's write (0.125/M) exceeds Sol's read (0.1/M) at any size: the picked downgrade is held.
     expect(await routeCodex({ model: 'gpt-6.1-sol', effort: 'medium', task: 'Rename a symbol.', session: 's', prompt: 'p', catalog: account, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl, trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({ effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
-    expect(rows.at(-1)).toMatchObject({ excluded: { superseded: 3 }, selection: { roles: [{ model: 'gpt-6-luna' }, { model: 'gpt-6.1-sol' }] }, cost_reason: 'cost_unknown_hold', reasons: { model: 'cost_unknown_hold' } });
+    expect(rows.at(-1)).toMatchObject({ excluded: { superseded: 3 }, selection: { roles: [{ option: 'mechanical', model: 'gpt-6-luna' }, { option: 'routine', model: 'gpt-6-luna' }, { option: 'complex', model: 'gpt-6.1-sol' }] }, cost_reason: 'cost_unknown_hold', reasons: { model: 'cost_unknown_hold' } });
   });
   const superseded = async (model: string, kind: string, extra: Partial<Parameters<typeof routeCodex>[0]> = {}) => {
     const rows: Obj[] = [];

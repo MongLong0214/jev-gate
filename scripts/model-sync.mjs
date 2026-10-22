@@ -140,8 +140,10 @@ export function verifyCodex(catalog, { normalizeCatalog, generalCodexModel, code
   const baseline = eligible.find(m => /latest.*workhorse/i.test(m.description))?.model;
   requireFact(baseline, 'Official Codex workhorse changed; review required');
   const tiers = catalogTierModels(baseline, catalog);
+  const lightest = Math.min(...candidates.map(c => c.rank));
   requireFact(Object.values(tiers).every(id => eligible.some(m => m.model === id)) &&
-    candidates.find(c => c.id === tiers.fast)?.rank === 0 && candidates.find(c => c.id === tiers.deep)?.rank === 2 &&
+    // A fast dispatch default can also serve focused coding. Missing a mechanical-only model is not a missing task class.
+    lightest <= 1 && candidates.find(c => c.id === tiers.fast)?.rank === lightest && candidates.find(c => c.id === tiers.deep)?.rank === 2 &&
     candidates.find(c => c.id === tiers.frontier)?.rank === 3, 'Codex tier defaults lost the current fast/workhorse/frontier roles');
   // A previous-generation root remains a readable native baseline, but never becomes a new target/default.
   requireFact(catalog.filter(m => /\b(?:older|previous generation|legacy)\b/i.test(m.description)).every(m => !candidates.some(c => c.id === m.model)), 'Legacy Codex model offered as an automatic target');

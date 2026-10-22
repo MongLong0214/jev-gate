@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { CAPABILITY, keepModelPair, offerRoute, selectPair, type PairOffer, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
+import { CAPABILITY, keepModelPair, offerRoute, selectPair, toolBound, type PairOffer, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
 import { claudeCandidates } from '../../mods/router/hooks/candidates.ts';
 import { DISPATCH_FLOORS, prepareDispatchAllocation } from '../../src/dispatch-allocation.ts';
+import { codexCandidates } from '../../src/codex/router.ts';
 
 const HAIKU = 'claude-haiku-5-5', SONNET = 'claude-sonnet-5-5', OPUS = 'claude-opus-5-5', FABLE = 'claude-fable-5-1';
 const offer = (baseline = OPUS, effort: string | null = 'high', over: Partial<Parameters<typeof offerRoute>[0]> & { allowFable?: boolean; available?: string[] } = {}) => {
@@ -28,10 +29,11 @@ describe('capability offer', () => {
     expect([...o.effortQuestions.keys()]).toEqual([HAIKU, SONNET, OPUS]);
     expect(o.questions['effort_2']!.instructions).toContain('do not use max effort as a substitute for missing model capability');
   });
-  it('offers the frontier option only with a frontier candidate, and drops a role no candidate serves', () => {
+  it('offers frontier only with a frontier candidate and serves missing lower tiers upward', () => {
     expect(Object.keys(offer(OPUS, 'high', { allowFable: true }).questions['capability']!.criteria)).toEqual(['open_problem', 'complex', 'routine', 'mechanical', 'unclear']);
     const noHaiku = offer(OPUS, 'high', { available: [SONNET, OPUS] });
-    expect(Object.keys(noHaiku.questions['capability']!.criteria)).toEqual(['complex', 'routine', 'unclear']);
+    expect(Object.keys(noHaiku.questions['capability']!.criteria)).toEqual(['complex', 'routine', 'mechanical', 'unclear']);
+    expect(selectPair(noHaiku, answers(noHaiku, { mechanical: 1 })).patch.model).toBe(SONNET);
   });
   it('serves a role by the baseline, else the preferred model, and asks no capability when the model is not routed', () => {
     const twins: RouteCandidate[] = [
@@ -39,7 +41,8 @@ describe('capability offer', () => {
       { id: 'fast-a', rank: 0, description: '', efforts: ['low', 'high'], omitEffort: false }, { id: 'fast-b', rank: 0, description: '', efforts: ['low', 'high'], omitEffort: false },
     ];
     const o = offerRoute({ baseline: { model: 'deep-b', effort: 'high' }, candidates: twins, prefer: ['fast-b'], model: true, effort: true, upgrade: .8, downgrade: .6 })!;
-    expect(o.roles!.map(r => r.model)).toEqual(['fast-b', 'deep-b']);
+    expect(o.roles!.map(r => r.model)).toEqual(['fast-b', 'deep-b', 'deep-b']);
+    expect(selectPair(o, answers(o, { routine: 1 })).patch.model).toBeUndefined();
     const effortOnly = offer(OPUS, 'high', { model: false });
     expect(Object.keys(effortOnly.questions)).toEqual(['effort_0', 'control', 'action_risk']);
     expect(effortOnly.modelAsked).toBe(false);
@@ -58,6 +61,50 @@ describe('capability offer', () => {
   });
   it('names every capability option as a situation with examples and a boundary', () => {
     for (const c of CAPABILITY) expect(c.situation).toMatchObject({ what: expect.any(String), examples: expect.arrayContaining([expect.any(String)]), not_for: expect.any(String) });
+  });
+});
+
+describe('current Codex focused coding capability', () => {
+  const candidates = codexCandidates([
+    { model: 'gpt-6.1-sol', description: 'Latest workhorse model for coding and everyday work.', supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) },
+    { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: ['low', 'medium', 'high'].map(reasoningEffort => ({ reasoningEffort })) },
+  ], false);
+  const offerCodex = (baseline = 'gpt-6.1-sol') => offerRoute({ baseline: { model: baseline, effort: 'high' }, candidates, model: true, effort: true, upgrade: .8, downgrade: .6 })!;
+  it('offers retrieval and ordinary focused development separately, served by one eligible Luna with its own effort', () => {
+    const o = offerCodex();
+    expect(o.roles).toEqual([{ option: 'mechanical', rank: 0, model: 'gpt-6-luna' }, { option: 'routine', rank: 1, model: 'gpt-6-luna' }, { option: 'complex', rank: 2, model: 'gpt-6.1-sol' }]);
+    expect([...o.effortQuestions.keys()]).toEqual(['gpt-6-luna', 'gpt-6.1-sol']);
+    for (const capability of ['mechanical', 'routine']) expect(selectPair(o, answers(o, { [capability]: 1 })).patch.model).toBe('gpt-6-luna');
+    expect(selectPair(o, answers(o, { complex: 1 })).patch.model).toBeUndefined();
+  });
+  it.each([[.6, true], [.599, false]])('sums disjoint lower task classes once at the existing floor %s', (mass, selected) => {
+    const o = offerCodex();
+    const d = selectPair(o, answers(o, { mechanical: .2, routine: mass - .2, complex: 1 - mass }));
+    expect(d.patch.model).toBe(selected ? 'gpt-6-luna' : undefined);
+  });
+  it('keeps unknown, risky and locked work native and retains the .8 return floor', () => {
+    const o = offerCodex();
+    expect(selectPair(o, answers(o, { routine: .4, unclear: .6 })).patch).toEqual({});
+    for (const risk of ['consequential', 'unclear']) expect(selectPair(o, answers(o, { routine: 1 }, 0, 'task_clear', risk)).patch.model).toBeUndefined();
+    expect(selectPair(o, answers(o, { routine: 1 }, 0, 'model_lock')).patch.model).toBeUndefined();
+    const back = offerCodex('gpt-6-luna');
+    expect(selectPair(back, answers(back, { complex: .8, routine: .2 })).patch.model).toBe('gpt-6.1-sol');
+    expect(selectPair(back, answers(back, { complex: .799, routine: .201 })).patch.model).toBeUndefined();
+  });
+  it('does not infer the documented capability for unknown variants or fabricate account availability', () => {
+    const luna = { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: [{ reasoningEffort: 'high' }] };
+    expect(codexCandidates([luna], false)[0]?.rank).toBe(1);
+    expect(codexCandidates([{ ...luna, model: 'gpt-6.1-luna' }], false)[0]?.rank).toBe(0);
+    expect(codexCandidates([], false)).toEqual([]);
+    expect(codexCandidates([{ ...luna, hidden: true }], false)).toEqual([]);
+  });
+  it('bounds tool work by the serving model capability without recording a same-model move', () => {
+    const o = offerCodex();
+    const raw = answers(o, { routine: 1 });
+    expect(toolBound(o, raw, 'gpt-6.1-sol', true)).toEqual({ model: 'gpt-6-luna', reason: 'tool_read_only' });
+    expect(toolBound(o, raw, 'gpt-6.1-sol', false)).toEqual({ model: 'gpt-6-luna', reason: 'tool_editing' });
+    expect(toolBound(o, raw, 'gpt-6-luna', true)).toBeNull();
+    expect(toolBound(o, raw, 'gpt-6-luna', false)).toBeNull();
   });
 });
 

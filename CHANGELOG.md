@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.46 — 2026-10-22 — Keep task classes independent of available model tiers
+
+- Preserve mechanical, routine and complex task classes when an account lacks a model tier (#300). Serve each class with the least capable sufficient available model, and sum disjoint classes assigned to the same model once.
+- Match the available `gpt-6-luna` model to current official guidance for focused coding and clearly scoped problem solving. Account eligibility, supported effort, user pins, uncertainty and action-risk checks still apply. Gate B defaults remain account-derived.
+- The fixed 12-example actual Jev comparison selected Luna for eight light/routine cases and Sol for four complex cases in both versions. This corrects task classification; that sample establishes neither an increased switching rate nor actual subscription savings. The measured product goals in #300 and #317 remain open.
+
 ## v0.8.45 — 2026-10-22 — Let the dashboard idle and stop promptly
 
 - Replace 50 ms dashboard polling and unconditional one-second activity rebuilds with file/preferences watchers, actual expiry timers and shared coalesced refreshes (#327). Quiet connections send a five-second heartbeat; a constant number of metadata checks every 500 ms recovers missed filesystem notifications without rereading unchanged trace history. A 30-second filename reconciliation remains as a safety net.
