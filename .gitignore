@@ -15,3 +15,6 @@ dist-pack/
 # What the host writes into a mod on a --plugin-dir load
 mods/*/tsconfig.json
 mods/*/.claude-plugin/types/
+
+# Generated package identity for native Function Hooks.
+/mods/router/hooks/version.ts

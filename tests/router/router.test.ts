@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -18,6 +18,13 @@ import { buildOperations } from '../../src/operations.js';
 import { normalizeUsage } from '../../src/cost.ts';
 import type { Responder } from './fake-engine.ts';
 import { answering, choice, CLEAR, deferred, drain, FAKE_KEY, fakeEngine, streamNext, warmRoot } from './fake-engine.ts';
+
+it('captures the Router package version at module load instead of a manually maintained trace version (#332)', () => {
+  const root = JSON.parse(readFileSync(new URL('../../.claude-plugin/plugin.json', import.meta.url), 'utf8')) as { version: string };
+  const standalone = JSON.parse(readFileSync(new URL('../../mods/router/.claude-plugin/plugin.json', import.meta.url), 'utf8')) as { version: string };
+  expect(standalone.version).toBe(root.version);
+  expect(ROUTER_HOOK_VERSION).toBe(root.version);
+});
 
 const configOf = (options: Record<string, string | number | boolean>) => {
   const r = resolveConfig({ enabled: true, allowFable: true, ...options });

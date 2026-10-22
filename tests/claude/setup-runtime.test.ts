@@ -55,7 +55,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude initial
       let modelCalls = 0; const nativeModels: string[] = []; const toolNames: unknown[] = []; const toolResults: unknown[] = []; const paths: unknown[] = [];
       const api = createServer(async (req, res) => {
         paths.push(req.url); const chunks: Buffer[]=[]; for await (const part of req) chunks.push(Buffer.from(part)); let body=Buffer.concat(chunks); if(req.headers['content-encoding']==='gzip') body=gunzipSync(body); const raw=body.toString();
-        let requestedModel = 'claude-sonnet-5';
+        let requestedModel = 'claude-sonnet-5-5';
         try { const body=JSON.parse(raw); requestedModel=body.model??requestedModel;toolNames.push(body.tools?.map((t: {name:string})=>t.name)); for(const m of body.messages ?? []) for(const c of Array.isArray(m.content)?m.content:[]) if(c.type==='tool_result') toolResults.push(String(JSON.stringify(c.content)).slice(0,500)); } catch {}
         if (req.url?.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":10}'); return; }
         if (!req.url?.includes('/v1/messages')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); return; }
@@ -73,7 +73,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude initial
       await new Promise<void>(resolve => api.listen(0, '127.0.0.1', resolve));
       try {
         const isolated = await new Promise<{ status: number | null; output: string }>((resolve, reject) => {
-          const child = spawn('claude', ['--plugin-dir', plugin, '-p', 'Reply fixture complete.', '--model', 'claude-sonnet-5', '--max-turns', '3', '--permission-mode', 'default', '--allowedTools', 'Agent'], {
+          const child = spawn('claude', ['--plugin-dir', plugin, '-p', 'Reply fixture complete.', '--model', 'claude-sonnet-5-5', '--max-turns', '3', '--permission-mode', 'default', '--allowedTools', 'Agent'], {
             cwd: project, env: { ...env, ANTHROPIC_API_KEY: 'fake-native-claude-key', ANTHROPIC_BASE_URL: `http://127.0.0.1:${(api.address() as { port: number }).port}`, JEV_GATE_MODE: 'native' },
           });
           let output = ''; child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
@@ -94,6 +94,9 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude initial
       expect(rootReceipt.observed).toBe('claude-opus-5-5');
       expect(rootReceipt.applied.model).toBe('claude-opus-5-5');
       expect(rootReceipt.confirmation).toBe('confirmed');
+      const versioned = traces.filter(r => r.phase === 'mod_router' && typeof r.hook_version === 'string');
+      expect(versioned.length).toBeGreaterThan(0);
+      expect([...new Set(versioned.map(r => r.hook_version))]).toEqual([version]);
       expect(JSON.stringify(traces)).not.toContain('fake-native-claude-key');
       expect(git(['rev-parse', 'HEAD']).stdout).toBe(initialHead); expect(git(['status', '--porcelain']).stdout).toBe(initialStatus);
       const validate = spawnSync('claude', ['plugin', 'validate', join(plugin, '.claude-plugin/plugin.json'), '--strict'], { env, cwd: temp, encoding: 'utf8', timeout: 25_000 });

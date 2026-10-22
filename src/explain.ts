@@ -54,7 +54,17 @@ const signature = (stat: Stats): string => [stat.dev, stat.ino, stat.size, stat.
 export const traceDirectoryIdentity = (stat: Stats): string => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
 
 const traceName = (name: string): boolean => name.endsWith('.json') && !name.startsWith('.');
-const sortedRecords = (records: Rec[]): Rec[] => records.sort((a, b) => (str(a['written_at']) ?? '').localeCompare(str(b['written_at']) ?? ''));
+// Sorting a large history calls its comparator many times. Screen each immutable timestamp once, including when
+// concurrent writers deliver an older record and the entire cached history must be reordered.
+const recordTimes = new WeakMap<Rec, { raw: unknown; value: string }>();
+const writtenAt = (record: Rec): string => {
+  const raw = record['written_at'], known = recordTimes.get(record);
+  if (known && known.raw === raw) return known.value;
+  const value = str(raw) ?? '';
+  recordTimes.set(record, { raw, value });
+  return value;
+};
+const sortedRecords = (records: Rec[]): Rec[] => records.sort((a, b) => writtenAt(a).localeCompare(writtenAt(b)));
 
 /** The cached record when the file is unchanged, null when it cannot be a trace, undefined when it must be read. */
 const cachedTrace = (key: string, cache: TraceCache, stat: Stats): Rec | null | undefined => {
@@ -226,7 +236,7 @@ export class TraceDirectoryReader {
       const added = [...state.appended].sort((a, b) => a.localeCompare(b)).map(name => state.values.get(name) ?? null);
       const records = sortedRecords(added.filter((r): r is Rec => r !== null)), last = state.result.records.at(-1);
       if (!state.replaced && state.result.records.length + state.result.unreadable + added.length === state.values.size
-        && (!last || !records[0] || (str(records[0]['written_at']) ?? '').localeCompare(str(last['written_at']) ?? '') > 0)) {
+        && (!last || !records[0] || writtenAt(records[0]).localeCompare(writtenAt(last)) > 0)) {
         state.result = { records: state.result.records.concat(records), unreadable: state.result.unreadable + added.length - records.length };
       } else {
         const values = [...state.values].sort(([a], [b]) => a.localeCompare(b)).map(([, r]) => r);
