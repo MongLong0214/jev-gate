@@ -216,6 +216,30 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await anchor.getAttribute('aria-pressed')).toBe('true');push([a,n,b]);await settle(p);expect(await p.locator('#runs .row').first().getAttribute('data-run')).toBe('a');await p.close();
   });
 
+  it.each([
+    ['ko', '현재 요청은 기존 대화 문맥을 바탕으로 처리합니다', '문맥 확인'],
+    ['en', 'Current model remains unchanged for now.', 'Context checked'],
+  ])('fits short %s card reasons by their rendered height and retains the full status across resize and live updates (#338)',async(language,summary,short)=>{
+    const initial=call('note','admission',63,{executionPath:'direct',summary},{choice:'direct'});
+    push([run('note-run','claude',[initial])]);const p=await page(1600,900);
+    if(await p.locator('html').getAttribute('lang')!==language)await p.locator('#language').click();
+    const card=p.locator('#pipeline [data-feature=admission]'),note=card.locator('.nt');await card.click();await settle(p);
+    expect(await note.textContent()).toBe(summary);
+    await p.setViewportSize({width:1280,height:900});await settle(p);
+    const bounds=()=>card.evaluate(e=>{const note=e.querySelector('.nt')!,bar=e.querySelector('.pb')!,range=document.createRange();range.selectNodeContents(note);const n=note.getBoundingClientRect(),r=range.getBoundingClientRect(),b=bar.getBoundingClientRect();return {width:e.getBoundingClientRect().width,noteHeight:n.height,textBottom:r.bottom,barTop:b.top,scrollHeight:note.scrollHeight,clientHeight:note.clientHeight};});
+    const fitted=await bounds();expect(fitted.width).toBeGreaterThanOrEqual(160);expect(fitted.width).toBeLessThan(161);
+    expect(fitted.textBottom,summary).toBeLessThanOrEqual(fitted.barTop);expect(fitted.scrollHeight).toBeLessThanOrEqual(fitted.clientHeight+1);
+    expect(await note.textContent()).not.toBe(summary);expect(await note.getAttribute('title')).toBe(summary);
+    expect(await p.locator('#circuit-inspector .status-value').textContent()).toContain(summary);
+    await p.screenshot({path:join(output,`card-note-${language}-1280.png`),fullPage:true});
+    const geometry=()=>p.evaluate(()=>['pipeline','circuit-inspector','runs'].map(id=>{const b=document.getElementById(id)!.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height};}));const before=await geometry();
+    push([run('note-run','claude',[{...initial,summary:short}])]);await settle(p);expect(await note.textContent()).toBe(short);expect(await geometry()).toEqual(before);
+    push([run('note-run','claude',[initial])]);await settle(p);expect((await bounds()).textBottom).toBeLessThanOrEqual((await bounds()).barTop);expect(await geometry()).toEqual(before);
+    expect(await p.locator('#circuit-inspector .status-value').textContent()).toContain(summary);
+    await p.setViewportSize({width:1600,height:900});await settle(p);expect(await note.textContent()).toBe(summary);
+    await p.close();
+  });
+
   it('keeps oversized 24h counts and cost ranges in the complete stage detail without overlapping card status (#338)',async()=>{
     const big=9_007_199_254_740_991,metrics={fired:big,applied:big,regression:big,accepted:big,rejected:big,failed:big,pending:big,cancelled:big,restored:big,budgetUsed:big,budget:big,codexAssessed:big,codexSubmitted:big,codexCompleted:big,effect:[-999_999_999_999,999_999_999_999]};
     const facts=['workers','router','compact'].map(feature=>({feature,level:'warn',metrics}));
