@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.55 — 2026-10-22 — Run a Fable subagent the call names
+
+- Router no longer replaces a restricted model that an Agent call names (`model: "fable"`) without the Fable opt-in. It ran such a child on Opus and the root, unaware, reported a Fable review (#357). A named restricted model is now a manual selection, as on the root: it runs as named, without a Jev call. Inherited, default and automatic Fable children stay restricted.
+
 ## v0.8.54 — 2026-10-22 — Reduce repeated Codex execution rounds
 
 - Preserve known native tool failures in continuation routing and distinguish explicit status from completion-only evidence. Judge effort against the actual account-listed candidate and its validated default (#300).
