@@ -16,7 +16,7 @@ Model and effort are independent. A model pin leaves effort open; an effort pin 
 
 ### Restricted automatic models
 
-Astra in Codex and Fable in Claude are **excluded from automatic targets by default**, including ordinary subagents, Gate workers and retries. A manual root selection remains usable and can still have its effort routed. It does not authorize automatic children to inherit that restricted model. An ineligible child falls back to main-session work; ownership of an already launched or uncertain worker remains protected.
+Astra in Codex and Fable in Claude are **excluded from automatic targets by default**, including ordinary subagents, Gate workers and retries. A manual root selection remains usable and can still have its effort routed. A Claude subagent call that names the restricted model (`model: "fable"`) is also a manual selection: it runs as named, unrouted. It does not authorize automatic children to inherit that restricted model. An ineligible child falls back to main-session work; ownership of an already launched or uncertain worker remains protected.
 
 Only the literal boolean `true` enables the respective option. Null, strings and numbers are invalid. These are independent host/package settings, with no shared master switch:
 
