@@ -18,6 +18,7 @@ import { providerPrice } from '../../../src/provider-prices.ts';
 import { CACHE_REACH, costHold, routeCost, TURN_HORIZON } from '../../../src/route-cost.ts';
 import { claudeEffortCache, effortCacheHit, type ClaudeCacheCapability } from '../../../src/claude-cache.ts';
 import { parseDispatchMarker } from '../../../src/claude-dispatch.ts';
+import { ROUTER_HOOK_VERSION } from './version.ts';
 
 /**
  * The Router's handlers over a structural engine. register.ts adapts the host's `$` to RouterEngine (the environment
@@ -139,7 +140,7 @@ type NextLike<E, R> = ((e: E) => Promise<R>) & { readonly signal: AbortSignal };
  */
 export const VERIFIED_HOST = '2.1.282';
 /** Identifies this loaded hook source, independently of a manifest updated on disk. */
-export const ROUTER_HOOK_VERSION = '0.8.33';
+export { ROUTER_HOOK_VERSION };
 
 /**
  * Later 2.1 releases are accepted too. Pinned to one release, spawn routing went native after every host update: the

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.47 — 2026-10-22 — Keep live history fast and dashboard values readable
+
+- Cache screened trace timestamps across sorting and late arrivals without changing records, order or secret screening (#327). A fixed 6,001-record comparison with 12 late arrivals reduced reorder CPU from 12,621 ms to 70 ms with identical output; installed long-running CPU and memory remain separate checks.
+- Use readable card summaries, complete wrapped details and closed diagnostics; distinguish recent decisions from 24-hour activity (#330). Show recorded traffic on the node, hub and connecting lines, with no idle traffic animation. Chromium passed 34 cases including strict layout stability and real EventSource patch reactions in 19.7–21 ms across three viewports.
+- Generate the Router's loaded hook version from the package version as a native TypeScript module (#332). Check both archive profiles and an actual Claude Function Hook receipt; already loaded older hooks retain their own version.
+- Router and Compact actual subscription-saving goals remain open in #300 and #317. These runtime, UI and version repairs do not establish the required allowance reduction.
+
 ## v0.8.46 — 2026-10-22 — Keep task classes independent of available model tiers
 
 - Preserve mechanical, routine and complex task classes when an account lacks a model tier (#300). Serve each class with the least capable sufficient available model, and sum disjoint classes assigned to the same model once.

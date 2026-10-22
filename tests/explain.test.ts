@@ -1,11 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { loadActivity } from '../src/activity.js';
 import { buildOperations } from '../src/operations.js';
 import { TraceDirectoryReader, allocatedTraceRecords, EXPLAIN_CAVEATS, explainDir, explainRecords, readTraceRecords, type TraceCache } from '../src/explain.js';
+import * as outboundText from '../src/outbound-text.js';
 
 // What the gate did was already recorded; only reading it was missing. These drive the real reader over real record
 // shapes, so a rendered line is only ever a field that was written.
@@ -321,6 +322,24 @@ describe('incremental directory reconciliation', () => {
       expect(reader.read(dir, 1001)).toEqual(readTraceRecords(dir));
     }
     expect(reader.read(dir, 1001).records.map(r => r['request_id'] ?? 'b.json')).toEqual(['c.json', 'b.json', 'a.json', 'd.json']);
+  });
+  it('screens immutable timestamps once through cold sorting and late-file reordering (#327)', async () => {
+    const dir = mkdtempSync(join(tmp, 'late-sort-')), reader = new TraceDirectoryReader(60_000), count = 257;
+    const screen = vi.spyOn(outboundText, 'looksSecret');
+    try {
+      for (let i = 0; i < count; i++) writeFileSync(join(dir, `${String(i).padStart(3, '0')}.json`), JSON.stringify(base('admission_intent', (i * 127) % count)));
+      await reader.prepare(dir, 1000);
+      expect(reader.read(dir, 1000).records.map(r => r['written_at'])).toEqual(Array.from({ length: count }, (_, i) => iso(i)));
+      const firstChecks = screen.mock.calls.filter(([value]) => typeof value === 'string' && value.startsWith('2026-09-20T')).length;
+      expect(firstChecks).toBeLessThanOrEqual(count);
+      // Concurrent writers can deliver a file older than the newest cached record. It must join the whole history.
+      writeFileSync(join(dir, 'late.json'), JSON.stringify(base('admission_intent', 42, { request_id: 'late' })));
+      reader.invalidate(dir, 'late.json'); await reader.prepare(dir, 1001);
+      const changed = reader.read(dir, 1001).records;
+      expect(changed).toHaveLength(count + 1);
+      expect(changed.findIndex(r => r['request_id'] === 'late')).toBe(43);
+      expect(screen.mock.calls.filter(([value]) => typeof value === 'string' && value.startsWith('2026-09-20T')).length).toBeLessThanOrEqual(count + 1);
+    } finally { screen.mockRestore(); }
   });
   it('rejects substituted file and directory symlinks and oversized records, and discovers a newly created directory', () => {
     const dir = join(tmp, 'later-reader'), outside = mkdtempSync(join(tmp, 'outside-reader-')), reader = new TraceDirectoryReader(100);

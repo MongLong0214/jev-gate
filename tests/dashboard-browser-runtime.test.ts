@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { diffFrame, type FrameMemo, type FrameSnapshot } from '../src/dashboard-patch.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { dashboardSources, startDashboard } from '../src/dashboard.js';
 import { buildOperations, type JevReceipt, type OperationRun, type OperationStep } from '../src/operations.js';
@@ -39,7 +40,7 @@ function snapshot(runs: OperationRun[]) {
 
 // Actual browser, native EventSource and disposable HTTP server. No user browser, credentials or paid requests.
 describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chromium runtime', () => {
-  let browser: Browser; let url: string; let current: ReturnType<typeof snapshot> & { credit?: { exhausted: boolean } } = snapshot([]); const clients = new Set<ServerResponse>();
+  let browser: Browser; let url: string; let current: ReturnType<typeof snapshot> & { credit?: { exhausted: boolean }; frame?: string } = snapshot([]);let memo:FrameMemo|null=null, frameId=0; const clients = new Set<ServerResponse>();
   const output = process.env['JEV_DASHBOARD_QA_DIR'] ?? join(tmpdir(), 'jev-dashboard-browser-qa');
   const errors: string[] = [];
   const server = createServer((req,res) => {
@@ -47,7 +48,8 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     if(req.method==='POST'){res.writeHead(503);res.end('{}');return;}
     res.writeHead(200,{'content-type':'text/html'});res.end(DASHBOARD_PAGE.replace('/*JEV_VERSION*/null',JSON.stringify(VERSION)));
   });
-  const push = (runs: OperationRun[], extra: { credit?: { exhausted: boolean }; version?: typeof VERSION } = {}) => {current={...snapshot(runs),...extra};for(const res of clients)res.write(`data: ${JSON.stringify(current)}\n\n`);};
+  const push = (runs: OperationRun[], extra: { credit?: { exhausted: boolean }; version?: typeof VERSION } = {}) => {const next={...snapshot(runs),...extra};memo=diffFrame(null,next as unknown as FrameSnapshot,()=>String(++frameId)).memo;current={...next,frame:memo.key};for(const res of clients)res.write(`data: ${JSON.stringify(current)}\n\n`);};
+  const patch = (runs:OperationRun[])=>{const next=snapshot(runs),base=memo!.key,out=diffFrame(memo,next as unknown as FrameSnapshot,()=>String(++frameId));memo=out.memo;current={...next,frame:memo.key};expect(out.patch).not.toBeNull();for(const res of clients)res.write(`event: patch\ndata: ${JSON.stringify({base,frame:memo.key,p:JSON.parse(out.patch!)})}\n\n`);};
   const page = async (width=1440,height=900) => {const p=await browser.newPage({viewport:{width,height}});p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForSelector('#pipeline .node');return p;};
   const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
   beforeAll(async()=>{mkdirSync(output,{recursive:true});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
@@ -68,7 +70,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     const nodes=[...document.querySelectorAll('#pipeline .node')].map(e=>e.getBoundingClientRect());if(nodes.length!==5)out.push('node count '+nodes.length);
     nodes.forEach((a,i)=>{if(a.width<120)out.push('narrow node');if(a.left<0||a.right>innerWidth+1)out.push('offscreen node');for(const b of nodes.slice(i+1))if(a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top)out.push('overlapping nodes');});
     for(const e of document.querySelectorAll('#pipeline .node :is(.t,.dec)')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1)out.push('clipped node text: '+e.textContent);}
-    for(const l of document.querySelectorAll('#pipeline svg.wires line')){const r=l.getBoundingClientRect();if(!r.height)continue;if(nodes.some(n=>r.left>n.left+1&&r.left<n.right-1&&r.top<n.bottom-1&&r.bottom>n.top+1))out.push('wire crosses a node');}
+    // An orthogonal path can surround cards; its bounding box cannot identify a crossing.
+    // Check each rendered segment in viewport coordinates, including every wrapped row.
+    for(const l of document.querySelectorAll('#pipeline svg.wires [data-wire]')){const path=l as unknown as {getAttribute(n:string):string|null;getScreenCTM():{a:number;b:number;c:number;d:number;e:number;f:number}|null},m=path.getScreenCTM(),coords=(path.getAttribute('d')||'').match(/[-+]?\d*\.?\d+(?:e[-+]?\d+)?/gi)?.map(Number)||[];if(!m||coords.length<4){out.push('wire without a route');continue;}const points=[];for(let i=0;i<coords.length;i+=2)points.push({x:m.a*coords[i]!+m.c*coords[i+1]!+m.e,y:m.b*coords[i]!+m.d*coords[i+1]!+m.f});for(let i=1;i<points.length;i++){const a=points[i-1]!,b=points[i]!;if(nodes.some(n=>Math.abs(a.x-b.x)<.5?a.x>n.left+1&&a.x<n.right-1&&Math.min(a.y,b.y)<n.bottom-1&&Math.max(a.y,b.y)>n.top+1:a.y>n.top+1&&a.y<n.bottom-1&&Math.min(a.x,b.x)<n.right-1&&Math.max(a.x,b.x)>n.left+1))out.push('wire crosses a node');}}
     if(nodes[0]!.top>innerHeight-100)out.push('circuit below the first viewport: '+Math.round(nodes[0]!.top));
     for(const e of document.querySelectorAll('#runs .c-st')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1)out.push('run state wider than its column: '+e.textContent);}
     for(const e of document.querySelectorAll('.stat dd.s')){const box=e as unknown as {scrollWidth:number;clientWidth:number};if(box.scrollWidth>box.clientWidth+1)out.push('clipped header line: '+e.textContent);}
@@ -192,7 +196,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(await node.evaluate(e=>getComputedStyle(e).outlineWidth)).toBe('2px');
       expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationName)).toBe('none');
       await p.emulateMedia({reducedMotion:'no-preference'});await node.evaluate(e=>e.classList.add('zap'));expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationName)).toBe('halo');
-      await p.locator('#pause').click();expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationPlayState)).toBe('paused');await p.locator('#pause').click();
+      await p.locator('#pause').click();expect(await node.evaluate(e=>(e as unknown as {getAnimations(o:{subtree:boolean}):Array<{playState:string}>}).getAnimations({subtree:true}).filter(a=>a.playState==='running').length)).toBe(0);await p.locator('#pause').click();
     }
     await p.close();
   });
@@ -210,19 +214,66 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const field=p.locator('#circuit-inspector dd').filter({hasText:full}).first();
       await field.focus();await field.press('End');await wait(300);
       const focused=await field.evaluate(e=>({text:e.textContent,height:e.clientHeight,scroll:e.scrollHeight,overflow:getComputedStyle(e).overflowY,focused:document.activeElement===e}));
-      expect(focused.text).toContain(full);expect(focused.scroll).toBeGreaterThan(focused.height);expect(focused.overflow).toBe('auto');expect(focused.focused).toBe(true);
+      expect(focused.text).toContain(full);expect(focused.scroll).toBeLessThanOrEqual(focused.height+1);expect(focused.overflow).toBe('visible');expect(focused.focused).toBe(true);
       await p.locator('#circuit-inspector .b').evaluate(e=>{e.scrollTop=120});
       await field.evaluate(e=>{e.scrollTop=40});
       const position=await p.locator('#circuit-inspector .b').evaluate(e=>e.scrollTop);
       const pagePosition=await p.evaluate(()=>document.documentElement.scrollTop);
       const newest={...long,id:'stable-newest',at:ago(0),durationMs:3};push([run('stable','codex',[short,long,newest],{title:full,state:'attention'})]);await wait(80);await settle(p);
-      expect(await rects()).toEqual(before);expect(await field.evaluate(e=>document.activeElement===e)).toBe(true);expect(await field.evaluate(e=>e.scrollTop)).toBe(40);
+      expect(await rects()).toEqual(before);expect(await field.evaluate(e=>document.activeElement===e)).toBe(true);expect(await field.evaluate(e=>e.scrollTop)).toBe(0);
       expect(await p.locator('#circuit-inspector .b').evaluate(e=>e.scrollTop)).toBe(position);
       expect(await p.evaluate(()=>document.documentElement.scrollTop)).toBe(pagePosition);
       expect(await p.locator('#circuit-inspector dd').filter({hasText:'3ms'}).count()).toBeGreaterThan(0);
       await p.close();
     }
   },30_000);
+
+  it('reads complete values and responds to actual patches within 100ms with no idle or layout motion (#330)',async()=>{
+    const measurements:unknown[]=[];
+    for(const [width,height]of [[1440,900],[1280,720],[390,844]]){
+      const initial=call('initial','router',91,{summary:'이전 모델 기록 · legacy_model',details:['loaded hook version 0.8.33 · 0123456789abcdef'],routing:{scope:'root',baseline:'gpt-6.1-sol',modelReason:'fable_disabled_by_config',effortReason:'selected'}},{choice:'gpt-6-luna · low'});
+      const rs=[run('patch','codex',[initial])];push(rs);
+      const p=await browser.newPage({viewport:{width:width!,height:height!}});p.on('pageerror',e=>errors.push(e.message));
+      await p.addInitScript(()=>{
+        type EventStream={addEventListener(name:string,cb:()=>void):void};
+        type Shift={value:number;hadRecentInput:boolean};
+        const g=globalThis as unknown as {EventSource:new(url:string)=>EventStream;patchAt:number;opens:number;reactions:Record<string,number>;patchEvents:string[];cls:number;PerformanceObserver:new(cb:(l:{getEntries():Shift[]})=>void)=>{observe(o:{type:string;buffered:boolean}):void}};
+        g.patchAt=0;g.opens=0;g.reactions={};g.patchEvents=[];g.cls=0;
+        const Native=g.EventSource;g.EventSource=class extends Native{constructor(url:string){super(url);this.addEventListener('open',()=>g.opens++);this.addEventListener('patch',()=>{g.patchAt=performance.now()})}};
+        new g.PerformanceObserver(l=>{for(const e of l.getEntries())if(!e.hadRecentInput)g.cls+=e.value}).observe({type:'layout-shift',buffered:true});
+        new MutationObserver(list=>{for(const m of list)for(const raw of m.addedNodes){const e=raw as unknown as {classList?:{contains(c:string):boolean};dataset:{event?:string};parentElement?:{classList:{contains(c:string):boolean};dataset:{feature?:string}}};
+          const kind=e.classList?.contains('wire-signal')?'wire':e.classList?.contains('signal-glow')?(e.parentElement?.classList.contains('jb')?'hub':'node'):null;
+          if(g.patchAt&&kind&&g.reactions[kind]===undefined)g.reactions[kind]=performance.now()-g.patchAt;
+          if(e.classList?.contains('trip')&&e.dataset.event)g.patchEvents.push(e.dataset.event);
+        }}).observe(document,{childList:true,subtree:true});
+      });
+      await p.goto(url);await p.waitForSelector('#pipeline .node');await settle(p);
+      await p.locator('#pipeline [data-feature=router]').click();
+      for(const language of ['ko','en']){
+        if(language==='en')await p.locator('#language').click();
+        const issues=await p.evaluate(()=>{
+          const issues:string[]=[];
+          for(const e of document.querySelectorAll('body *')){if(!e.getClientRects().length)continue;const style=getComputedStyle(e);if([...e.childNodes].some(n=>n.nodeType===3&&n.textContent?.trim())&&parseFloat(style.fontSize)<12)issues.push('small '+e.className+': '+style.fontSize);}
+          for(const e of document.querySelectorAll('#circuit-inspector dd,.sd:not([hidden]) dd')){const box=e as unknown as {scrollWidth:number;clientWidth:number;scrollHeight:number;clientHeight:number};if(box.scrollWidth>box.clientWidth+1||box.scrollHeight>box.clientHeight+1)issues.push('clipped '+e.textContent);if(['auto','scroll','hidden'].includes(getComputedStyle(e).overflowY))issues.push('nested scroll '+e.textContent);}
+          if(document.documentElement.scrollWidth>innerWidth)issues.push('page overflow');return issues;
+        });expect(issues,`${width} ${language}`).toEqual([]);
+        const raw=p.locator('#circuit-inspector details.diagnostics');expect(await raw.getAttribute('open')).toBeNull();expect(await raw.textContent()).toContain('fable_disabled_by_config');
+        expect(await p.locator('#pipeline [data-feature=router] .nt').textContent()).not.toMatch(/legacy_model|fable_disabled_by_config|loaded.hook|0123456789abcdef/);
+      }
+      await p.locator('#language').click();await settle(p);await wait(1100);
+      const batch=[call('patch-router','router',73,{},{choice:'gpt-6.1-sol · high'}),call('patch-compact','compact',82),call('patch-allocation','allocation',94)];patch([{...rs[0]!,steps:[...rs[0]!.steps,...batch],lastAt:ago(0)}]);
+      await expect.poll(()=>p.evaluate(()=>Object.keys((globalThis as unknown as {reactions:Record<string,number>}).reactions).length)).toBe(3);
+      const measured=await p.evaluate(()=>{const g=globalThis as unknown as {reactions:Record<string,number>;patchEvents:string[];cls:number;opens:number};const number=document.querySelector('#pipeline [data-feature=router] .dec b') as unknown as {getAnimations():unknown[]};return {reactions:g.reactions,events:g.patchEvents,cls:g.cls,opens:g.opens,numbers:number.getAnimations().length}});
+      for(const [kind,ms]of Object.entries(measured.reactions))expect(ms,`${width} ${kind}`).toBeLessThanOrEqual(100);
+      expect(new Set(measured.events)).toEqual(new Set(batch.map(s=>s.id)));expect(measured.numbers).toBeGreaterThan(0);expect(measured.opens).toBe(1);
+      expect(await p.locator('#pipeline .jb .v').textContent()).toContain('총 4회');
+      await p.screenshot({path:join(output,`readability-${width}-active.png`),fullPage:true});await wait(1200);
+      const idle=await p.locator('#pipeline').evaluate(e=>(e as unknown as {getAnimations(o:{subtree:boolean}):Array<{playState:string}>}).getAnimations({subtree:true}).filter(a=>a.playState==='running').length);expect(idle).toBe(0);
+      const cls=await p.evaluate(()=>(globalThis as unknown as {cls:number}).cls);expect(cls).toBe(0);measurements.push({width,...measured,cls,idle});
+      await p.screenshot({path:join(output,`readability-${width}-idle.png`),fullPage:true});await p.close();
+    }
+    writeFileSync(join(output,'readability-patch-measurements.json'),JSON.stringify(measurements,null,2));
+  },45_000);
 
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
@@ -283,13 +334,13 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const p=await page();await settle(p);
       const card=p.locator('[data-feature="compact"]'),shown=async()=>card.evaluate(n=>getComputedStyle(n).display!=='none');
       expect(await shown()).toBe(true);
-      await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');expect(await p.locator('#pipeline svg.wires line').count()).toBe(5);
+      await card.click();expect(await p.locator('#circuit-inspector').textContent()).toContain('Compact');expect(await p.locator('#pipeline svg.wires [data-wire]').count()).toBe(5);
       await p.locator('[data-host="codex"]').click();await settle(p);
       expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#circuit-inspector').textContent()).toContain('Compact');
       expect.soft(await p.locator('#runs [data-run="cx"]').count()).toBe(1);expect.soft(await p.locator('#run-count').textContent()).toContain('Compact');
-      expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);
-      await p.locator('[data-host="claude"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);
-      await p.locator('[data-host="all"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires line').count()).toBe(5);expect.soft(await p.locator('#runs .row').count()).toBe(rows.length);
+      expect.soft(await p.locator('#pipeline svg.wires [data-wire]').count()).toBe(5);
+      await p.locator('[data-host="claude"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires [data-wire]').count()).toBe(5);
+      await p.locator('[data-host="all"]').click();await settle(p);expect.soft(await shown()).toBe(true);expect.soft(await p.locator('#pipeline svg.wires [data-wire]').count()).toBe(5);expect.soft(await p.locator('#runs .row').count()).toBe(rows.length);
       await p.close();
     }
   });
@@ -360,12 +411,12 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const outage = runOf(s, 'http_401', 'unknown'), settled = runOf(s, 'network', 'later_ok');
       await p.locator('[data-state=attention]').click();await p.locator(`#runs [data-run="${outage}"]`).click();
       const detail = () => p.locator('#trace .sd:not([hidden])').textContent();
-      for (const fact of ['원인http_401', '현재 영향현재 영향 미확인', '호스트Codex', '세션codex-session-b', '마지막 관측']) expect(await detail()).toContain(fact);
+      for (const fact of ['원인HTTP 401 오류', '현재 영향현재 영향 미확인', '호스트Codex', '세션codex-session-b', '마지막 관측']) expect(await detail()).toContain(fact);
       expect(await problems(p)).toEqual([]);
       await p.locator('.stats').screenshot({ path: join(output, '223-1440-dark-ko-top.png') });await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-current.png') });
       await p.locator('[data-state=past_error]').click();await p.locator(`#runs [data-run="${settled}"]`).click();
       // The open row already shows the state, so the detail does not repeat it.
-      for (const fact of ['원인network', '현재 영향이후 같은 작업 정상 기록', '세션codex-old-session']) expect(await detail()).toContain(fact);
+      for (const fact of ['원인연결 오류', '현재 영향이후 같은 작업 정상 기록', '세션codex-old-session']) expect(await detail()).toContain(fact);
       expect(await detail()).not.toContain('상태오류');expect(await p.locator('#trace [aria-expanded="true"] .sx-r').textContent()).toBe('오류');
       await p.locator('#run-detail').screenshot({ path: join(output, '223-1440-dark-ko-detail-past.png') });
       // A later success of the same Jev call on the same host arrives on the open stream; both outage records become past errors.
@@ -427,11 +478,11 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       // The host end shows as its own row, never as acceptance; the policy delivery after it stays a lifecycle record.
       expect(await marks()).toEqual(['계약 미충족', '호스트 종료']);
       await p.waitForFunction(() => document.querySelector('#trace .sd:not([hidden])')?.textContent?.includes('미관측 #1'));
-      for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '실행 기록 read · 미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인', '세션claude-232']) expect(await detail()).toContain(fact);
+      for (const fact of ['단일 워커 · 계약 미충족 · 작업 완료 조건 미충족 · 통과 보고 검사의 실행 미관측', '실행 기록 read · 미관측 #1', '원인보고 검사의 실행 미관측', '현재 영향현재 영향 미확인', '세션claude-232']) expect(await detail()).toContain(fact);
       expect(await problems(p)).toEqual([]);
       await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-rejected.png') });
       await p.locator(`#runs [data-run="${refused('worker_blocked').id}"]`).click();
-      expect(await detail()).toContain('single · 계약 미충족 · incomplete · 워커가 차단·재계획 보고');
+      expect(await detail()).toContain('단일 워커 · 계약 미충족 · 작업 완료 조건 미충족 · 워커가 차단·재계획 보고');
       await p.locator('#run-detail').screenshot({ path: join(output, '232-1440-dark-ko-detail-blocked.png') });
       // A genuine retry of the same task is accepted later on the open stream: it is its own record, and the refusal stays as it was.
       write(claude, 'retry', post(c, ago(0), 'sonnet', 'accept', null, { pass: 1, fail: 0, not_run: 0 }, { transcript: 'read', contradicted: [], unobserved: [], stale: [] }));
@@ -645,9 +696,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await node('router').click();expect(await p.locator('#runs .row').count()).toBe(2);
     await node('router').focus();await record(p);push([run('c','claude',[a]),run('x','codex',[r,call('fr2','router',95,{},{choice:'haiku · low'})])]);
     await p.waitForFunction(()=>document.querySelector('#circuit-inspector')?.textContent?.includes('95ms'));expect(await node('router').evaluate(e=>e===document.activeElement)).toBe(true);
-    expect(await node('admission').locator('.dec b span').allTextContents()).toEqual(['직접','0.87']);
+    expect(await node('admission').locator('.dec b span').allTextContents()).toEqual(['직접','확신 87%']);
     await p.locator('[data-circuit-mode=run]').click();await p.locator('#runs [data-run=c]').click();await settle(p);
-    expect(await node('router').locator('.dec b').textContent()).toBe('–');expect(await node('admission').locator('.dec b').textContent()).toBe('직접0.87');
+    expect(await node('router').locator('.dec b').textContent()).toBe('–');expect(await node('admission').locator('.dec b').textContent()).toBe('직접확신 87%');
     const trips=(await motion(p)).length;push([run('c','claude',[a]),run('x','codex',[r,call('fr2','router',95,{},{choice:'haiku · low'}),call('fr3','router',99)])]);await wait(1200);
     expect((await motion(p)).slice(trips).filter(([k])=>k==='trip'||k==='ping')).toEqual([]);
     await p.locator('#runs [data-run=c]').focus();push([run('c','claude',[a,call('fb','allocation',70)]),run('x','codex',[r])]);await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=allocation] .dec b')?.textContent!=='–');
@@ -769,9 +820,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.locator('#language').click();expect(await p.locator('html').getAttribute('lang')).toBe('en');await p.close();
   });
 
-  it('hides wires and dots on a phone while the rail ping and the decision still update, and keeps inspection reachable by keyboard',async()=>{
+  it('keeps routed wires and recorded dots visible on a phone, with inspection reachable by keyboard',async()=>{
     const steps=[call('p0','router',58,{},{choice:'sonnet · high'})];push([run('phone','codex',steps,{state:'active'})]);const p=await page(390,844);await settle(p);await record(p);
-    expect(await p.locator('#pipeline svg.wires').evaluate(e=>getComputedStyle(e).display)).toBe('none');
+    expect(await p.locator('#pipeline svg.wires').evaluate(e=>getComputedStyle(e).display)).not.toBe('none');
     steps.push(call('p1','router',43,{},{choice:'haiku · low'}));push([run('phone','codex',steps,{state:'active'})]);
     await p.waitForFunction(()=>document.querySelector('#rc li:first-child .rcr > span:nth-child(5)')?.textContent==='43ms');await p.waitForFunction(()=>document.querySelector('#pipeline .node[data-feature=router] .dec b')?.textContent==='haikulow');await p.waitForSelector('.trip',{state:'attached'});await p.waitForFunction(()=>!document.querySelector('.trip'));expect(count(await motion(p),'ping')).toBe(1);
     await p.locator('#pipeline .node[data-feature=router]').click();expect(await p.locator('#circuit-inspector').evaluate(e=>e.getBoundingClientRect().top)).toBeLessThan(100);

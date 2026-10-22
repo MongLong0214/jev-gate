@@ -87,7 +87,8 @@ it('renders doctor activity facts and unknown measurements in existing node line
   p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
   expect(node(p, 'router').querySelector('.ds')!.textContent).toContain('발화 9 · 적용 3 · 회귀 1');
   p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('효과 (루트 비용 추정) 미확인');
-  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('최근 루트 (전체 실행) · 선택 · sonnet · high');
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('루트 비용 추정');
+  expect(text(p, 'circuit-inspector')).toContain('최근 루트 (전체 실행) · 선택 · sonnet · high');
   p.click('#language'); expect(text(p, 'circuit-inspector')).toContain('effect (root cost estimate) unknown');
   p.click('[data-host=codex]'); expect(node(p, 'router').querySelector('.ds')!.textContent).toBe('24h untrackable');
 });
@@ -123,8 +124,21 @@ it.each(['tool_editing_floor', 'tool_read_only', 'tool_editing', 'not_checked', 
   const p = page(), s = (code: string) => snapshot([run('r', 'claude', [step('x', 'router', 'host', { routing: { scope: 'root', baseline: 'opus', modelReason: code, effortReason: code } })])]);
   p.push(s(reason)); expect(node(p, 'router').querySelector('.nt')!.textContent).not.toContain(reason);
   p.click('#language'); expect(node(p, 'router').querySelector('.nt')!.textContent).not.toContain(reason);
-  p.push(s('future_reason_987')); expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('future_reason_987');
-  p.click('#language'); expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('future_reason_987');
+  p.push(s('future_reason_987')); p.click('.node[data-feature=router]');
+  for (let i=0;i<2;i++) {
+    expect(node(p, 'router').querySelector('.nt')!.textContent).not.toContain('future_reason_987');
+    const raw=p.get('circuit-inspector').querySelector('details.diagnostics')!; expect(raw.hasAttribute('open')).toBe(false);expect(raw.textContent).toContain('future_reason_987');p.click('#language');
+  }
+});
+
+it('keeps raw hook diagnostics folded while the decision and its cause remain human readable (#330)', () => {
+  const p=page(), diagnostic='loaded hook version 0.8.33 · 0123456789abcdef';
+  p.push(snapshot([run('diag','codex',[step('d','router','host',{summary:'legacy_model',cause:'fable_disabled_by_config',state:'error',details:[diagnostic],routing:{scope:'root',baseline:'gpt-6.1-sol',modelReason:'fable_disabled_by_config',effortReason:'selected'}})])]));
+  p.click('[data-run=diag]');
+  const detail=p.get('trace').querySelector('.sd:not([hidden])')!, raw=detail.querySelector('details.diagnostics')!;
+  expect(raw.hasAttribute('open')).toBe(false);expect(raw.textContent).toContain(diagnostic);expect(raw.textContent).toContain('fable_disabled_by_config');
+  expect(detail.querySelector('dl')!.textContent).not.toMatch(/loaded.hook|0123456789abcdef|legacy_model|fable_disabled_by_config/);
+  expect(detail.querySelector('dl')!.textContent).toContain('이전 모델 기록');
 });
 
 describe('dashboard live interactions', () => {
@@ -278,7 +292,7 @@ describe('dashboard live interactions', () => {
     const rc = (choice: string, extra: object = {}) => ({ status: 200, code: null, model: 'jev-1.14.0', input: 1200, output: 40, costUsd: 0.0012, choice, confidence: .87, threshold: null, direction: null, ...extra });
     const p = page(); p.push(snapshot([run('r', 'claude', [step('a', 'admission', 'jev', { durationMs: 90, receipt: rc('direct') }), step('m', 'router', 'jev', { durationMs: 120, receipt: rc('claude-sonnet-5 · high', { threshold: .6, direction: 'downgrade' }) })])]));
     const segs = (id: string) => [...node(p, id).querySelectorAll('.dec b span')].map(s => s.textContent);
-    expect(segs('router')).toEqual(['sonnet', 'high']); expect(segs('admission')).toEqual(['직접', '0.87']);
+    expect(segs('router')).toEqual(['sonnet', 'high']); expect(segs('admission')).toEqual(['직접', '확신 87%']);
     p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('120ms'); expect(text(p, 'circuit-inspector')).not.toMatch(/87|60%|0\.6/);
     // The log row carries input tokens; probability and threshold live once, in the decision basis panel.
     expect(text(p, 'rc')).toContain('1,200'); expect(text(p, 'rc')).not.toContain('0.87'); expect(text(p, 'rc')).not.toContain('≈$');
@@ -603,7 +617,7 @@ it('counts only current failures at the top, keeps settled ones as past errors a
   expect(text(p, 'k-att')).toBe('2'); expect(text(p, 'k-diag')).toBe('실제 응답 모델 불일치 1건 · Jev 판정 오류 1건');
   expect([shown('er'), shown('past')]).toEqual([2, 1]); expect(p.w.document.querySelector('#state-filters em')).toBeNull();
   p.click('[data-run="outage"]');
-  for (const fact of ['원인network', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
+  for (const fact of ['원인연결 오류', '현재 영향현재 영향 미확인', '호스트Codex', '세션cx-session-1']) expect(opened(p)).toContain(fact);
   p.click('[data-run="refused"]');
   expect(opened(p)).toContain('현재 영향이후 같은 작업 정상 기록'); expect(opened(p)).toContain('마지막 관측');
   // A later success arrives as a patch: the same row is redrawn as a past error and leaves the current count.
@@ -637,7 +651,7 @@ it('shows a refused worker contract as its own failure through a later host end 
   expect(marks()).toContain('계약 미충족'); expect(marks()).not.toContain('계약 수락');
   // The later host end stays visible as its own row, never as acceptance.
   expect(marks()).toContain('호스트 종료');
-  for (const fact of ['single · 계약 미충족 · incomplete · 통과 보고 검사의 실행 미관측', '미관측 #1', '원인check_unobserved', '현재 영향현재 영향 미확인']) expect(opened(p)).toContain(fact);
+  for (const fact of ['단일 워커 · 계약 미충족 · 작업 완료 조건 미충족 · 통과 보고 검사의 실행 미관측', '미관측 #1', '원인보고 검사의 실행 미관측', '현재 영향현재 영향 미확인']) expect(opened(p)).toContain(fact);
   expect(text(p, 'trace')).not.toContain('transcript shows');
   // The inspector exposes the complete decision for keyboard and touch readers.
   p.click('.node[data-feature=workers]'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('계약 미충족'); expect(text(p, 'circuit-inspector')).toContain('계약 미충족');

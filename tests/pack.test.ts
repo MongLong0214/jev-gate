@@ -108,6 +108,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(dest.includes(' '), dest).toBe(true);
     expect(dest.startsWith(root), dest).toBe(false);
     expect(spawnSync('unzip', ['-q', join(outDir, archive!), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
+    expect(readFileSync(join(dest, 'mods/router/hooks/version.ts'), 'utf8')).toContain(JSON.stringify(JSON.parse(readFileSync(join(dest, '.claude-plugin/plugin.json'), 'utf8')).version));
     for (const agent of agents) {
       const definition = readFileSync(join(dest, agent), 'utf8');
       expect(definition, agent).not.toMatch(/^tools:/m);
@@ -205,6 +206,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expectReadmeLinksInside(dest);
     expect(readFileSync(join(dest, 'README.md'), 'utf8')).toMatch(/^## Enable$/m);
     expect(readFileSync(join(dest, 'hooks/router.ts'), 'utf8')).toContain("from '../src/claude-dispatch.ts'");
+    expect(readFileSync(join(dest, 'hooks/version.ts'), 'utf8')).toContain(JSON.stringify(manifest.version));
     expect(readFileSync(join(dest, 'src/claude-dispatch.ts'), 'utf8')).toBe(readFileSync(join(root, 'src/claude-dispatch.ts'), 'utf8'));
   });
 });
