@@ -9,7 +9,7 @@ import type { Answers, Baseline, PolicyOptions, RoutedEffort, RoutingPatch } fro
 import { choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, pairValid } from './policy.ts';
 import { looksSecret } from './secret.ts';
 import { offerRoute, selectPair, keepModelPair, pairReceipt, applyEffort, toolBound, type PairOffer, type EffortEdit } from './selection.ts';
-import { routingContext, type RoutingCache } from './context.ts';
+import { CONTEXT_TAIL, RECENT_REQUESTS, routingContext, type RoutingCache } from './context.ts';
 import { claudeCandidates, claudeContextFits, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
 import { claudeTargetAllowed, currentClaudeModel } from './models.ts';
 import type { ChildStepContext } from '../../../src/router-child-context.ts';
@@ -59,6 +59,9 @@ export interface RouterEngine extends Transport {
   /** The host's live session id: a queued save keeps the one it was queued in, and writes only under it. */
   sessionId?: () => Promise<string>;
   saveRoot?: (record: RootRecord, sessionId: string) => Promise<void>;
+  /** This session's root context, kept across a resume like the root record. */
+  loadContext?: () => Promise<unknown>;
+  saveContext?: (context: RootContext, sessionId: string) => Promise<void>;
   /** #277: the models whose last root effort change, in any session, read the cache. */
   effortCacheHits?: () => Promise<readonly string[]>;
   saveEffortCache?: (model: string, hit: boolean) => Promise<void>;
@@ -319,6 +322,21 @@ export interface RootRecord { native: RootPair; routed: RootPair | null; drift: 
  * memory and after a resume. A record saved before it was kept compares the request's count. */
 export interface RootCache { messages: number; seen: CacheObservation[]; transcript?: number }
 
+/**
+ * The last completed visible reply and the person's earlier requests, as the next root question sends them, with the
+ * host transcript's length at the save: a later process of the session restores them only for a transcript no shorter,
+ * so a rewind or compaction since restores nothing. Text the screen refuses is never kept; each text keeps one
+ * character past the tail a question sends, so its truncation still shows.
+ */
+export interface RootContext { reply: string | null; requests: string[]; transcript: number }
+const keptTail = (t: string): string => t.slice(-(CONTEXT_TAIL + 1));
+const parseRootContext = (v: unknown): RootContext | null => {
+  const c = v as RootContext | null;
+  const kept = (t: unknown): t is string => typeof t === 'string' && t.length <= CONTEXT_TAIL + 1;
+  return c && typeof c === 'object' && (c.reply === null || kept(c.reply)) && Array.isArray(c.requests) && c.requests.length <= RECENT_REQUESTS &&
+    c.requests.every(kept) && Number.isSafeInteger(c.transcript) && c.transcript >= 0 ? { reply: c.reply, requests: c.requests, transcript: c.transcript } : null;
+};
+
 const sameId = (a: string, b: string): boolean => cacheId(a) === cacheId(b);
 export const parseRootRecord = (v: unknown): RootRecord | null => {
   const pair = (p: unknown): p is RootPair => !!p && typeof p === 'object' && typeof (p as RootPair).model === 'string' &&
@@ -487,6 +505,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   const openings = new Map<string, Promise<Prepared | null>>();
   let rootSaving: Promise<void> = Promise.resolve();
   let rootSaved = '';
+  let contextSaved = '';
   /** Saved with the record; null when the last observation's request had no message count, or after a reset. */
   let rootCache: RootCache | null = null;
   /** The host's settings model as last read against the root record. */
@@ -796,6 +815,20 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       await engine.saveRoot!(length === undefined || !record.cache ? record : { ...record, cache: { ...record.cache, transcript: length } }, id);
     }).catch(() => undefined);
   };
+  /** Queued behind the record's saves, under the session it was queued in; without the transcript's length nothing is saved. */
+  const saveContext = (engine: Partial<RouterEngine>): void => {
+    if (!engine.saveContext || !engine.sessionId || !engine.transcript) return;
+    const context = { reply: lastReply === null ? null : keptTail(lastReply), requests: recentRequests.filter(t => !looksSecret(t)).slice(-RECENT_REQUESTS).map(keptTail) };
+    if (JSON.stringify(context) === contextSaved) return;
+    contextSaved = JSON.stringify(context);
+    const queuedIn = engine.sessionId();
+    rootSaving = rootSaving.then(async () => {
+      const id = await queuedIn;
+      if (id !== await engine.sessionId!()) return;
+      const length = (await engine.transcript!().catch(() => null))?.length;
+      if (length !== undefined) await engine.saveContext!({ ...context, transcript: length }, id);
+    }).catch(() => undefined);
+  };
   /** Whether a native model to restore may still be sent, by the checks every target passes. */
   const nativeAllowed = async (engine: RouterEngine, model: string, signal: AbortSignal): Promise<boolean> => {
     const [allowFable, available, aliases] = await Promise.all([within(frontierFor(engine), signal), within(engine.availableModels().catch(() => []), signal), within(aliasesOf(engine), signal)]);
@@ -848,8 +881,18 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const underWay = engine.transcript ? read?.answered === true : (e.messageCount ?? 0) > 1;
       const start = await rootRecordAtStart(engine, incoming, signal, underWay);
       const hits = engine.effortCacheHits ? await within(engine.effortCacheHits().catch(() => []), signal) : [];
+      const context = engine.loadContext ? parseRootContext(await within(engine.loadContext().catch(() => null), signal)) : null;
       // A newer root turn or session began while the read waited: it owns the record now, and this turn stays native.
       if (signal.aborted || generation !== rootGeneration) return null;
+      // The last process's context goes before this turn's request, which turnStart already holds.
+      if (context && read && read.length >= context.transcript) {
+        lastReply ??= context.reply;
+        recentRequests.unshift(...context.requests);
+        recentRequests.splice(0, Math.max(0, recentRequests.length - RECENT_REQUESTS - 1));
+        log(engine, { event: 'context_restored', scope: 'root', turn: e.turnId, reply_chars: context.reply?.length ?? 0, requests: context.requests.length });
+      } else if (context) {
+        log(engine, { event: 'context_restore_skipped', scope: 'root', turn: e.turnId, reason: read ? 'shorter_transcript' : 'transcript_unknown', transcript: read?.length ?? null, stored_transcript: context.transcript });
+      }
       rootRecord = start.record; rootSaved = start.saved; rootHostModel = start.hostModel;
       for (const id of hits) storedEffortHits.add(id);
       // A new process of this conversation starts with the cache the last one observed, judged by its own clock and TTL.
@@ -1633,15 +1676,20 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       // A background completion notice continues the person's last request; it is routed as that request and is never
       // sent or remembered as one.
       if (TASK_NOTIFICATION.test(e.text)) { notices.put(e.turnId, true); const request = recentRequests.at(-1); if (request !== undefined) turnTexts.put(e.turnId, request); return; }
-      turnTexts.put(e.turnId, e.text); recentRequests.push(e.text); if (recentRequests.length > 4) recentRequests.shift();
+      turnTexts.put(e.turnId, e.text); recentRequests.push(e.text); if (recentRequests.length > RECENT_REQUESTS + 1) recentRequests.shift();
     },
     turnStep,
     /** A child's completion carries its agentId and never retires the root's turn. */
-    turnComplete: <E extends TurnEndEvent>(e: E, engine?: Pick<RouterEngine, 'log'>): void => {
+    turnComplete: <E extends TurnEndEvent>(e: E, engine?: Pick<RouterEngine, 'log'> & Partial<RouterEngine>): void => {
       // The exact end of a loop bounds a request whose response never arrived; the answer is never recorded.
       if (engine) log(engine, { event: 'turn_end', turn: e.turnId, agent_id: e.agentId ?? null, scope: e.agentId === undefined ? 'root' : 'child', reason: e.reason ?? null });
       if (e.agentId === undefined) {
-        if (currentRootTurn === e.turnId) { lastReply = e.reason === 'answer' && e.answer?.trim() && !looksSecret(e.answer) ? e.answer : null; currentRootTurn = null; }
+        // A turn that ended without an answer (an error, an interruption) shows no reply of its own: the last completed one stays.
+        if (currentRootTurn === e.turnId) {
+          if (e.reason === 'answer') lastReply = e.answer?.trim() && !looksSecret(e.answer) ? e.answer : null;
+          currentRootTurn = null;
+          if (engine) saveContext(engine);
+        }
         retire(e.turnId, 'turn_end');
       }
       else {
@@ -1655,6 +1703,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       if (spawnEnabled) offers.put(e.agent, e.source === 'built-in' && e.provider.plugin === 'engine' && e.provider.tier === 'core');
     },
     agentSpawn,
+    /** The queued root record and context saves, settled: a closing process waits on them so its last turn's land. */
+    saved: (engine?: Partial<RouterEngine>): Promise<void> => { if (engine) saveContext(engine); return rootSaving; },
     sessionEnd: (engine?: Pick<RouterEngine, 'log'>): void => {
       if (engine && stepEnabled) log(engine, { event: 'session_end' });
       session.abort();
@@ -1668,7 +1718,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       childHistoryFull = false;
       lastReply = null; currentRootTurn = null; recentRequests.length = 0; notices.clear(); messageCounts.clear(); announced.clear();
       lastRoot = null; rootCaches.clear(); preservedEffortModels.clear(); missedEffortModels.clear(); storedEffortHits.clear(); cacheEpoch++;
-      lastIncoming = null; rootLoaded = false; rootGeneration++; openings.clear(); rootRecord = null; rootSaved = ''; rootCache = null; rootHostModel = undefined;
+      lastIncoming = null; rootLoaded = false; rootGeneration++; openings.clear(); rootRecord = null; rootSaved = ''; contextSaved = ''; rootCache = null; rootHostModel = undefined;
       keyWait = null;
       versionWait = null;
       pinReads.clear();

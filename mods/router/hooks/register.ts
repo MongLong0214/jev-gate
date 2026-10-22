@@ -21,6 +21,9 @@ const subagentDefault = (model: string | undefined, force: string | undefined): 
 /** Each session's root record lives under this prefix in the plugin's store, so a resume finds its native pair. */
 const ROOT_KEY = 'router-root:';
 const MAX_ROOT_RECORDS = 200;
+/** Each session's root context (about 8k characters at most) for its resume; the latest sessions only keep the store small. */
+const CONTEXT_KEY = 'router-context:';
+const MAX_CONTEXT_RECORDS = 20;
 /** #277: one key per model, true when its last root effort change read the cache. */
 const EFFORT_KEY = 'router-effort-cache:';
 
@@ -147,6 +150,14 @@ const engineOf = ($: EngineInterface, log: RouterEngine['log'], transcript?: { s
     const keys = (await $.store.keys()).filter(k => k.startsWith(ROOT_KEY));
     for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ROOT_RECORDS))) await $.store.delete(k);
   },
+  loadContext: async () => $.store.get(`${CONTEXT_KEY}${await $.session.id()}`),
+  saveContext: async (context, sessionId) => {
+    // Set again at the end, so the session saved last is the last one pruned.
+    await $.store.delete(`${CONTEXT_KEY}${sessionId}`);
+    await $.store.set(`${CONTEXT_KEY}${sessionId}`, context);
+    const keys = (await $.store.keys()).filter(k => k.startsWith(CONTEXT_KEY));
+    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_CONTEXT_RECORDS))) await $.store.delete(k);
+  },
   effortCacheHits: async () => {
     const keys = (await $.store.keys()).filter(k => k.startsWith(EFFORT_KEY));
     const hits = await Promise.all(keys.map(async k => await $.store.get(k) === true ? k.slice(EFFORT_KEY.length) : null));
@@ -239,7 +250,7 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
   if (router.stepEnabled) {
     on('turn.complete', async ($, e, next) => {
       const recorder = recorderOf($, recording);
-      quietly(() => router.turnComplete(e, { log: recorder.log }));
+      quietly(() => router.turnComplete(e, engineOf($, recorder.log, transcript)));
       try { return await next(e); }
       finally { await recorder.flush(); }
     });
@@ -265,6 +276,9 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
   }
   on('session.end', async ($, e, next) => {
     const recorder = recorderOf($, recording);
+    // A process that exits right after a turn (a failed `-p` turn) otherwise drops the saves that turn queued; the
+    // context is queued here too, in case the host ends the session before that turn's completion runs.
+    await router.saved(engineOf($, recorder.log, transcript));
     quietly(() => router.sessionEnd({ log: recorder.log }));
     try { return await next(e); }
     finally { await recorder.finish(); }
