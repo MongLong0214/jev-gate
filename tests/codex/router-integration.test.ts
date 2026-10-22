@@ -82,6 +82,31 @@ const rootContinuationFixture = async (wait?: Promise<void>) => {
   return { ...f, first, next, signal };
 };
 describe('native Codex billing-aware model routing', () => {
+  it.each(['inference', 'native'] as const)('passes the native billing family to %s Compact and isolates its decisions', async path => {
+    const f = await fixture(true, 'fixture-B', 'max');
+    const request = { ...f.request, input: [...f.request.input, ...Array.from({ length: 10 }, (_, i) => [
+      { type: 'function_call', call_id: `unique-${i}`, name: 'exec_command', arguments: 'Read completed obsolete color survey.' },
+      { type: 'function_call_output', call_id: `unique-${i}`, output: Array.from({ length: 90 }, (_, j) => `Archived sample ${i}:${j}: completed unrelated color survey without a current dependency.\n`).join('') },
+    ]).flat()] };
+    f.fetchImpl.mockImplementation(async (_url, init) => {
+      const req = JSON.parse(String(init?.body));
+      return Response.json({ model: req.model, answers: Object.fromEntries(Object.keys(req.questions).map(id => [id,
+        { type: 'choice', choice: 'remove', confidence: .99, probabilities: { keep: .005, remove: .99, unclear: .005 } },
+      ])) });
+    });
+    const signal = new AbortController().signal;
+    try {
+      expect((await f.policy.compactRequest('root', request, signal, path, 'unknown')).request).toBe(request);
+      expect(f.fetchImpl).not.toHaveBeenCalled();
+      const selected = await f.policy.compactRequest('root', request, signal, path, 'chatgpt');
+      expect(selected.receipt?.applied).toBe(true); expect(f.fetchImpl).toHaveBeenCalledOnce();
+      expect((await f.policy.compactRequest('root', request, signal, path, 'chatgpt')).request).toEqual(selected.request);
+      expect(f.fetchImpl).toHaveBeenCalledOnce();
+      expect((await f.policy.compactRequest('root', request, signal, path, 'api')).request).toBe(request);
+      expect(f.fetchImpl).toHaveBeenCalledOnce();
+    } finally { f.rpc.close(); }
+  });
+
   it('reassesses a root tool continuation without replacing its contract or repeating a retry assessment', async () => {
     const f = await nativeBillingFixture(), signal = new AbortController().signal;
     f.fetchImpl.mockImplementation(async (_url, init) => {
