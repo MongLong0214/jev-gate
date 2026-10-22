@@ -20,7 +20,8 @@ export interface LoadedActivity { key: string; base: string | null; patch: strin
 
 /** Owns the readers and their caches. It runs on the activity thread, or in process when that thread is unavailable. */
 export const activityHandler = (sources: DashboardSources) => {
-  const traceReader = new TraceDirectoryReader(1000);
+  // Watch notifications name new records and the server reconciles every 30 s; a 1 s rescan listed thousands of names each second.
+  const traceReader = new TraceDirectoryReader();
   const dirs = sources.traceDirs?.map(source => source.dir) ?? (sources.traceDir ? [sources.traceDir] : []);
   // A replacement thread starts a new key series, so no viewer can apply its patches to an older thread's frame.
   const epoch = randomUUID().slice(0, 8);

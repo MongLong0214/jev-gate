@@ -130,7 +130,11 @@ describe('dashboard rebuild sharing (#210)', () => {
       const first = await handler.load();
       expect(facts().find(c => c.feature === 'admission')?.metrics.fired).toBe(1);
       expect(facts().find(c => c.feature === 'compact')?.level).toBe('ok');
+      // The admission left the window at +1 s; records leave together on the next minute step.
       vi.setSystemTime(+now + 1000);
+      expect((await handler.load()).patch).toBeNull();
+      expect(facts().find(c => c.feature === 'admission')?.metrics.fired).toBe(1);
+      vi.setSystemTime(+now + 60_000);
       expect((await handler.load()).base).toBe(first.key);
       expect(facts().find(c => c.feature === 'admission')?.metrics.fired).toBe(0);
       vi.setSystemTime(+now + 600_001);
@@ -382,6 +386,9 @@ describe('event driven dashboard (#327)', () => {
   });
 
   it('updates the 24-hour fact boundary on its deadline without a new file or polling', async () => {
+    // The clock runs at real speed, 1.5 s before a minute step, so the admission leaves the window on that step.
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    vi.setSystemTime(Math.ceil(Date.now() / 60_000) * 60_000 + 58_500);
     const trace = make(), env = { HOME: make(), JEV_GATE_STATE_DIR: make() };
     writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'admission_result', session_id: 's', written_at: new Date(Date.now() - 86_400_000 + 1500).toISOString(), decision: { shape: 'orchestrated' } }));
     record(trace, 'current.json'); // Keep trace visibility known after the older admission leaves the fact window.
@@ -390,6 +397,6 @@ describe('event driven dashboard (#327)', () => {
     try {
       await vi.waitFor(() => expect(fired()).toBe(1));
       await vi.waitFor(() => expect(fired()).toBe(0), { timeout: 3000 });
-    } finally { await stream.close(); await server.close(); }
+    } finally { await stream.close(); await server.close(); vi.useRealTimers(); }
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { JEV_MODEL } from '../mods/router/hooks/client.ts';
-import { activityChecks, type ActivityCheck, type ActivityInput } from '../src/doctor-activity.js';
+import { activityChecks, activityStableUntil, WINDOW_STEP_MS, type ActivityCheck, type ActivityInput } from '../src/doctor-activity.js';
 
 /** #279: every activity check against a fixture trace that breaks it and one that does not. Fake records only. */
 type Rec = Record<string, unknown>;
@@ -559,5 +559,22 @@ describe('Gate cleanup reason fixtures', () => {
   it('counts native cancellation separately from failure', () => {
     const c = check(run([rec('background_terminal', { status: 'cancelled', verdict_reason: 'worker_cancelled' })]), 'background');
     expect(c.level).toBe('ok'); expect(c.message).toContain('cancelled 1'); expect(c.message).toContain('worker_cancelled');
+  });
+});
+
+describe('activity window edges', () => {
+  // 1,000 records over an hour, a day old: each leaving the window alone rebuilt the dashboard every 3.6 s.
+  it('lets records leave the 24 h window together, one step at a time', () => {
+    const start = Date.parse('2026-10-21T01:00:00.000Z'), day = 86_400_000;
+    const records = Array.from({ length: 1000 }, (_, i) => ({ phase: 'router', written_at: new Date(start + i * 3600).toISOString() }));
+    let now = start + day, rebuilds = 0;
+    while (now < start + day + 3_600_000) { const next = activityStableUntil(records, now); expect(next).toBeGreaterThan(now); now = next; rebuilds++; }
+    expect(rebuilds).toBeLessThanOrEqual(3_600_000 / WINDOW_STEP_MS + 1);
+    expect(activityStableUntil(records, start + day)).toBe(start + day + WINDOW_STEP_MS);
+  });
+  it('keeps a future record and an unfinished compaction exact', () => {
+    const now = Date.parse('2026-10-21T01:00:00.000Z');
+    expect(activityStableUntil([{ phase: 'router', written_at: new Date(now + 1234).toISOString() }], now)).toBe(now + 1234);
+    expect(activityStableUntil([{ phase: 'mod_compact', stage: 'pre', written_at: new Date(now).toISOString() }], now)).toBe(now + 600_001);
   });
 });
