@@ -228,13 +228,15 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   });
 
   it('keeps first-record host tags and primary fields still when an empty selected stage receives its first run (#338)',async()=>{
-    for(const feature of ['admission','router'] as const){
-      push([]);const p=await page();await p.locator('#pipeline [data-feature='+feature+']').click();await settle(p);
+    for(const width of [1440,1280])for(const feature of ['admission','router'] as const){
+      push([]);const p=await page(width);await p.locator('#pipeline [data-feature='+feature+']').click();await settle(p);
       await p.evaluate(()=>{type Shift={value:number;hadRecentInput:boolean};const g=globalThis as unknown as {cls:number;PerformanceObserver:new(cb:(l:{getEntries():Shift[]})=>void)=>{observe(o:{type:string}):void}};g.cls=0;new g.PerformanceObserver(l=>{for(const e of l.getEntries())if(!e.hadRecentInput)g.cls+=e.value}).observe({type:'layout-shift'});});
-      const positions=()=>p.locator('#circuit-inspector .insp-tags,#circuit-inspector .b>.kv>*').evaluateAll(es=>es.map(e=>{const b=e.getBoundingClientRect();return [b.x,b.y,b.width,b.height]}));
+      const positions=()=>p.locator('#circuit-inspector .insp-tags,#circuit-inspector .b>.kv>*,#circuit-inspector .b>details,#circuit-inspector .b>.link').evaluateAll(es=>es.map(e=>{const b=e.getBoundingClientRect();return [b.x,b.y,b.width,b.height]}));
       const before=await positions();await wait(1100);
-      push([run('arrival','codex',[call('arrival-'+feature,feature,91,{title:'Recorded decision',summary:'Ready'},{choice:feature==='router'?'gpt-6.1-sol · high':'direct'})],{title:'First run'})]);
+      push([run('arrival','codex',[call('arrival-'+feature,feature,91,{title:'Recorded decision',summary:'Original request kept\nResponse still native\nUsage is unknown\nNo inferred savings'},{choice:feature==='router'?'gpt-6.1-sol · high':'direct'})],{title:'First run'})]);
       await expect.poll(()=>p.locator('#circuit-inspector .insp-tags').textContent()).toBe('Codex');await settle(p);await wait(150);
+      expect(await p.locator('.status-value').evaluate(e=>{const range=document.createRange();range.selectNodeContents(e);return new Set([...(range as unknown as {getClientRects():Array<{top:number;width:number}>}).getClientRects()].filter(r=>r.width>0).map(r=>r.top)).size;})).toBe(5);
+      expect(await p.locator('#circuit-inspector .b').evaluate(e=>e.scrollHeight>e.clientHeight+1)).toBe(false);
       expect(await positions(),feature).toEqual(before);expect(await p.evaluate(()=>(globalThis as unknown as {cls:number}).cls),feature).toBe(0);await p.close();
     }
   });
