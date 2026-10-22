@@ -1325,7 +1325,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const routed: RootPair = { model: seen !== null && !answeredBy(asked, seen) ? seen : asked, effort: sent ?? null };
       if (rootRecord && (rootRecord.routed?.model !== routed.model || rootRecord.routed.effort !== routed.effort)) rootRecord = { ...rootRecord, routed };
       const seq = ++rootSeq;
-      if (seen === null || !answeredBy(asked, seen)) rootCaches.observe({ ...cacheSeen(asked, seen, accounted?.usage, String(cacheEpoch), startedAt), seq });
+      // A response without usage tells nothing new: the model's earlier observation still bounds its cache, which that
+      // request could only have refreshed. Without one, its cache is unknown rather than cold.
+      if (seen === null ? !rootCaches.get(cacheId(asked), String(cacheEpoch)) : !answeredBy(asked, seen)) rootCaches.observe({ ...cacheSeen(asked, seen, accounted?.usage, String(cacheEpoch), startedAt), seq });
       // Only a response the asked model gave wrote the cache a later turn on that model reads.
       if (seen !== null && answeredBy(asked, seen)) {
         const id = cacheId(asked);
@@ -1597,7 +1599,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       log(engine, { event: 'budget_timeout', scope: 'spawn', tool_use_id: e.tool_use_id });
     }
     wait.dispose();
-    if (!plan?.deny && ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt))) || !baselineAllowed && !plan?.target))
+    // With routing off, a restricted baseline is the user's own choice: only an automatic dispatch is refused for it.
+    if (!plan?.deny && ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt))) || config.enabled && !baselineAllowed && !plan?.target))
       plan = denied(baselineAllowed ? 'unverified' : 'restricted_baseline', 'Automatic dispatch could not be verified; continue in the main session. No child started.');
     // As on turn.step: the host has already spawned natively, so nothing here may spawn again.
     if (next.signal.aborted || own.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');

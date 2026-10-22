@@ -1119,6 +1119,18 @@ describe('spawn model', () => {
     expect(refused.f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_denied', reason: 'restricted_baseline' }));
   });
 
+  it('with routing off, leaves a child under a manually selected restricted root to the host', async () => {
+    // The combined plugin registers spawns for Gate dispatch even when the Router is off.
+    const router = createRouter(configOf({ enabled: false, allowFable: false }), undefined, true);
+    const f = fakeEngine({});
+    router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+    const e = spawn({ subagentType: 'general-purpose', parentModel: 'claude-fable-5-1' });
+    const n = spawnNext(() => ({ model: 'claude-fable-5-1', agentId: 'child' }));
+    expect(await router.agentSpawn(f.engine, e, n.next)).toEqual({ model: 'claude-fable-5-1', agentId: 'child' });
+    expect(n.calls).toEqual([e]);
+    expect(f.logs.some(l => l.event === 'spawn_denied')).toBe(false);
+  });
+
   it.each(['general-purpose', 'claude'].flatMap(type => ['project', 'plugin'].map(kind => [type, kind] as const)))("%s: a %s agent of that name is not the built-in, so the host's default does not apply to it", async (type, kind) => {
     const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false, allowFable: false }));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }), pins: { subagentDefault: 'claude-fable-5-1' } });
@@ -1761,6 +1773,27 @@ describe('root effort and the prompt cache', () => {
     expect(f.sent).toHaveLength(2);
   });
 
+  it('keeps the warm cache evidence across a root response without usage', async () => {
+    const run = async (errored: boolean) => {
+      let tier = 'deep', effort = 'high';
+      const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, routeSubagentEffort: false, routeExplicitSpawnModel: false }));
+      const f = fakeEngine({ hostBase: '2.1.293', respond: req => answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: [tier, .99], effort: [effort, .99] })(req) });
+      f.engine.currentContextBound = async (turnId: string, index: number) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+      f.engine.currentEffort = async () => undefined;
+      await warmRoot(router, f, 'claude-opus-5-5', 'high');
+      const counts = { input_tokens: 900, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 1000 };
+      router.turnStart({ turnId: 't0', text: 'Find the exact helper file.' });
+      await drain(router.turnStep(f.engine, step({ turnId: 't0' }), (errored ? streamNext<TurnStepEvent>(() => null) : streamNext<TurnStepEvent>(undefined, counts)).next));
+      router.turnComplete({ turnId: 't0', reason: errored ? 'error' : 'answer' });
+      tier = 'fast'; effort = 'low';
+      router.turnStart({ turnId: 't1', text: 'Find the exact caller file.' });
+      const second = streamNext<TurnStepEvent>(undefined, counts);
+      await drain(router.turnStep(f.engine, step({ turnId: 't1' }), second.next));
+      return second.calls[0]?.model;
+    };
+    expect(await run(false)).toBe('claude-haiku-5-5');
+    expect(await run(true)).toBe('claude-haiku-5-5');
+  });
   it.each(['hit', 'miss', 'unknown'] as const)('checks capability-preserving effort changes and restores the warm floor only on a known miss (%s)', async outcome => {
     const router = createRouter(configOf(EFFORT_ONLY)); let wanted = 'high';
     const f = fakeEngine({ respond: req => answering({ ...CLEAR, effort: [wanted, .99] })(req) });
@@ -3367,5 +3400,5 @@ it('D4: real Claude child and spawn records reach activity', async () => {
   const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
   // The first child step reuses the spawn allocation; it makes no child Jev call.
   expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('0 child steps sent to Jev');
-  expect(checks.find(c => c.message.startsWith('router_applied:'))?.message).toContain('2 routed requests with an observed model');
+  expect(checks.find(c => c.message.startsWith('router_applied:'))?.message).toContain('2 requests with an observed model');
 });

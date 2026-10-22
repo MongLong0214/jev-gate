@@ -78,7 +78,7 @@ describe('dashboard activity facts from doctor', () => {
     const gate = rec('admission_result', {}, 1);
     expect(check(run([result, gate]), 'router_applied').level).toBe('fail');
     expect(check(run([{ ...result, observed: 'claude-sonnet-5-5' }, gate]), 'router_applied').level).toBe('ok');
-    expect(check(run([result, gate], { now: NOW + (24 * 60 - 10) * 60_000 }), 'router_applied')).toMatchObject({ level: 'info', message: expect.stringContaining('0 routed requests') });
+    expect(check(run([result, gate], { now: NOW + (24 * 60 - 10) * 60_000 }), 'router_applied')).toMatchObject({ level: 'info', message: expect.stringContaining('0 requests with an observed model') });
   });
 
   it('counts Codex provider applications from their actual receipt, separately from selection', () => {

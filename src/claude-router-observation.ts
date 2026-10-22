@@ -43,8 +43,9 @@ if (isMain()) {
   const [session = '', agent = '', since = '', raw = 'null'] = process.argv.slice(2);
   try {
     const usage: unknown = JSON.parse(raw), deadline = Date.now() + 300;
-    // A new session's transcript file appears with its first rows, so it is looked up again on each read.
-    const read = (): RouterObservation | null => readRouterObservation(transcriptOf(session) ?? '', session, agent, Number(since), usage);
+    // A new session's transcript file appears with its first rows, so it is looked up again only until it is found.
+    let path: string | null = null;
+    const read = (): RouterObservation | null => readRouterObservation((path ??= transcriptOf(session)) ?? '', session, agent, Number(since), usage);
     let observation = read();
     // Claude queues transcript writes: the response can finish before its assistant row reaches disk. Bound the wait
     // within the adapter's 500 ms process deadline; this reads metadata again and never repeats a model request.

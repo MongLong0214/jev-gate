@@ -541,6 +541,13 @@ const routedModRecords = (mods: ModRecord[], records: Rec[], context?: PartConte
       const d = decision ?? r, reasons = field(d, 'reasons');
       routing = { scope: agent ? 'child' : ['root_result', 'root', 'model_request', 'model_failure'].includes(String(event)) ? 'root' : 'spawn', baseline: token(field(d, 'from')?.['model']) ?? token(d['from']), modelReason: token(reasons?.['model']) ?? token(d['skipped']) ?? token(d['assessment']), effortReason: token(reasons?.['effort']) };
     }
+    // A selection the dispatch did not carry (budget expired, turn retired, the host ran another model) is not a change.
+    if (routing && decision && event === 'root_result') {
+      const want = field(decision, 'patch'), sent = field(r, 'applied');
+      if (want && token(want['model']) && token(want['model']) !== token(sent?.['model'])) routing = { ...routing, modelReason: 'not_applied' };
+      if (want && token(want['effort']) && token(want['effort']) !== token(sent?.['effort'])) routing = { ...routing, effortReason: 'not_applied' };
+    }
+    if (routing && event === 'spawn_result' && r['reason'] === 'model_mismatch') routing = { ...routing, modelReason: 'not_applied' };
     if (event === 'root' && turn && (field(r, 'reasons') || field(r, 'from'))) turns.set(turn, r);
     if (event === 'spawn' && tool) spawns.set(tool, r);
     if (event === 'child_route' && agent) childSteps.set(routerResponseKey(r), r);

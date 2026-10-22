@@ -192,5 +192,5 @@ it('D4: real Claude child continuation records reach activity', async () => {
   await recorder.flush();
   const checks = activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null });
   expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('1 child steps sent to Jev, 1 changed the effort');
-  expect(checks.find(c => c.message.startsWith('router_applied:'))?.message).toContain('1 routed requests with an observed model');
+  expect(checks.find(c => c.message.startsWith('router_applied:'))?.message).toContain('1 requests with an observed model');
 });

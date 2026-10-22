@@ -44,6 +44,16 @@ describe('operations display model', () => {
     expect(view.feed[0]).toMatchObject({ state: 'unconfirmed', issue: 'request_unconfirmed', summary: 'API 설정 관측 · 요청 종류 미확인 · gpt-6.1-sol · gpt-6.1-sol · xhigh' });
     expect(view.attention).toBe(0);
   });
+  it('does not show a Router selection the dispatch did not carry as a change', () => {
+    const decision = row('router', { event: 'root', turn: 't', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, patch: { model: 'claude-haiku-5-5', effort: 'low' }, reasons: { model: 'selected', effort: 'selected' } });
+    const result = (applied: Record<string, unknown>) => row('router', { event: 'root_result', turn: 't', index: 0, requested: applied['model'], applied, observed: applied['model'], confirmation: 'confirmed' }, later);
+    const reasons = (applied: Record<string, unknown>) => buildOperations([], [decision, result(applied)], new Date(later), { trace: true }).feed.find(s => s.model)?.routing;
+    expect(reasons({ model: 'claude-haiku-5-5', effort: 'low' })).toMatchObject({ modelReason: 'selected', effortReason: 'selected' });
+    expect(reasons({ model: 'claude-opus-5-5', effort: 'xhigh' })).toMatchObject({ modelReason: 'not_applied', effortReason: 'not_applied' });
+    const spawned = buildOperations([], [row('router', { event: 'spawn', tool_use_id: 'u', from: 'claude-opus-5-5', reasons: { model: 'selected' } }),
+      row('router', { event: 'spawn_result', tool_use_id: 'u', requested: 'claude-sonnet-5-5', observed: 'claude-opus-5-5', agent_id: 'a', reason: 'model_mismatch' }, later)], new Date(later), { trace: true });
+    expect(spawned.feed.find(s => s.model)?.routing).toMatchObject({ modelReason: 'not_applied' });
+  });
   it('shows a proposed effort downgrade held by the cache separately from the final request setting', () => {
     const view = buildOperations([], [row('router', { event: 'root', turn: 'warm', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, proposed_patch: { effort: 'low' }, patch: {}, held_for_cache: 'low', reasons: { model: 'same_value', effort: 'cache_preserved' } })], new Date(later), { trace: true });
     expect(view.feed[0]?.details.join(' ')).toContain('캐시 재사용을 위해 effort 유지 · Jev 제안 low · 요청 설정 xhigh');
