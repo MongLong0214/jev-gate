@@ -45,10 +45,23 @@ export const startOnboarding = async (env: Env, options: { note?: string; open?:
     const owner = readPrivateJson(ownerPath);
     if (typeof owner?.['port'] === 'number' && Number.isInteger(owner['port']) && owner['port'] > 0 && owner['port'] <= 65535 && typeof owner['token'] === 'string' && /^[a-f0-9]{64}$/.test(owner['token'])) {
       const url = `http://127.0.0.1:${owner['port']}/${owner['token']}`;
-      try {
-        const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(300) });
-        if (r.ok && await r.text() === 'jev-gate-setup') return { url, close: async () => undefined };
-      } catch { /* A stopped/crashed MCP is replaced by this one. */ }
+      let stopped = false;
+      const pid = owner['pid'];
+      if (typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0 && pid <= 2147483647) {
+        try { process.kill(pid, 0); }
+        catch (error) { stopped = (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+      }
+      if (!stopped) {
+        try {
+          const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(300), redirect: 'error' });
+          if (r.ok && await r.text() === 'jev-gate-setup') return { url, close: async () => undefined };
+          return null;
+        } catch (error) {
+          // A timeout or unexpected response does not establish that the existing page stopped.
+          // A refused local connection does, even if its old PID has since been reused.
+          if ((error as { cause?: { code?: string } } | undefined)?.cause?.code !== 'ECONNREFUSED') return null;
+        }
+      }
     }
     const token = randomBytes(32).toString('hex'); const nonce = randomBytes(18).toString('base64');
     let origin = '';
