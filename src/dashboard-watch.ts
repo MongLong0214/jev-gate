@@ -4,7 +4,7 @@ import { basename, dirname, relative } from 'node:path';
 /** Watch a directory's contents or one file, including creation and atomic replacement. A missing path is followed
  * from its nearest existing parent; no polling of every descendant is needed while a host has not recorded yet. */
 export const watchDashboardPath = (path: string, directory: boolean, changed: (name?: string) => void, reconciled: () => void = changed) => {
-  let watchers: FSWatcher[] = [], binding = '', stamp = '', knownIdentity = '', closed = false;
+  let watchers: FSWatcher[] = [], binding = '', stamp = '', knownIdentity = '', closed = false, named = false;
   const sync = (notify = true): void => {
     if (closed) return;
     let identity = '', nextStamp = '';
@@ -34,10 +34,13 @@ export const watchDashboardPath = (path: string, directory: boolean, changed: (n
       };
       const child = relative(parent, path).split(/[\\/]/)[0] || basename(path);
       add(parent, name => { if (name === undefined || name === child) { sync(false); changed(); } });
-      if (directory && identity) add(path, name => changed(name));
+      if (directory && identity) add(path, name => { if (name !== undefined) named = true; changed(name); });
     }
     // An unnotified append needs a name reconciliation, not an explicit invalidation that rereads every immutable file.
-    if (notify && moved) (directory && !replaced ? reconciled : changed)();
+    // A change the OS already named needs neither: listing a day of records for it cost more than any rebuild while
+    // records streamed in, and the reader's periodic pass still finds a name the OS left out.
+    if (notify && moved && !(directory && !replaced && named)) (directory && !replaced ? reconciled : changed)();
+    named = false;
   };
   sync(false);
   return { reconcile: (notify = true): void => sync(notify), close: (): void => { closed = true; for (const watcher of watchers) watcher.close(); watchers = []; } };

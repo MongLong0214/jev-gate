@@ -34,8 +34,9 @@ export const pruneViewers = (viewers: Map<string, number>, now: number): void =>
     if (Number.isFinite(expires) && (expires <= now || leases > VIEWER_LEASES)) { viewers.delete(id); leases--; }
   }
 };
-/** Coalesce one frame of notifications, without queuing values behind a one-second playback budget. Rebuilds stay shared. */
-export const rebuildWait = (lastMs: number): number => Math.min(100, Math.max(16, lastMs));
+/** Time between rebuild starts while records keep arriving. A record after a quiet second shows at once; a stream is drawn
+ * once a second, or less often when a rebuild is slow, so the activity thread works at most a tenth of the time. */
+export const rebuildWait = (lastMs: number): number => Math.min(2000, Math.max(1000, lastMs * 10));
 
 export interface DashboardSources {
   host?: Host;

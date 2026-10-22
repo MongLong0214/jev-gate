@@ -220,12 +220,13 @@ describe('dashboard snapshot latency (#215)', () => {
   });
 });
 
-// A stream of records once kept the activity thread rebuilding half the time: each pause lasted as long as the last rebuild.
+// A stream of records once kept the activity thread rebuilding most of the time: a 122 ms rebuild of a real history
+// started again 20 ms after it ended, because the pause was capped at 100 ms from the previous start.
 describe('dashboard rebuild pacing', () => {
   const record = (dir: string, name: string): void => writeFileSync(join(dir, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
 
-  it('coalesces fast bursts within one frame and never adds more than 100 ms of pacing', () => {
-    expect([0, 100, 400, 1000, 9000].map(rebuildWait)).toEqual([16, 100, 100, 100, 100]);
+  it('draws a record stream once a second, keeps rebuilds to a tenth of the activity thread, and never paces more than two seconds', () => {
+    expect([0, 1, 100, 150, 400, 9000].map(rebuildWait)).toEqual([1000, 1000, 1000, 1500, 2000, 2000]);
   });
 
   it('starts the first load at once, then keeps each pause and still shows a new record within seconds', async () => {

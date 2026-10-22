@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
+import { CHECKS_MS, checksMemo, loadActivity, type ActivitySnapshot } from '../src/activity.js';
 import { startDashboard, readVersions } from '../src/dashboard.js';
 import { DASHBOARD_PAGE } from '../src/dashboard-page.js';
 import { TraceDirectoryReader } from '../src/explain.js';
@@ -496,4 +496,20 @@ it.each([['worker_check_duplicate', '검사 중복 보고'], ['worker_check_fail
     role: 'worker', decision: { shape: 'direct', action: 'preserve', reason } });
   const snap = loadActivity({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() }, now: new Date('2026-09-29T06:00:00.000Z') });
   expect(snap.events[0]?.used).toContain(_label);
+});
+
+describe('dashboard day summary under a record stream', () => {
+  it('reuses the summary for CHECKS_MS while records arrive, then counts them all on its due rebuild', () => {
+    const trace = make(), env = { HOME: make(), JEV_GATE_STATE_DIR: make() }, checks = checksMemo(), start = Date.parse('2026-10-22T03:00:00Z');
+    const admit = (n: number, at: number): void => writeFileSync(join(trace, `a${n}.json`), JSON.stringify({ phase: 'admission_result', session_id: 's', written_at: new Date(at).toISOString(), decision: { shape: 'direct' } }));
+    const fired = (at: number): number | undefined => loadActivity({ traceDir: trace, env, now: new Date(at), feed: false, checks }).activity24h.claude.find(c => c.feature === 'admission')?.metrics['fired'] as number | undefined;
+    admit(0, start - 1000);
+    expect(fired(start)).toBe(1);
+    expect(checks.due).toBe(Infinity);
+    admit(1, start + 500);
+    expect(fired(start + 1000)).toBe(1);
+    expect(checks.due).toBe(start + CHECKS_MS);
+    expect(fired(start + CHECKS_MS)).toBe(2);
+    expect(checks.due).toBe(Infinity);
+  });
 });
