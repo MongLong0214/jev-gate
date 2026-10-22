@@ -9,6 +9,8 @@ import { diffFrame, frameOperations, type FrameMemo, type FrameSnapshot } from '
 import { TraceDirectoryReader, type TraceRead } from './explain.js';
 import { livenessPath } from './liveness.js';
 import { operationsStableUntil, type OperationsView } from './operations.js';
+import { credentialsPath } from './credentials.js';
+import { recordingPath } from './recording.js';
 
 /** One rebuild. `key` advances only when content changed; `patch` turns the frame `base` into it. The whole frame is built
  * only when a viewer needs one (`full`), so a rebuild sends the changed part across the thread, not the history. Without new
@@ -24,26 +26,29 @@ export const activityHandler = (sources: DashboardSources) => {
   const epoch = randomUUID().slice(0, 8);
   let sequence = 0, memo: FrameMemo | null = null, current: FrameSnapshot | null = null, whole: { key: string; json: string } | null = null;
   let operations: OperationsView | null = null;
-  let last: { loaded: LoadedActivity; reads: TraceRead[]; liveness: string } | null = null;
+  let last: { loaded: LoadedActivity; reads: TraceRead[]; liveness: string; preferences: string } | null = null;
   // The liveness ring is read on every rebuild; it is rewritten by rename, so a new inode or mtime marks a change.
   const livenessFile = sources.host === 'codex' ? null : livenessPath(sources.env);
   const livenessStamp = (): string => {
     try { const stat = livenessFile ? statSync(livenessFile, { throwIfNoEntry: false }) : undefined; return stat ? `${stat.ino}:${stat.mtimeMs}:${stat.size}` : ''; } catch { return ''; }
   };
+  const preferenceStamp = (): string => [recordingPath(sources.env), credentialsPath(sources.env)].map(path => {
+    try { const stat = statSync(path, { throwIfNoEntry: false }); return stat ? `${stat.ino}:${stat.mtimeMs}:${stat.size}` : ''; } catch { return ''; }
+  }).join('|');
   return {
     async load(): Promise<LoadedActivity> {
       for (const dir of dirs) await traceReader.prepare(dir);
       const started = performance.now();
       // No record changed and no age or window edge passed: a rebuild would draw the same frame, so it is skipped.
-      const reads = dirs.map(dir => traceReader.read(dir)), liveness = livenessStamp();
-      if (last && Date.now() < last.loaded.until && liveness === last.liveness && reads.every((read, i) => read === last!.reads[i])) return { ...last.loaded, base: null, patch: null };
+      const reads = dirs.map(dir => traceReader.read(dir)), liveness = livenessStamp(), preferences = preferenceStamp();
+      if (last && Date.now() < last.loaded.until && liveness === last.liveness && preferences === last.preferences && reads.every((read, i) => read === last!.reads[i])) return { ...last.loaded, base: null, patch: null };
       const now = new Date(), activity = loadActivity({ ...sources, traceReader, now, feed: false });
       const { events: _events, live: _live, ...rest } = activity, shown = { ...rest, operations: frameOperations(activity.operations) };
       const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
       memo = diff.memo; current = shown; whole = null; operations = activity.operations;
       const until = Math.min(operationsStableUntil(), ...reads.map(read => activityStableUntil(read.records, now.getTime())));
       const loaded = { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until, ms: performance.now() - started };
-      last = { loaded, reads, liveness };
+      last = { loaded, reads, liveness, preferences };
       return loaded;
     },
     full(): { key: string; json: string } | null {
@@ -56,6 +61,7 @@ export const activityHandler = (sources: DashboardSources) => {
       return step ? JSON.stringify(step) : null;
     },
     invalidate(dir: string, names?: string[]): void { if (names) for (const name of names) traceReader.invalidate(dir, name); else traceReader.invalidate(dir); },
+    reconcile(dir: string): void { traceReader.reconcile(dir); },
   };
 };
 
@@ -103,6 +109,7 @@ export const activityEngine = (sources: DashboardSources): ActivityEngine => {
     full: () => call({ op: 'full', args: [] }),
     step: (runId, stepId) => call({ op: 'step', args: [runId, stepId] }),
     invalidate: (dir, names) => call({ op: 'invalidate', args: [dir, names] }),
+    reconcile: dir => call({ op: 'reconcile', args: [dir] }),
     close: async () => { const thread = worker; stop(); await thread?.terminate(); },
   };
 };

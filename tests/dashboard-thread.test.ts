@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadActivity } from '../src/activity.js';
 import { TraceDirectoryReader } from '../src/explain.js';
 import { applyPatch } from './live-frames.js';
+import { credentialsDir, readPrivateJson, writePrivateJson } from '../src/credentials.js';
 
 // #210: the compiled dashboard rebuilds a long history on its activity thread, so health and live streams keep answering.
 describe('dashboard activity thread (#210)', () => {
@@ -111,4 +112,36 @@ process.stdout.write(s.url + '\\n');`;
       child.kill();
     }
   }, 60_000);
+
+  it.each(['off', 'SIGTERM'])('exits within one second with an open SSE connection after %s', async action => {
+    const directory = mkdtempSync(join(tmpdir(), 'jev-dashboard-stop-'));
+    const env = { HOME: directory, XDG_CONFIG_HOME: join(directory, 'config'), XDG_STATE_HOME: join(directory, 'state'), JEV_DASHBOARD_NO_OPEN: '1', PATH: process.env['PATH'] };
+    const token = 'a'.repeat(32), runtime = join(credentialsDir(env), 'dashboard-runtime.json');
+    writePrivateJson(runtime, { token, startingAt: Date.now() });
+    const child = spawn(process.execPath, [join(dist, 'cli.js'), 'dashboard-serve', token], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = ''; child.stderr.on('data', data => { stderr += String(data); });
+    const exited = new Promise<number | null>(resolve => child.once('exit', resolve));
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      for (const deadline = Date.now() + 5000; !readPrivateJson(runtime)?.['url'];) {
+        if (Date.now() > deadline || child.exitCode !== null) throw Error('dashboard startup: ' + stderr);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      const url = String(readPrivateJson(runtime)!['url']);
+      reader = (await fetch(url + 'api/live')).body!.getReader();
+      await reader.read(); // The native stream is active, rather than just a connected TCP socket.
+      const started = performance.now();
+      if (action === 'off') {
+        const command = spawnSync(process.execPath, [join(dist, 'cli.js'), 'dashboard', 'off'], { env, encoding: 'utf8' });
+        expect(command.status, command.stderr).toBe(0); expect(command.stdout).toContain('off');
+      } else child.kill('SIGTERM');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([exited, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error('shutdown exceeded one second: ' + stderr)), 1000); })]);
+        expect(result, stderr).toBe(0); expect(performance.now() - started).toBeLessThan(1000);
+      } finally { clearTimeout(timer); }
+      expect(readPrivateJson(runtime)).toBeNull();
+      expect((await reader.read().catch(() => ({ done: true }))).done).toBe(true);
+    } finally { await reader?.cancel().catch(() => undefined); child.kill(); rmSync(directory, { recursive: true, force: true }); }
+  }, 10_000);
 });

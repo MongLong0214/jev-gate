@@ -1,7 +1,23 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { applyPatch } from './live-frames.js';
+
+const settingsReads = vi.hoisted(() => ({ count: 0 }));
+const watchEvents = vi.hoisted(() => ({ dropped: false }));
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>();
+  return { ...actual, watch: (path: string, listener: (event: string, name: string | null) => void) => actual.watch(path, (event, name) => { if (!watchEvents.dropped) listener(event, name); }) };
+});
+vi.mock('../src/recording.js', async original => {
+  const actual = await original<typeof import('../src/recording.js')>();
+  return { ...actual, recordingStatus: (...args: Parameters<typeof actual.recordingStatus>) => { settingsReads.count++; return actual.recordingStatus(...args); } };
+});
+vi.mock('../src/dashboard-settings.js', async original => {
+  const actual = await original<typeof import('../src/dashboard-settings.js')>();
+  return { ...actual, dashboardStatus: (...args: Parameters<typeof actual.dashboardStatus>) => { settingsReads.count++; return actual.dashboardStatus(...args); } };
+});
 
 const loads = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../src/activity.js', async (original) => {
@@ -25,9 +41,10 @@ vi.mock('../src/activity-engine.js', async (original) => {
 });
 const { startDashboard, pruneViewers, rebuildWait, VIEWER_LEASES } = await import('../src/dashboard.js');
 const { activityHandler } = await import('../src/activity-engine.js');
+const { setRecording } = await import('../src/recording.js');
 
 const dirs: string[] = [];
-afterEach(() => { gate.hold = null; gate.fail = false; gate.ms = null; gate.starts = []; gate.ends = []; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { watchEvents.dropped = false; gate.hold = null; gate.fail = false; gate.ms = null; gate.starts = []; gate.ends = []; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 const make = (): string => { const dir = mkdtempSync(join(tmpdir(), 'jev-shared-load-')); dirs.push(dir); return dir; };
 
 // #210: concurrent viewers and snapshot requests share one rebuild instead of each computing the history.
@@ -79,6 +96,16 @@ describe('dashboard rebuild sharing (#210)', () => {
     // Directory mtime also discovers a new filename when a watch notification has not arrived yet.
     expect((await handler.load()).base).toBe(changed.key);
     expect(loads.count).toBe(3);
+  });
+
+  it('discovers a missed name alongside a notified name on explicit name reconciliation', async () => {
+    const trace = make(), handler = activityHandler({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } });
+    const record = (name: string): void => writeFileSync(join(trace, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+    record('a.json'); await handler.load();
+    record('b.json'); record('missed.json');
+    handler.invalidate(trace, ['b.json']); await handler.load();
+    handler.reconcile(trace); await handler.load();
+    expect(JSON.parse(handler.full()!.json).traceFiles).toBe(3);
   });
 
   it('rebuilds when only the liveness ring changed', async () => {
@@ -261,5 +288,108 @@ describe('dashboard viewer leases', () => {
     expect(viewers.size).toBe(VIEWER_LEASES + 1);
     expect(viewers.has('legacy-199')).toBe(true);
     expect(viewers.has('legacy-0')).toBe(false);
+  });
+});
+
+describe('event driven dashboard (#327)', () => {
+  const record = (dir: string, name: string): void => writeFileSync(join(dir, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+  const viewer = async (url: string) => {
+    const reader = (await fetch(url + 'api/live')).body!.getReader();
+    const states: Record<string, unknown>[] = [], events: string[] = [];
+    const reading = (async () => {
+      const decoder = new TextDecoder(); let buffer = '', state: Record<string, unknown> | null = null;
+      for (;;) {
+        const chunk = await reader.read().catch(() => ({ done: true, value: undefined })); if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        for (let end = buffer.indexOf('\n\n'); end >= 0; end = buffer.indexOf('\n\n')) {
+          const lines = buffer.slice(0, end).split('\n'); buffer = buffer.slice(end + 2);
+          const type = lines.find(line => line.startsWith('event: '))?.slice(7) ?? 'frame';
+          const data = lines.find(line => line.startsWith('data: '))?.slice(6); events.push(type);
+          if (data && type !== 'heartbeat') { state = type === 'patch' ? applyPatch(state, JSON.parse(data)) : JSON.parse(data); states.push(state!); }
+        }
+      }
+    })();
+    return { states, events, close: async () => { await reader.cancel().catch(() => undefined); await reading; } };
+  };
+  it('does no loads, rebuilds or preference reads during a quiet heartbeat interval with an open stream', async () => {
+    const trace = make(); record(trace, 'a.json');
+    const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const stream = await viewer(server.url);
+    try {
+      await vi.waitFor(() => expect(stream.states.length).toBeGreaterThan(0));
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const before = { loads: gate.started, rebuilds: loads.count, reads: settingsReads.count };
+      await vi.waitFor(() => expect(stream.events).toContain('heartbeat'), { timeout: 6000 });
+      expect({ loads: gate.started, rebuilds: loads.count, reads: settingsReads.count }).toEqual(before);
+      expect(stream.states).toHaveLength(1);
+    } finally { await stream.close(); await server.close(); }
+  }, 10_000);
+
+  it('follows initially absent nested directories, replacement, appends and preference-only changes', async () => {
+    const base = make(), trace = join(base, 'new', 'trace'), env = { HOME: make(), JEV_GATE_STATE_DIR: make() };
+    const server = await startDashboard({ traceDir: trace, env }, 0);
+    const stream = await viewer(server.url);
+    const latest = () => stream.states.at(-1)!;
+    try {
+      await vi.waitFor(() => expect(latest()?.['traceFiles']).toBe(0));
+      mkdirSync(trace, { recursive: true }); record(trace, 'a.json');
+      await vi.waitFor(() => expect(latest()?.['traceFiles']).toBe(1));
+      renameSync(trace, trace + '-old'); mkdirSync(trace); record(trace, 'b.json'); record(trace, 'c.json');
+      await vi.waitFor(() => expect(latest()?.['traceFiles']).toBe(2));
+      record(trace, 'd.json');
+      await vi.waitFor(() => expect(latest()?.['traceFiles']).toBe(3));
+      const frame = latest()['frame']; setRecording(env, false);
+      await vi.waitFor(() => expect(latest()?.['recording']).toEqual({ enabled: false }));
+      expect(latest()['frame']).not.toBe(frame);
+      setRecording(env, true);
+      await vi.waitFor(() => expect(latest()?.['recording']).toEqual({ enabled: true }));
+      // The liveness ring may be the only record emitted; creating its parent must not need a trace event.
+      mkdirSync(join(env.JEV_GATE_STATE_DIR, 'jev-gate'));
+      writeFileSync(join(env.JEV_GATE_STATE_DIR, 'jev-gate/liveness.json'), JSON.stringify({ version: 1, recent: [{ at: new Date().toISOString(), attempted: true, reason: null }] }));
+      await vi.waitFor(() => expect(latest()?.['liveness']).toMatchObject({ recorded: 1 }));
+    } finally { await stream.close(); await server.close(); }
+  });
+
+  it('does not lose a record that arrives while an earlier rebuild is held', async () => {
+    const trace = make(); record(trace, 'a.json');
+    let release = (): void => undefined; gate.hold = new Promise(resolve => { release = resolve; });
+    const server = await startDashboard({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } }, 0);
+    const stream = await viewer(server.url), before = gate.started;
+    try {
+      await vi.waitFor(() => expect(gate.started).toBeGreaterThanOrEqual(before));
+      record(trace, 'b.json'); record(trace, 'c.json');
+      await new Promise(resolve => setTimeout(resolve, 100)); release(); gate.hold = null;
+      await vi.waitFor(() => expect(stream.states.at(-1)?.['traceFiles']).toBe(3));
+      expect(stream.states.every(state => Number(state['traceFiles']) >= 1)).toBe(true);
+    } finally { release(); await stream.close(); await server.close(); }
+  });
+
+  it('recovers dropped file and preference notifications promptly with one load only when metadata changes', async () => {
+    const trace = make(), env = { HOME: make(), JEV_GATE_STATE_DIR: make() }; record(trace, 'a.json');
+    const server = await startDashboard({ traceDir: trace, env }, 0), stream = await viewer(server.url);
+    try {
+      await vi.waitFor(() => expect(stream.states.at(-1)?.['traceFiles']).toBe(1));
+      watchEvents.dropped = true; record(trace, 'b.json'); setRecording(env, false);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(stream.states.at(-1)?.['traceFiles']).toBe(1);
+      const before = gate.started;
+      await vi.waitFor(() => expect(stream.states.at(-1)?.['traceFiles']).toBe(2), { timeout: 1500 });
+      expect(stream.states.at(-1)?.['recording']).toEqual({ enabled: false });
+      expect(gate.started - before).toBe(1);
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      expect(gate.started - before).toBe(1);
+    } finally { watchEvents.dropped = false; await stream.close(); await server.close(); }
+  });
+
+  it('updates the 24-hour fact boundary on its deadline without a new file or polling', async () => {
+    const trace = make(), env = { HOME: make(), JEV_GATE_STATE_DIR: make() };
+    writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'admission_result', session_id: 's', written_at: new Date(Date.now() - 86_400_000 + 1500).toISOString(), decision: { shape: 'orchestrated' } }));
+    record(trace, 'current.json'); // Keep trace visibility known after the older admission leaves the fact window.
+    const server = await startDashboard({ traceDir: trace, env }, 0), stream = await viewer(server.url);
+    const fired = () => (stream.states.at(-1)?.['activity24h'] as { all?: Array<{ feature: string; metrics: { fired: number } }> } | undefined)?.all?.find(row => row.feature === 'admission')?.metrics.fired;
+    try {
+      await vi.waitFor(() => expect(fired()).toBe(1));
+      await vi.waitFor(() => expect(fired()).toBe(0), { timeout: 3000 });
+    } finally { await stream.close(); await server.close(); }
   });
 });

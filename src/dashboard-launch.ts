@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { Env } from './config.js';
 import { credentialsDir, privateDirectory, readPrivateJson, writePrivateJson } from './credentials.js';
-import { dashboardStatus } from './dashboard-settings.js';
+import { dashboardSettingsPath, dashboardStatus } from './dashboard-settings.js';
 import { startDashboard, dashboardSources } from './dashboard.js';
 import { openSetupBrowser } from './onboarding.js';
+import { watchDashboardPath } from './dashboard-watch.js';
 
 const runtimePath = (env: Env): string => join(credentialsDir(env), 'dashboard-runtime.json');
 const tokenOf = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
@@ -102,15 +103,24 @@ export const serveAutomaticDashboard = async (root: string, env: Env, token: str
   // Existing EventSource clients reconnect to the reused address before deciding to open a tab.
   const opening = setTimeout(server.ensureOpen, 0); opening.unref();
   let closing = false;
-  const stop = (): void => {
-    if (closing) return; closing = true; clearInterval(check); clearTimeout(opening);
-    void server.close().finally(() => {
-      if (readPrivateJson(runtimePath(env))?.['token'] === token) rmSync(runtimePath(env), { force: true });
-    });
+  const cleanup = (): void => {
+    clearInterval(check); clearTimeout(opening);
+    for (const watcher of watchers) watcher.close();
+    process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop);
+    if (readPrivateJson(runtimePath(env))?.['token'] === token) rmSync(runtimePath(env), { force: true });
   };
-  const check = setInterval(() => {
+  const stop = (): void => {
+    if (closing) return; closing = true;
+    void server.close().finally(cleanup);
+  };
+  const verify = (): void => {
     const state = readPrivateJson(runtimePath(env));
     if (!dashboardStatus(env).enabled || state?.['token'] !== token) stop();
-  }, 1000);
+  };
+  const watchers = [dashboardSettingsPath(env), runtimePath(env)].map(path => watchDashboardPath(path, false, verify));
+  let checks = 0;
+  const check = setInterval(() => { for (const watcher of watchers) watcher.reconcile(); if (++checks % 60 === 0) verify(); }, 500);
   check.unref(); process.once('SIGTERM', stop); process.once('SIGINT', stop);
+  void server.closed.finally(cleanup);
+  verify(); // Catch a preference or ownership change between startup and watcher registration.
 };
