@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.49 — 2026-10-22 — Keep the dashboard light while it runs
+
+- Stop the dashboard's activity thread from rescanning and rebuilding history every few seconds (#339). The trace reader listed thousands of file names every second although file-watch notifications and the server's 30 s reconcile already cover new records, and each record leaving the 24-hour window alone triggered a full history rebuild. The reader now lists directories every 30 s by default, and records leave the window together on a 60 s step. On the owner's machine with an open dashboard, the server's CPU went from 16% to 1.9% and its live stream from 355 KB to 19 KB over the same interval.
+- Keep the owner capability out of the public dashboard health reply; launch probes authenticate instead (#336).
+- The dashboard UI rework and the Router transcript-observation fix ship in a later release.
+
 ## v0.8.48 — 2026-10-22 — Router keeps the conversation it routes
 
 - Keep the last completed answer as the previous reply after a turn that ends with an error or an interruption (#334). Before, such a turn erased it, so the next request (often a short follow-up) went to Jev with no previous reply: in the installed trace of 2026-10-21 to 22, 140 root assessments had none for this reason (137 after an error, 3 after an interruption).
