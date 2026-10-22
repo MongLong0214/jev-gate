@@ -1,7 +1,8 @@
 import { runChecker } from './_lib.mjs';
 import { testMentions } from './_episode.mjs';
 
-// Its slug runs past 50 with a boundary exactly at 50, so the base is 50 long and the suffixed form has to cut deeper.
+// The original title permits a 45-char base when cutting at the last dash inside
+// the first 50 chars. The suffix then fits without cutting the base again.
 const LONG = 'alpha beta gamma delta epsilon zeta eta theta iota kapp';
 
 await runChecker(
@@ -20,11 +21,14 @@ await runChecker(
     await check('smallest_free_number', () => u('Hello World', ['hello-world', 'hello-world-2']) === 'hello-world-3' && u('Hello World', ['hello-world', 'hello-world-3']) === 'hello-world-2');
     await check('uses_korean_slug_rule', () => u('안녕 세상', ['안녕-세상']) === '안녕-세상-2');
     await check('suffix_respects_length_at_boundary', () => {
-      const base = slug.slugify(LONG);
-      const r = u(LONG, [base]);
-      const head = r.slice(0, -2);
-      // The base is itself cut at a boundary; with "-2" the head must be a prefix of it that ends on a word boundary.
-      return r.endsWith('-2') && r.length <= 50 && base.startsWith(head) && base[head.length] === '-' && head.length > 0;
+      const examples = [
+        [LONG, 'alpha-beta-gamma-delta-epsilon-zeta-eta-theta-2'],
+        // Exactly 50 chars before the suffix: this must cut back to the word boundary.
+        ['a'.repeat(40) + ' ' + 'b'.repeat(9), 'a'.repeat(40) + '-2'],
+        // No word boundary: the task explicitly permits a hard cut.
+        ['x'.repeat(55), 'x'.repeat(48) + '-2'],
+      ];
+      return examples.every(([title, expected]) => u(title, [slug.slugify(title)]) === expected);
     });
     await check('unique_test_added', () => testMentions(evalDir, /uniqueSlug/));
     await check('test_suite_passes', () => runTests());

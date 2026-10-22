@@ -120,4 +120,31 @@ describe('bench/cases-episodes.json', () => {
     cpSync(join(manifestDir, 'reference', id, 'followup'), dir, { recursive: true });
     graded(cs.followUpCheckFile!, dir, 'pass');
   });
+
+  it.each(['valid', 'over_limit', 'midword'] as const)('slug suffix checker accepts the full fitting base and rejects %s boundary behavior', (behavior) => {
+    const cs = cases.find((c) => c.id === 'ep-slugs')!;
+    const dir = join(tmp, 'slug-suffix', behavior);
+    cpSync(cs.fixtureDir, dir, { recursive: true });
+    cpSync(join(manifestDir, 'reference', cs.id, 'measured'), dir, { recursive: true });
+    // A valid implementation cuts only at a dash inside the allowed prefix.
+    // For the checker's original title this yields a 45-char base; adding -2 fits unchanged.
+    writeFileSync(join(dir, 'src', 'slugify.mjs'), `
+export const MAX_SLUG = 50;
+export const cutSlug = (value, max = MAX_SLUG) => {
+  if (value.length <= max) return value;
+  const prefix = value.slice(0, max);
+  const boundary = prefix.lastIndexOf('-');
+  return boundary > 0 ? prefix.slice(0, boundary) : prefix;
+};
+export const slugify = title => cutSlug(title.toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-+|-+$/g, ''));
+`);
+    if (behavior !== 'valid') {
+      const file = join(dir, 'src', 'unique-slug.mjs');
+      const wrong = behavior === 'over_limit' ? 'base' : 'base.slice(0, MAX_SLUG - suffix.length)';
+      writeFileSync(file, readFileSync(file, 'utf8').replace('cutSlug(base, MAX_SLUG - suffix.length)', wrong));
+    }
+    const grade = gradeDir(cs.checkFile, dir, opts);
+    expect(grade.environmentError).toBeNull();
+    expect(grade.checks.find((c) => c.id === 'suffix_respects_length_at_boundary')?.pass).toBe(behavior === 'valid');
+  });
 });
