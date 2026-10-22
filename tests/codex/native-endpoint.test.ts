@@ -4,6 +4,45 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { startCodexSession } from '../../src/codex/launch.js';
+import type { Obj } from '../../src/codex/source.js';
+
+it('forwards execution guidance only for a changed full-context pair and preserves native compact and incremental requests', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'jev-routed-execution-'));
+  writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n');});\n`, { mode: 0o755 });
+  writeFileSync(join(root, 'policy.json'), '{}');
+  const forwarded: Obj[] = [];
+  const upstream = createServer(async (req, res) => {
+    let raw = ''; for await (const b of req) raw += String(b); forwarded.push(JSON.parse(raw));
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"status":"completed"}');
+  });
+  await new Promise<void>(r => upstream.listen(0, '127.0.0.1', r));
+  const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1` }, connection: { token: 'a'.repeat(64), port: 0 } });
+  try {
+    vi.spyOn(session.policy, 'requestSession').mockReturnValue('native-session');
+    const submitted = vi.spyOn(session.policy, 'observeRequest');
+    const router = vi.spyOn(session.policy, 'externalRequest').mockImplementation(async (_id, request) => ({ request: request['pinned'] ? request : { ...request, model: 'selected' } }));
+    const original: Obj = { model: 'native', reasoning: { effort: 'high' }, input: [
+      { type: 'additional_tools', role: 'developer', tools: [{ type: 'function', name: 'native_tool' }] },
+      { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Native permissions.' }] },
+      { type: 'reasoning', encrypted_content: 'opaque-native-checkpoint' },
+      { type: 'function_call_output', call_id: 'native-call', output: 'Keep exact output.' },
+    ], prompt_cache_key: 'native-cache', metadata: { owner: true } };
+    const cases = [original, { ...original, instructions: 'Native full instructions.' }, { ...original, previous_response_id: 'native-state' }, { ...original, pinned: true }, original, original];
+    for (const [i, input] of cases.entries()) {
+      const url = session.url.replace('ws:', 'http:') + `/native/${session.token}/responses${i === 4 ? '/compact' : ''}`;
+      const response = await fetch(url, { method: 'POST', headers: i === 5 ? { 'x-codex-turn-metadata': '{"request_kind":"compaction"}' } : {}, body: JSON.stringify(input) });
+      expect(response.status).toBe(200); await response.text();
+    }
+    expect(router).toHaveBeenCalledTimes(4);
+    expect(submitted.mock.calls[0]?.[3]).toEqual({ ...original, model: 'selected' });
+    const lite = forwarded[0]!; expect(lite['model']).toBe('selected');
+    expect((lite['input'] as Obj[]).slice(1)).toEqual(original['input']);
+    expect((lite['input'] as Obj[])[0]).toMatchObject({ role: 'developer', content: [{ text: expect.stringContaining('required verification remain authoritative') }] });
+    expect({ ...lite, input: original['input'] }).toEqual({ ...original, model: 'selected' });
+    expect(forwarded[1]).toEqual({ ...cases[1], model: 'selected', instructions: expect.stringContaining('Native full instructions.\n\nJev routed execution:') });
+    expect(forwarded.slice(2)).toEqual([{ ...cases[2], model: 'selected' }, cases[3], original, original]);
+  } finally { await session.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
+});
 
 it('authenticates the built-in endpoint, preserves native auth, selects SSE before inference and defers busy updates', async () => {
   const root = mkdtempSync(join(tmpdir(), 'jev-endpoint-'));

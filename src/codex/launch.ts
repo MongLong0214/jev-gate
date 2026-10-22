@@ -14,6 +14,7 @@ import type { Env } from '../config.js';
 import type { CodexBilling } from './route-cost.js';
 import type { CompactReceipt } from './compact.js';
 import { normalizeUsage } from '../cost.js';
+import { routedExecution } from './execution-efficiency.js';
 
 /** Only the selected native transport establishes billing family; a custom endpoint's rates are unknown. */
 export const codexBilling = (configured: string | undefined, account: unknown): CodexBilling => configured ? 'unknown' :
@@ -135,8 +136,8 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
           if (route === '/responses' && !nativeCompact) {
             const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator'], codexBilling(configured, account));
-            parsed = selected.request;
-            routedInput = parsed;
+            routedInput = selected.request;
+            parsed = routedExecution(parsed, selected.request);
           }
           const prepared = await policy.compactRequest(sessionId, parsed, cancelled.signal, nativeCompact ? 'native' : 'inference', codexBilling(configured, account));
           compact = prepared.receipt;
