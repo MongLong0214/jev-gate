@@ -539,7 +539,7 @@ it.each(['failure', 'missing', 'partial', 'invalid', 'complete', 'mismatch', 'ch
     const cost = checks.find(c => c.message.startsWith('router_cost:'))!;
     expect(cost.metrics).toMatchObject({ fired: 1, applied: 1, effect: null });
     expect(cost.message).toContain(['failure', 'missing', 'partial', 'invalid'].includes(kind) ? '1 requests with incomplete usage; 1 sessions excluded' : '0 requests with incomplete usage');
-    if (kind !== 'failure' && kind !== 'missing') expect(checks.find(c => c.message.startsWith('router_applied:'))).toMatchObject({ level: kind === 'mismatch' ? 'fail' : 'ok', message: expect.stringContaining('1 routed requests with an observed model') });
+    if (kind !== 'failure' && kind !== 'missing') expect(checks.find(c => c.message.startsWith('router_applied:'))).toMatchObject({ level: kind === 'mismatch' ? 'fail' : 'ok', message: expect.stringContaining('1 requests with an observed model') });
     if (kind === 'child') expect(checks.find(c => c.message.startsWith('child_effect:'))?.message).toContain('1 child steps sent to Jev, 1 changed the effort');
     const isolated = mkdtempSync(join(dir, 'activity-'));
     records.forEach((r, i) => writeFileSync(join(isolated, `r${i}.json`), JSON.stringify(r)));

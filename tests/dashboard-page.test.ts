@@ -64,7 +64,8 @@ it('never borrows another execution or request receipt for the stage inspector',
   for (const history of [[run('other', 'claude', [unrelated]), run('mine', 'claude', [host])], [run('mine', 'claude', [unrelated, host])]]) {
     p.push(snapshot(history)); p.click('.node[data-feature=router]');
     const fields = new Map([...p.get('circuit-inspector').querySelectorAll('dt')].map(dt => [dt.textContent, dt.nextElementSibling?.textContent]));
-    expect(fields.get('판정')).toBe('opus · high');
+    expect(fields.get('판정')).toBe('모델 일치');
+    expect(fields.get('모델 · effort')).toBe('선택: opus · high / 관측: opus · high');
     expect(fields.get('Jev 응답')).toBe('–'); expect(fields.get('토큰')).toBe('–');
   }
   p.push(snapshot([run('mine', 'claude', [{ ...unrelated, callId: 'mine' }, host])]));
@@ -132,7 +133,7 @@ it('shows each host Compact facts without borrowing Claude restore metrics for C
 it.each([[0, '+$0.00'], [-.67486, '−$0.67'], [[-.1, .2], '−$0.10 / +$0.20']])('renders Router net %j without cache-price assumptions', (effect, expected) => {
   const p = page(), s = snapshot([]), facts = [{ feature: 'router', level: 'ok', metrics: { fired: 1, applied: 1, regression: 0, effect } }];
   p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
-  expect(node(p, 'router').querySelector('.nt')!.textContent).toBe('24h 집계는 단계 상세에서');
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toBe('기록 없음');
   p.click('.node[data-feature=router]');
   expect(text(p, 'circuit-inspector')).toContain(expected);
 });
@@ -335,7 +336,7 @@ describe('dashboard live interactions', () => {
     const p = page(); p.push(snapshot([run('r', 'claude', [step('w', 'admission', 'jev', { state: 'active', at }), step('d', 'router', 'jev', { durationMs: 80, receipt: { status: 200, code: null, model: 'jev-1.14.0', input: 10, output: 1, costUsd: null, choice: 'claude-sonnet-5 · high', confidence: .9, threshold: .6, direction: null } })])]));
     const wait = p.w.document.querySelector('#rc button[data-call=w]')!;
     expect(wait.textContent).toContain('응답 대기'); expect(wait.querySelector('.run[data-since]')).not.toBeNull();
-    expect(p.w.document.querySelector('#pipeline .jb .v')?.textContent).toContain('p50 80ms'); expect(p.w.document.querySelector('#pipeline .rail')?.classList.contains('wait')).toBe(true);
+    expect(p.w.document.querySelector('#pipeline .jb .v')?.textContent).toContain('응답 대기 1'); expect(text(p, 'j-p50')).toBe('80ms'); expect(p.w.document.querySelector('#pipeline .rail')?.classList.contains('wait')).toBe(true);
     const first = wait.querySelector('.run')!.textContent; await vi.waitFor(() => expect(wait.querySelector('.run')!.textContent).not.toBe(first), { timeout: 3000 });
   });
   it('estimates today cost from recorded tokens only and labels it as an estimate', () => {
@@ -476,7 +477,7 @@ it('names the reason under each circuit card and draws its recorded confidence a
   const p = page(); p.push(snapshot([run('c', 'claude', [step('a', 'admission', 'jev', { durationMs: 40, receipt: rc }), step('pa', 'admission', 'policy', { summary: '직접 처리 · 확신 기준 충족' })])]));
   expect(node(p, 'admission').querySelector('.nt')!.textContent).toBe('직접 처리 · 확신 기준 충족');
   expect(node(p, 'admission').querySelector('.pb i')!.getAttribute('style')).toContain('width: 82%');
-  expect(node(p, 'router').querySelector('.nt')!.textContent).toBe(''); expect(node(p, 'router').querySelector('.pb i')!.getAttribute('style')).toContain('width: 0%');
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toBe('기록 없음'); expect(node(p, 'router').querySelector('.pb i')!.getAttribute('style')).toContain('width: 0%');
 });
 
 it('names the scope on the Router card when its last routing step is not the root turn (#290)', () => {
@@ -523,18 +524,41 @@ it('fills the first rows of a long list at once and the rest in later tasks, cou
   await vi.waitFor(() => expect(shown()).toHaveLength(45)); expect(shown().every(Boolean)).toBe(true);
 });
 
-it('draws every recent strip tick and updates a burst immediately alongside the live rate and rolling median', () => {
+it('draws every recent strip tick and updates a burst immediately alongside the scoped live rate and separate call-log median', () => {
   const old = step('old', 'router', 'jev', { at: new Date(Date.now() - 90_000).toISOString(), durationMs: 40 });
   const base = Date.now(), records = (n: number) => Array.from({ length: n }, (_, i) => step(`r${i}`, 'router', 'jev', { durationMs: 50 + i, at: new Date(base + i).toISOString() }));
   const p = page(); p.push(snapshot([run('r', 'claude', [old, ...records(3)])]));
   expect(node(p, 'router').querySelectorAll('.strip .tr i')).toHaveLength(3); expect(node(p, 'router').querySelector('.strip')!.getAttribute('aria-hidden')).toBe('true');
   expect(filled(p)).toHaveLength(4);
   const rate = /\/분|분당|최근 1분|처리량|per minute|\/min/;
-  expect(p.w.document.body.textContent).toMatch(rate); expect(p.w.document.querySelector('.jb .v')?.textContent).toContain('p50 50ms'); p.click('#language'); expect(p.w.document.body.textContent).toMatch(rate);
+  expect(p.w.document.body.textContent).toMatch(rate); expect(p.w.document.querySelector('.jb .v')?.textContent).toContain('표시 범위 3/min'); expect(p.w.document.querySelector('.jb .v')?.textContent).not.toContain('p50'); expect(text(p, 'j-p50')).toBe('40ms'); p.click('#language'); expect(p.w.document.body.textContent).toMatch(rate);
   const burst = page(); burst.push(snapshot([run('r', 'claude', records(1))])); burst.push(snapshot([run('r', 'claude', records(1))]));
   burst.push(snapshot([run('r', 'claude', records(40))]));
   // Even a burst larger than the particle budget shows its newest value immediately.
   expect(burst.get('rc').querySelector('button')!.textContent).toContain('89ms');
+});
+
+it('keeps decision causes in the basis and distinct model evidence in details without repeating the current stage (#338)', () => {
+  const p=page(),response=step('dedup','router','jev',{title:'Router',summary:'선택 모델과 실제 모델 일치',durationMs:82,
+    receipt:{status:200,code:null,model:'jev-1.14.0',input:1200,output:0,costUsd:null,choice:'gpt-6-luna · low',confidence:.9,threshold:.6,direction:null},
+    routing:{scope:'root',baseline:'gpt-6.1-sol',modelReason:'selected',effortReason:'selected'},
+    model:{selected:'gpt-6-luna',observed:'gpt-6-luna',status:'confirmed',selectedEffort:'low',observedEffort:null}});
+  p.push(snapshot([run('dedup-run','codex',[response])]));p.click('.node[data-feature=router]');
+  const primary=p.get('circuit-inspector').querySelector('.b>.kv')!;
+  expect(primary.children[3]!.textContent).toBe('모델 일치');
+  expect(primary.children[5]!.textContent).toContain('선택: gpt-6-luna · low');expect(primary.children[5]!.textContent).toContain('관측: gpt-6-luna');
+  expect(primary.children[7]!.textContent).not.toContain('Router');expect(primary.children[7]!.textContent).not.toContain('선택 모델과 실제 모델 일치');
+  expect(filled(p)[0]!.lastElementChild!.textContent).toBe('luna · low');expect(text(p,'basis-code')).toContain('변경 선택');
+  expect(text(p,'rc')).not.toContain('변경 선택');expect(opened(p)).toContain('호스트 응답에 미제공');
+});
+
+it('refreshes a completed call when its decision changes in place and preserves its full failure cause (#338)', () => {
+  const p=page(),s=step('mutable','router','jev',{durationMs:80,receipt:{status:200,code:null,model:'jev-1.14.0',input:100,output:0,costUsd:null,choice:'gpt-6.1-sol · high',confidence:.9,threshold:.6,direction:null}});
+  p.push(snapshot([run('mutable-run','codex',[s])]));expect(filled(p)[0]!.textContent).toContain('sol · high');
+  p.push(snapshot([run('mutable-run','codex',[{...s,receipt:{...s.receipt!,input:200,choice:'gpt-6-luna · low'}}])]));
+  expect(filled(p)[0]!.textContent).toContain('luna · low');expect(filled(p)[0]!.textContent).toContain('200');
+  p.push(snapshot([run('mutable-run','codex',[{...s,state:'error',cause:'Upstream refused this exact request',receipt:{...s.receipt!,status:503,choice:null}}])]));
+  expect(filled(p)[0]!.lastElementChild!.textContent).toBe('요청 오류');expect(text(p,'basis-code')).toBe('Upstream refused this exact request');
 });
 
 it('marks selection with a tint or a border colour only, never an inset or left accent bar', () => {

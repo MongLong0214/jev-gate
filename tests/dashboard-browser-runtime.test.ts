@@ -157,9 +157,9 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const p=await page(width,900);await p.locator('#pipeline [data-feature=router]').click();await settle(p);
       for(const theme of ['dark','light'])for(const language of ['ko','en']){
         await p.evaluate(theme=>{document.documentElement.dataset.theme=theme},theme);if(await p.locator('html').getAttribute('lang')!==language)await p.locator('#language').click();await settle(p);
-        const m=await p.evaluate(()=>{const rect=(q:string)=>{const r=document.querySelector(q)!.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}};const b=document.querySelector('#circuit-inspector .b')! as unknown as {scrollHeight:number;clientHeight:number};return {circuit:rect('#pipeline'),inspector:rect('#circuit-inspector'),head:rect('.two>.card'),nodes:[...document.querySelectorAll('#pipeline .node')].map(n=>{const b=n.getBoundingClientRect();return {y:b.y,width:b.width}}),inspectorScroll:b.scrollHeight>b.clientHeight+1,overflow:document.documentElement.scrollWidth>innerWidth};});
+        const m=await p.evaluate(()=>{const rect=(q:string)=>{const r=document.querySelector(q)!.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}};const b=document.querySelector('#circuit-inspector .b')! as unknown as {scrollHeight:number;clientHeight:number};return {circuit:rect('#pipeline'),inspector:rect('#circuit-inspector'),head:rect('.two>.card'),circuitHeader:rect('.two>section>.ch'),inspectorHeader:rect('#circuit-inspector>.ch'),nodes:[...document.querySelectorAll('#pipeline .node')].map(n=>{const b=n.getBoundingClientRect();return {y:b.y,width:b.width}}),inspectorScroll:b.scrollHeight>b.clientHeight+1,overflow:document.documentElement.scrollWidth>innerWidth};});
         measurements.push({width,theme,language,...m});expect(m.overflow).toBe(false);expect(m.inspectorScroll,`${width} ${theme} ${language}: default summary must fit`).toBe(false);
-        if(width>=1280){expect(m.inspector.x).toBeGreaterThan(m.circuit.right);expect(m.inspector.y).toBe(m.head.y);expect(new Set(m.nodes.map(n=>n.y)).size).toBe(1);expect(Math.min(...m.nodes.map(n=>n.width))).toBeGreaterThanOrEqual(160);}else expect(m.inspector.y).toBeGreaterThan(m.circuit.bottom);
+        if(width>=1280){expect(m.inspector.x).toBeGreaterThan(m.circuit.right);expect(m.inspector.y).toBe(m.head.y);expect(m.head.bottom,`${width} ${theme} ${language}: panel bottoms must align`).toBe(m.inspector.bottom);expect(m.circuitHeader.bottom).toBe(m.inspectorHeader.bottom);expect(new Set(m.nodes.map(n=>n.y)).size).toBe(1);expect(Math.min(...m.nodes.map(n=>n.width))).toBeGreaterThanOrEqual(160);}else expect(m.inspector.y).toBeGreaterThan(m.circuit.bottom);
         expect(await p.locator('#circuit-inspector h2').textContent()).toBe(language==='ko'?'단계 상세':'Stage details');expect(await p.locator('#circuit-inspector .insp-feature').textContent()).toBe('Router');
         const primary=p.locator('#circuit-inspector .b>.kv');expect(await primary.locator('dt').count()).toBe(4);expect(await primary.textContent()).toContain('gpt-6.1-sol');
         const more=p.locator('#circuit-inspector .inspect-more');expect(await more.getAttribute('open')).toBeNull();await more.locator('summary').click();expect(await more.locator('dd').filter({hasText:'Untrackable'}).count()+await more.locator('dd').filter({hasText:'추적 불가'}).count()).toBeGreaterThan(0);expect(await more.textContent()).toContain('91ms');await more.locator('summary').click();
@@ -216,6 +216,30 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(await anchor.getAttribute('aria-pressed')).toBe('true');push([a,n,b]);await settle(p);expect(await p.locator('#runs .row').first().getAttribute('data-run')).toBe('a');await p.close();
   });
 
+  it.each([
+    ['ko', '현재 요청은 기존 대화 문맥을 바탕으로 처리합니다', '문맥 확인'],
+    ['en', 'Current model remains unchanged for now.', 'Context checked'],
+  ])('fits short %s card reasons by their rendered height and retains the full status across resize and live updates (#338)',async(language,summary,short)=>{
+    const initial=call('note','admission',63,{executionPath:'direct',summary},{choice:'direct'});
+    push([run('note-run','claude',[initial])]);const p=await page(1600,900);
+    if(await p.locator('html').getAttribute('lang')!==language)await p.locator('#language').click();
+    const card=p.locator('#pipeline .node[data-feature=admission]'),note=card.locator('.nt');await card.click();await settle(p);
+    expect(await note.textContent()).toBe(summary);
+    await p.setViewportSize({width:1280,height:900});await settle(p);
+    const bounds=()=>card.evaluate(e=>{const note=e.querySelector('.nt')!,bar=e.querySelector('.pb')!,range=document.createRange();range.selectNodeContents(note);const n=note.getBoundingClientRect(),r=range.getBoundingClientRect(),b=bar.getBoundingClientRect();return {width:e.getBoundingClientRect().width,noteHeight:n.height,textBottom:r.bottom,barTop:b.top,scrollHeight:note.scrollHeight,clientHeight:note.clientHeight};});
+    const fitted=await bounds();expect(fitted.width).toBeGreaterThanOrEqual(160);expect(fitted.width).toBeLessThan(161);
+    expect(fitted.textBottom,summary).toBeLessThanOrEqual(fitted.barTop);expect(fitted.scrollHeight).toBeLessThanOrEqual(fitted.clientHeight+1);
+    expect(await note.textContent()).not.toBe(summary);expect(await note.getAttribute('title')).toBe(summary);
+    expect(await p.locator('#circuit-inspector .status-value').textContent()).toContain(summary);
+    await p.screenshot({path:join(output,`card-note-${language}-1280.png`),fullPage:true});
+    const geometry=()=>p.evaluate(()=>['pipeline','circuit-inspector','runs'].map(id=>{const b=document.getElementById(id)!.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height};}));const before=await geometry();
+    push([run('note-run','claude',[{...initial,summary:short}])]);await settle(p);expect(await note.textContent()).toBe(short);expect(await geometry()).toEqual(before);
+    push([run('note-run','claude',[initial])]);await settle(p);expect((await bounds()).textBottom).toBeLessThanOrEqual((await bounds()).barTop);expect(await geometry()).toEqual(before);
+    expect(await p.locator('#circuit-inspector .status-value').textContent()).toContain(summary);
+    await p.setViewportSize({width:1600,height:900});await settle(p);expect(await note.textContent()).toBe(summary);
+    await p.close();
+  });
+
   it('keeps oversized 24h counts and cost ranges in the complete stage detail without overlapping card status (#338)',async()=>{
     const big=9_007_199_254_740_991,metrics={fired:big,applied:big,regression:big,accepted:big,rejected:big,failed:big,pending:big,cancelled:big,restored:big,budgetUsed:big,budget:big,codexAssessed:big,codexSubmitted:big,codexCompleted:big,effect:[-999_999_999_999,999_999_999_999]};
     const facts=['workers','router','compact'].map(feature=>({feature,level:'warn',metrics}));
@@ -233,7 +257,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       await p.evaluate(()=>{type Shift={value:number;hadRecentInput:boolean};const g=globalThis as unknown as {cls:number;PerformanceObserver:new(cb:(l:{getEntries():Shift[]})=>void)=>{observe(o:{type:string}):void}};g.cls=0;new g.PerformanceObserver(l=>{for(const e of l.getEntries())if(!e.hadRecentInput)g.cls+=e.value}).observe({type:'layout-shift'});});
       const positions=()=>p.locator('#circuit-inspector .insp-tags,#circuit-inspector .b>.kv>*,#circuit-inspector .b>details,#circuit-inspector .b>.link').evaluateAll(es=>es.map(e=>{const b=e.getBoundingClientRect();return [b.x,b.y,b.width,b.height]}));
       const before=await positions();await wait(1100);
-      push([run('arrival','codex',[call('arrival-'+feature,feature,91,{title:'Recorded decision',summary:'Original request kept\nResponse still native\nUsage is unknown\nNo inferred savings'},{choice:feature==='router'?'gpt-6.1-sol · high':'direct'})],{title:'First run'})]);
+      push([run('arrival','codex',[call('arrival-'+feature,feature,91,{title:'Recorded decision',summary:'Original request kept\nResponse still native\nUsage is unknown\nNo inferred savings',...(feature==='router'?{model:{selected:'claude-opus-5-5',observed:'claude-opus-5-5',status:'confirmed' as const,selectedEffort:'medium',observedEffort:'medium'}}:{})},{choice:feature==='router'?'claude-opus-5-5 · medium':'direct'})],{title:'First run'})]);
       await expect.poll(()=>p.locator('#circuit-inspector .insp-tags').textContent()).toBe('Codex');await settle(p);await wait(150);
       expect(await p.locator('.status-value').evaluate(e=>{const range=document.createRange();range.selectNodeContents(e);return new Set([...(range as unknown as {getClientRects():Array<{top:number;width:number}>}).getClientRects()].filter(r=>r.width>0).map(r=>r.top)).size;})).toBe(5);
       expect(await p.locator('#circuit-inspector .b').evaluate(e=>e.scrollHeight>e.clientHeight+1)).toBe(false);
@@ -267,7 +291,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
   },60_000);
 
   it('keeps circuit text at AA contrast and exposes focus and reduced-motion states in both themes', async () => {
-    push([run('access','claude',[call('access-a','admission',80,{executionPath:'direct'}),call('access-r','router',90,{},{choice:'sonnet · high'})])]);
+    push([run('access','claude',[call('access-a','admission',80,{executionPath:'direct'}),call('access-r','router',90,{},{choice:'sonnet · high'}),step('access-pending','router',{state:'active'})])]);
     const p=await page();
     for(const theme of ['dark','light']){
       await p.evaluate(theme=>{document.documentElement.dataset.theme=theme},theme);await p.emulateMedia({reducedMotion:'reduce'});await settle(p);
@@ -286,7 +310,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       expect(await node.evaluate(e=>e.matches(':focus-visible'))).toBe(true);
       expect(await node.evaluate(e=>getComputedStyle(e).outlineWidth)).toBe('2px');
       expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationName)).toBe('none');
-      await p.emulateMedia({reducedMotion:'no-preference'});await node.evaluate(e=>e.classList.add('zap'));expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationName)).toBe('halo');
+      await p.emulateMedia({reducedMotion:'no-preference'});expect(await node.getAttribute('aria-busy')).toBe('true');expect(await node.locator('.t i').evaluate(e=>getComputedStyle(e,'::after').animationName)).toBe('working');
       await p.locator('#pause').click();expect(await node.evaluate(e=>(e as unknown as {getAnimations(o:{subtree:boolean}):Array<{playState:string}>}).getAnimations({subtree:true}).filter(a=>a.playState==='running').length)).toBe(0);await p.locator('#pause').click();
     }
     await p.close();
@@ -296,7 +320,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     for(const width of [1440,1280,1024,768,390]){
       const short=call('stable-short','router',90,{summary:'short'},{choice:'sol · low'});push([run('stable','codex',[short])]);
       const p=await page(width);await p.locator('#pipeline [data-feature=router]').click();await settle(p);
-      const rects=()=>p.evaluate(()=>['#pipeline',...Array.from(document.querySelectorAll('#pipeline .node:not([hidden])')).map(e=>'#pipeline [data-feature='+e.getAttribute('data-feature')+']'),'#circuit-inspector','#runs'].map(q=>{const b=document.querySelector(q)!.getBoundingClientRect();return [b.x,b.y+document.documentElement.scrollTop,b.width,b.height]}));
+      const rects=()=>p.evaluate(()=>['.two>section','.two>section>.ch','#pipeline',...Array.from(document.querySelectorAll('#pipeline .node:not([hidden])')).map(e=>'#pipeline [data-feature='+e.getAttribute('data-feature')+']'),'#circuit-inspector','#circuit-inspector>.ch','#runs'].map(q=>{const b=document.querySelector(q)!.getBoundingClientRect();return [b.x,b.y+document.documentElement.scrollTop,b.width,b.height]}));
       const before=await rects();
       const full='full-model-identifier-'+('아주 긴 이유 error details with spaces '.repeat(30))+'-END';
       const long=call('stable-long','router',9999,{summary:full,cause:full,state:'error',model:{selected:full,observed:full,status:'mismatch',selectedEffort:'xhigh',observedEffort:'high'}},{choice:full+' · xhigh',model:full,input:999999999,output:99999999});
@@ -360,7 +384,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const measured=await p.evaluate(()=>{const g=globalThis as unknown as {reactions:Record<string,number>;patchEvents:string[];cls:number;opens:number};const number=document.querySelector('#pipeline [data-feature=router] .dec b') as unknown as {getAnimations():unknown[]};return {reactions:g.reactions,events:g.patchEvents,cls:g.cls,opens:g.opens,numbers:number.getAnimations().length}});
       for(const [kind,ms]of Object.entries(measured.reactions))expect(ms,`${width} ${kind}`).toBeLessThanOrEqual(100);
       expect(new Set(measured.events)).toEqual(new Set(batch.map(s=>s.id)));expect(measured.numbers).toBeGreaterThan(0);expect(measured.opens).toBe(1);
-      expect(await p.locator('#pipeline .jb .v').textContent()).toContain('총 4회');
+      expect(await p.locator('#pipeline .jb .v').textContent()).toContain('표시 범위 4/min');
       await p.screenshot({path:join(output,`readability-${width}-active.png`),fullPage:true});await wait(1200);
       const idle=await p.locator('#pipeline').evaluate(e=>(e as unknown as {getAnimations(o:{subtree:boolean}):Array<{playState:string}>}).getAnimations({subtree:true}).filter(a=>a.playState==='running').length);expect(idle).toBe(0);
       const cls=await p.evaluate(()=>(globalThis as unknown as {cls:number}).cls);writeFileSync(join(output,'patch-shifts-'+width+'.json'),JSON.stringify(await p.evaluate(()=>(globalThis as unknown as {shifts:unknown[]}).shifts),null,2));expect(cls,`${width}`).toBe(0);measurements.push({width,...measured,cls,idle});
@@ -368,6 +392,51 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     }
     writeFileSync(join(output,'readability-patch-measurements.json'),JSON.stringify(measurements,null,2));
   },45_000);
+
+  it('keeps execution rows dense, readable and stable when their latest decision changes (#338)', async()=>{
+    const at=ago(1000),stages=['admission','allocation','workers','router','compact'] as const;
+    const records=stages.map((id,i)=>call('dense-'+i,id,70+i,{at},{choice:id==='router'?'claude-opus-5-5 · medium':id==='admission'?'direct':'selected'}));
+    const rs=Array.from({length:10},(_,i)=>run('dense-'+i,'claude',i===2?records:[records[3]!],{title:i===2?'여러 단계 실행':'Router 실행'}));
+    const measurements=[];
+    for(const width of [1440,1280,390]){
+      push(rs);const p=await page(width);await settle(p);
+      for(const language of ['ko','en']){
+        if(language==='en')await p.locator('#language').click();
+        const metric=await p.locator('#runs').evaluate(root=>{
+          const box=root.getBoundingClientRect(),rows=[...root.querySelectorAll('.row')].map(e=>({height:e.getBoundingClientRect().height,text:e.textContent}));
+          return {height:box.height,rows,full:[...root.children].filter(e=>{const r=e.getBoundingClientRect();return r.top>=box.top&&r.bottom<=box.bottom+1}).length,overflow:document.documentElement.scrollWidth>innerWidth};
+        });
+        expect(metric.rows.slice(0,3).map(r=>r.height).every(h=>h<=(width>900?60:112)),`${width} ${language}`).toBe(true);
+        expect(metric.full).toBeGreaterThanOrEqual(width>900?6:3);expect(metric.overflow).toBe(false);
+        expect(await p.locator('#runs .spk,#runs .ms').count()).toBe(0);
+        expect(await p.locator('#runs .c-md').first().textContent()).not.toMatch(/confidence|확신|ms/);
+        measurements.push({width,language,...metric});
+      }
+      const before=await p.locator('#runs .row').evaluateAll(rows=>rows.map(e=>e.getBoundingClientRect().height));
+      const updated=rs.map(r=>({...r,steps:r.steps.map(s=>s.feature==='router'?{...s,receipt:{...s.receipt!,choice:'gpt-6.1-sol · xhigh'}}:s)}));
+      patch(updated);await expect.poll(()=>p.locator('#runs .c-md').first().textContent()).toContain('sol');
+      expect(await p.locator('#runs .row').evaluateAll(rows=>rows.map(e=>e.getBoundingClientRect().height))).toEqual(before);
+      await p.screenshot({path:join(output,`execution-density-${width}.png`),fullPage:true});await p.close();
+    }
+    writeFileSync(join(output,'execution-density.json'),JSON.stringify(measurements,null,2));
+  },30_000);
+
+  it('reacts to a same-ID request completion, holds only real pending activity and ignores identical snapshots (#338)',async()=>{
+    const request=step('same-id','router',{state:'active',at:ago(500),callId:'exchange',summary:'응답 대기'}),r=run('same-run','codex',[request],{state:'active'});
+    push([r]);const p=await page();await settle(p);await record(p);
+    const node=p.locator('#pipeline .node[data-feature=router]');
+    expect(await node.getAttribute('aria-busy')).toBe('true');
+    const response=call('same-id','router',63,{...request,state:'done',summary:'선택 모델과 실제 모델 일치',model:{selected:'gpt-6-luna',observed:'gpt-6-luna',status:'confirmed',selectedEffort:'low',observedEffort:null}},{choice:'gpt-6-luna · low'});
+    patch([{...r,state:'done',steps:[response]}]);
+    await expect.poll(async()=>count(await motion(p),'zap:router')).toBeGreaterThan(0);
+    expect(await node.getAttribute('aria-busy')).toBe('false');
+    expect(await p.locator('#pipeline .jb .v').textContent()).toContain('대기 0');
+    await wait(1200);const before=(await motion(p)).length;
+    push([{...r,state:'done',steps:[{...response}]}]);await wait(250);
+    expect((await motion(p)).length).toBe(before);
+    expect(await p.locator('#pipeline').evaluate(e=>(e as unknown as {getAnimations(o:{subtree:boolean}):Array<{playState:string}>}).getAnimations({subtree:true}).filter(a=>a.playState==='running').length)).toBe(0);
+    await p.close();
+  });
 
   it('shows live version status without overflow in the actual browser', async () => {
     const home = mkdtempSync(join(tmpdir(), 'jev-dashboard-version-'));
@@ -731,7 +800,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     expect(log.findIndex(([k])=>k==='trip')).toBeLessThan(log.findIndex(([k])=>k==='ping'));
     expect(await p.locator('#comm i').count()).toBe(comm+3);expect(await p.locator('#pipeline .node[data-feature=workers] .strip i').count()).toBe(1);
     expect(await p.locator('#rc li:first-child .rcr > span:nth-child(2)').textContent()).toBe('Gate B');expect(await p.locator('#runs [data-run=rt] .jc .n').textContent()).toBe('4');
-    expect(await p.locator('#runs [data-run=rt] .md .rec em').last().textContent()).toBe('Gate B');
+    expect(await p.locator('#runs [data-run=rt] .fx .f').first().textContent()).toBe('Gate B');expect(await p.locator('#runs [data-run=rt] .md .rec b').last().textContent()).toBe('완료');
     // A returning dot keeps its response time in view for a moment after it lands, then leaves.
     await p.waitForFunction(()=>!document.querySelector('.trip'),undefined,{timeout:3000});expect(await p.locator('#rc li:first-child .rcr > span:nth-child(5)').textContent()).toBe('70ms');
     await p.locator('#pipeline').screenshot({path:join(output,'circuit-after-trips.png')});await p.close();
@@ -884,7 +953,7 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
 
   it('shows a generated run title in English in the run detail and the row label (#237)',async()=>{
     push([run('t','claude',[call('tr','router',90)],{title:'Router 실행'})]);const p=await page(1280,800);await p.locator('#language').click();
-    await p.locator('#runs [data-run=t]').click();expect(await p.locator('#runs [data-run=t] .nm b').textContent()).toBe('Router run');
+    await p.locator('#runs [data-run=t]').click();expect(await p.locator('#runs [data-run=t] .nm b').textContent()).toMatch(/^Execution \d{2}:\d{2}:\d{2}$/);
     expect(await p.locator('#rd-name').textContent()).toBe('Router run');expect(await p.locator('#runs [data-run=t]').getAttribute('aria-label')).toMatch(/^Router run, /);await p.close();
   });
 

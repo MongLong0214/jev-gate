@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.51 — 2026-10-22 — Router sees the requests it routes
+
+- Find the session transcript by session id when the host skips the SessionStart and UserPromptSubmit events that used to supply its path (another plugin earlier in the chain can do this). In the installed trace of 2026-10-20 to 22, one root step of 1,245 since v0.8.32 had a transcript observation, so the Router never learned cache TTLs or confirmed an applied effort. The lookup runs once per step and stops once the file is found.
+- Keep a model's cache observation across a root step that reports no usage (an error turn). Before, the empty step replaced it, and the next turn held every move as `cost_unknown_hold`: 135 of 223 such holds in the same trace.
+- With routing off, leave a child under a manually selected restricted root (Fable without `allowFable`) to the host instead of denying it.
+- The dashboard marks a Router selection that the dispatch did not carry (budget expired, turn retired, a revived agent kept its model) as not applied instead of a change. doctor's `router_applied` counts requests with an observed model without calling them routed.
+- Align the circuit and stage detail panels, keep execution rows compact, drop repeated information and the card-wide animated border, and show only real pending and response signals (#338, #346).
+
 ## v0.8.50 — 2026-10-22 — Keep a live dashboard light while records stream in
 
 - Keep a record stream from rebuilding and relisting the whole history. On a copy of the owner's 48-hour history (60k records) with one viewer and two new records a second for 60 s, the dashboard used 49.9% of a core on v0.8.49 and 11.4% now. Three causes: the pause between rebuilds was capped at 100 ms from the previous start, so a 122 ms rebuild started again 20 ms after it ended; two thirds of each rebuild recomputed the 24-hour summary over every record; and each directory change the OS had already named still listed every file name again.

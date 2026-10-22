@@ -177,7 +177,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     const codexObserved = phase('codex_router_response').filter(r => str(r['selected_model']) && str(r['observed_model']));
     const codexMismatch = codexObserved.filter(r => r['selected_model'] !== r['observed_model']);
     const mismatched = compared.filter(r => familyOf(r['requested']) !== familyOf(r['observed']));
-    say(mismatched.length || codexMismatch.length ? 'fail' : compared.length + codexObserved.length ? 'ok' : 'info', `router_applied: ${compared.length + codexObserved.length} routed requests with an observed model, ${mismatched.length + codexMismatch.length} answered by another model family${mismatched.length ? ` (${tally(mismatched.map(r => `${familyOf(r['requested'])}->${familyOf(r['observed'])}`))})` : ''}`,
+    say(mismatched.length || codexMismatch.length ? 'fail' : compared.length + codexObserved.length ? 'ok' : 'info', `router_applied: ${compared.length + codexObserved.length} requests with an observed model, ${mismatched.length + codexMismatch.length} answered by another model family${mismatched.length ? ` (${tally(mismatched.map(r => `${familyOf(r['requested'])}->${familyOf(r['observed'])}`))})` : ''}`,
       'The host answered with a model the Router did not request; check the model restrictions and the host version.');
 
     // A root turn's routing ends only with a recorded reason; a later unrouted step without one is the #279 mid-turn release.
