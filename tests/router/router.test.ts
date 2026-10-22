@@ -1119,6 +1119,23 @@ describe('spawn model', () => {
     expect(refused.f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_denied', reason: 'restricted_baseline' }));
   });
 
+  it('runs a restricted model the call names as named, neither replaced nor denied, without asking Jev', async () => {
+    for (const model of ['fable', 'claude-fable-5-1']) {
+      const router = createRouter(configOf({ ...SPAWN_ONLY, allowFable: false }));
+      // A clear move to Opus, which the shipped bug applied silently to `model: "fable"`.
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['high', 0.95] }) });
+      // As the host resolves them.
+      f.engine.modelAliases = async () => ({ opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5', fable: 'claude-fable-5-1' });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      const e = spawn({ subagentType: 'general-purpose', model });
+      const n = spawnNext(() => ({ model: 'claude-fable-5-1', agentId: 'child' }));
+      expect(await router.agentSpawn(f.engine, e, n.next)).toEqual({ model: 'claude-fable-5-1', agentId: 'child' });
+      expect(n.calls).toEqual([e]);
+      expect(f.sent).toHaveLength(0);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'explicit_restricted' }));
+    }
+  });
+
   it('with routing off, leaves a child under a manually selected restricted root to the host', async () => {
     // The combined plugin registers spawns for Gate dispatch even when the Router is off.
     const router = createRouter(configOf({ enabled: false, allowFable: false }), undefined, true);

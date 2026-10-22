@@ -11,7 +11,7 @@ import { looksSecret } from './secret.ts';
 import { offerRoute, selectPair, keepModelPair, pairReceipt, applyEffort, toolBound, type PairOffer, type EffortEdit } from './selection.ts';
 import { CONTEXT_TAIL, RECENT_REQUESTS, routingContext, type RoutingCache } from './context.ts';
 import { claudeCandidates, claudeContextFits, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
-import { claudeTargetAllowed, currentClaudeModel } from './models.ts';
+import { claudeTargetAllowed, currentClaudeModel, isFable } from './models.ts';
 import type { ChildStepContext } from '../../../src/router-child-context.ts';
 import { normalizeUsage, usageCost, observedTtl, ModelCache, type CacheObservation } from '../../../src/cost.ts';
 import { providerPrice } from '../../../src/provider-prices.ts';
@@ -439,6 +439,8 @@ interface SpawnPlan {
   deny?: string;
   /** A closed category for the denial record; never the deny text, the prompt or a path. */
   reason?: string;
+  /** A restricted model the call names: the caller's own choice, run as named. */
+  manual?: true;
 }
 
 /** Apply the cache floor without raising effort above the native baseline. Missing proposals stay missing. */
@@ -1481,6 +1483,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const inheritance = declared ? null : builtIn;
     if (inheritance && (inheritance === 'baseline_unknown' || !config.routeSubagentEffort || childHistoryFull)) return spawnSkip(engine, e, inheritance);
     if (explicit && !config.routeExplicitSpawnModel && !config.routeSubagentEffort) return spawnSkip(engine, e, 'explicit_model');
+    // A restricted model the call names is a manual selection, as on the root: it runs as named, never replaced or denied.
+    if (explicit && !allowFable && isFable((await within(aliasesOf(engine), live))[explicit] ?? explicit)) { spawnSkip(engine, e, 'explicit_restricted'); return { target: null, answers: null, manual: true }; }
     const key = await keyFor(engine, live); if (key === ABORTED) throw ENDED;
     if (!('key' in key)) {
       const aliases = await within(aliasesOf(engine), live);
@@ -1621,8 +1625,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       log(engine, { event: 'budget_timeout', scope: 'spawn', tool_use_id: e.tool_use_id });
     }
     wait.dispose();
-    // With routing off, a restricted baseline is the user's own choice: only an automatic dispatch is refused for it.
-    if (!plan?.deny && ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt))) || config.enabled && !baselineAllowed && !plan?.target))
+    // With routing off, or named on the call, a restricted baseline is the caller's own choice: only an automatic
+    // dispatch is refused for it.
+    if (!plan?.deny && ((!plan && (e.subagentType.startsWith(GATE_AGENT_PREFIX) || GATE_ROUTE_NOTE.test(e.prompt))) || config.enabled && !baselineAllowed && !plan?.target && !plan?.manual))
       plan = denied(baselineAllowed ? 'unverified' : 'restricted_baseline', 'Automatic dispatch could not be verified; continue in the main session. No child started.');
     // As on turn.step: the host has already spawned natively, so nothing here may spawn again.
     if (next.signal.aborted || own.aborted) throw new Error('jev-router: spawn dispatch abandoned before next');
