@@ -246,6 +246,19 @@ describe('final host allocation diagnostics', () => {
 });
 
 describe('incremental directory reconciliation', () => {
+  it('reconciles missed names promptly while keeping cached immutable records', async () => {
+    const dir = mkdtempSync(join(tmp, 'reconcile-')), reader = new TraceDirectoryReader(60_000);
+    writeFileSync(join(dir, 'a.json'), JSON.stringify(base('post', 1)));
+    const initial = reader.read(dir, 1000).records[0];
+    writeFileSync(join(dir, 'b.json'), JSON.stringify(base('post', 2))); reader.invalidate(dir, 'b.json');
+    writeFileSync(join(dir, 'missed.json'), JSON.stringify(base('failure', 3)));
+    await reader.prepare(dir, 1001);
+    expect(reader.read(dir, 1001).records).toHaveLength(2);
+    reader.reconcile(dir); await reader.prepare(dir, 1002);
+    const recovered = reader.read(dir, 1002);
+    expect(recovered.records).toHaveLength(3);
+    expect(recovered.records[0]).toBe(initial);
+  });
   it('uses named watch additions directly and reconciles an unnotified name at the fallback deadline', async () => {
     const dir = mkdtempSync(join(tmp, 'named-')), reader = new TraceDirectoryReader(100);
     writeFileSync(join(dir, 'a.json'), JSON.stringify(base('post', 1)));

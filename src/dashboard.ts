@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { readFileSync, lstatSync, watch, type FSWatcher } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import type { Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -12,11 +12,13 @@ import type { Host } from './host-support.js';
 import { claudeTraceDir } from './claude-setup.js';
 import { codexTraceDir } from './codex-paths.js';
 import { readSettingsEnvVar } from './host-window.js';
-import { recordingStatus, setRecording } from './recording.js';
-import { dashboardStatus, setDashboard } from './dashboard-settings.js';
+import { recordingPath, recordingStatus, setRecording } from './recording.js';
+import { dashboardSettingsPath, dashboardStatus, setDashboard } from './dashboard-settings.js';
 import { JEV_FAVICON } from './dashboard-brand.js';
-import { traceDirectoryIdentity } from './explain.js';
 import { releaseChecker, type ReleaseInfo } from './release-info.js';
+import { credentialsPath } from './credentials.js';
+import { livenessPath } from './liveness.js';
+import { watchDashboardPath } from './dashboard-watch.js';
 
 const PAGE = DASHBOARD_PAGE;
 
@@ -95,13 +97,14 @@ export const readVersions = (env: Env, host?: Host): DashboardVersions => {
   return { running, installed };
 };
 
-export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string; openBrowser?: (url: string) => void; reconnectGraceMs?: number; releaseFetch?: typeof fetch } = {}): Promise<{ url: string; port: number; close: () => Promise<void>; ensureOpen: () => void }> =>
+export const startDashboard = (sources: DashboardSources, port: number, runtime: { token?: string; openBrowser?: (url: string) => void; reconnectGraceMs?: number; releaseFetch?: typeof fetch } = {}): Promise<{ url: string; port: number; close: () => Promise<void>; closed: Promise<void>; ensureOpen: () => void }> =>
   new Promise((resolve, reject) => {
     const sockets = new Set<Socket>();
     const engine = activityEngine(sources);
-    const releases = releaseChecker(runtime.releaseFetch);
+    const controller = new AbortController();
+    const releases = releaseChecker(runtime.releaseFetch, Date.now, controller.signal);
     const versions = (): DashboardVersions => ({ ...readVersions(sources.env, sources.host), release: releases.current() });
-    const subscribers = new Set<(extra: string) => void>();
+    const subscribers = new Set<(extra: string, heartbeat?: boolean) => void>();
     const viewers = new Map<string, number>(); // Infinity while connected; a short lease during reconnect.
     let viewerSequence = 0;
     let openingUntil = 0;
@@ -129,18 +132,17 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       openingUntil = now + 30_000;
       runtime.openBrowser(url);
     };
-    const watchers = new Map<string, { watcher: FSWatcher; identity: string }>();
-    const directoryIdentities = new Map<string, string | null>();
-    const directoryTimes = new Map<string, number | null>();
     const directories = new Set([sources.traceDir, ...(sources.traceDirs?.map(source => source.dir) ?? [])].filter((dir): dir is string => !!dir).map(dir => join(dir, '.')));
     let loaded: LoadedActivity | null = null;
     let loading: Promise<void> | null = null;
     let startedAt = 0;
-    let changed = false;
+    let retryAt = 0;
+    let changed = true;
     let timer: ReturnType<typeof setTimeout> | null = null, due: ReturnType<typeof setTimeout> | null = null;
     let step: { base: string; key: string; patch: string } | null = null;
     let whole: { key: string; json: string } | null = null, wholeLoading: Promise<void> | null = null;
     const extras = (): string => `"version":${JSON.stringify(versions())},"recording":${JSON.stringify(recordingStatus(sources.env))},"dashboard":${JSON.stringify(dashboardStatus(sources.env))}`;
+    let extra = extras();
     // A frame is the activity plus the preferences and versions shown beside it; both parts are in its key.
     const frameKey = (activity: string, extra: string): string => `${activity}|${extra}`;
     const wholeFrame = (extra: string): string | null => whole ? `${whole.json.slice(0, -1)},"frame":${JSON.stringify(frameKey(whole.key, extra))},${extra}}` : null;
@@ -150,17 +152,18 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       return wholeLoading ??= engine.full().then(next => { if (next) whole = next; }, () => { /* The next rebuild retries. */ })
         .finally(() => { wholeLoading = null; broadcast(); });
     };
-    const broadcast = (): void => {
-      if (!subscribers.size) return;
-      void refresh();
-      const extra = extras();
-      for (const publish of subscribers) publish(extra);
+    const broadcast = (heartbeat = false): void => {
+      if (disposed || !subscribers.size) return;
+      for (const publish of subscribers) publish(extra, heartbeat);
     };
     // Removing a large directory notifies once per file; the names go to the activity thread in one message.
     const invalidations = new Map<string, Set<string> | null>(); // null: the whole directory
+    const reconciliations = new Set<string>();
     const flush = (): void => {
       for (const [dir, names] of invalidations) engine.invalidate(dir, names ? [...names] : undefined).catch(() => { /* A replaced thread starts from a full read. */ });
       invalidations.clear();
+      for (const dir of reconciliations) engine.reconcile(dir).catch(() => { /* A replaced thread starts from a full read. */ });
+      reconciliations.clear();
     };
     const kick = (dir: string, name?: string): void => {
       if (disposed) return;
@@ -168,56 +171,69 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       if (name === undefined) invalidations.set(dir, null);
       else if (names !== null) invalidations.set(dir, (names ?? new Set<string>()).add(name));
       changed = true;
-      if (!timer) timer = setTimeout(() => { timer = null; broadcast(); }, 20);
-    };
-    const syncWatchers = (): void => {
-      for (const dir of directories) {
-        let identity: string | null = null, modified: number | null = null;
-        try { const stat = lstatSync(dir); if (stat.isDirectory() && !stat.isSymbolicLink()) { identity = traceDirectoryIdentity(stat); modified = stat.mtimeMs; } } catch { /* It may appear later. */ }
-        // macOS can batch fs.watch notifications. One directory stat catches appends before that batch arrives;
-        // the reader reconciles filenames without statting or rereading the unchanged history.
-        if (directoryTimes.get(dir) !== modified) { directoryTimes.set(dir, modified); changed = true; }
-        const existing = watchers.get(dir);
-        if (existing?.identity === identity) continue;
-        if (existing) { existing.watcher.close(); watchers.delete(dir); }
-        if (directoryIdentities.get(dir) !== identity) { directoryIdentities.set(dir, identity); kick(dir); }
-        if (identity) try {
-          const watcher = watch(dir, (_event, name) => kick(dir, name?.toString()));
-          watcher.on('error', () => { watcher.close(); watchers.delete(dir); kick(dir); });
-          watchers.set(dir, { watcher, identity });
-          // The one-second name reconciliation also catches records missed while the OS starts the watcher.
-        } catch { /* Retry on the next poll; reconciliation still reads available files. */ }
-      }
+      schedule();
     };
     /** Rebuilds run on the activity thread, one at a time, and every caller shares the one in flight.
      * Coalesce nearby notifications for at most 100 ms; a later record never waits behind playback. */
     const wait = (): number => rebuildWait(loaded?.ms ?? 0);
+    const schedule = (): void => {
+      if (disposed || !subscribers.size || loading || timer) return;
+      // Coalesce file bursts, but do not postpone the first frame or a record behind another completed rebuild.
+      const delay = Math.max(retryAt - Date.now(), startedAt ? Math.max(20, startedAt + wait() - Date.now()) : 0);
+      timer = setTimeout(() => { timer = null; void refresh(); }, delay); timer.unref();
+    };
+    const expiry = (): void => {
+      if (due) clearTimeout(due); due = null;
+      if (disposed || !subscribers.size || !loaded || !Number.isFinite(loaded.until)) return;
+      due = setTimeout(() => { due = null; changed = true; schedule(); }, Math.min(2_147_483_647, Math.max(1, loaded.until - Date.now()))); due.unref();
+    };
     const refresh = (): Promise<void> => {
-      syncWatchers();
+      if (disposed) return Promise.resolve();
       const elapsed = Date.now() - startedAt;
-      if (!loading && (!startedAt || !timer && (changed && elapsed >= wait() || Date.now() >= (loaded?.until ?? 0) || elapsed >= 1000))) {
+      if (!loading && (!startedAt || changed && elapsed >= wait() || Date.now() >= (loaded?.until ?? 0))) {
         startedAt = Date.now(); changed = false; flush();
         loading = engine.load().then(next => {
+          if (disposed) return;
+          retryAt = 0;
           if (next.patch && next.base) step = { base: next.base, key: next.key, patch: next.patch };
           loaded = next;
-        }, () => { changed = true; /* The last snapshot stays; retry after the wait. */ })
-          .finally(() => { loading = null; syncWatchers(); broadcast(); });
-      } else if (!loading && changed && !timer && !due) {
-        // Waiting records start the next rebuild when its wait ends, not at a later tick.
-        due = setTimeout(() => { due = null; if (!disposed) broadcast(); }, wait() - elapsed); due.unref();
-      }
+        }, () => { changed = true; retryAt = Date.now() + 1000; /* Keep the last frame and avoid a failing-reader spin. */ })
+          .finally(() => { loading = null; if (!disposed) { broadcast(); expiry(); if (changed) schedule(); } });
+      } else if (!loading && changed) schedule();
       return loading ?? Promise.resolve();
     };
-    const scan = setInterval(broadcast, 50);
-    scan.unref();
+    const preferencesChanged = (): void => { if (!disposed) { extra = extras(); changed = true; broadcast(); schedule(); } };
+    const traceWatchers = [...directories].map(dir => watchDashboardPath(dir, true, name => kick(dir, name), () => { reconciliations.add(dir); changed = true; schedule(); }));
+    const watchers = [
+      ...traceWatchers,
+      ...[recordingPath(sources.env), dashboardSettingsPath(sources.env), credentialsPath(sources.env),
+        join(sources.env['HOME'] ?? homedir(), '.claude/plugins/installed_plugins.json'),
+        ...['.claude-plugin', '.codex-plugin'].map(kind => join(PLUGIN_ROOT, kind, 'plugin.json'))]
+        .map(path => watchDashboardPath(path, false, preferencesChanged)),
+      ...(sources.host === 'codex' ? [] : [watchDashboardPath(livenessPath(sources.env), false, () => { changed = true; schedule(); })]),
+    ];
+    // A quiet stream only sends a small heartbeat. A constant number of metadata checks covers OS notifications
+    // missed during watcher registration or a busy batch, without loading or rereading an unchanged history.
+    const heartbeat = setInterval(() => broadcast(true), 5000); heartbeat.unref();
+    let checks = 0;
+    const reconcile = setInterval(() => {
+      for (const watcher of watchers) watcher.reconcile();
+      // Rare filename reconciliation also covers a filesystem with unchanged directory timestamps.
+      if (++checks % 60 === 0) {
+        extra = extras();
+        if (subscribers.size) { changed = true; schedule(); }
+      }
+    }, 500); reconcile.unref();
+    let engineClosed: Promise<void> | undefined;
     const dispose = (): void => {
+      if (disposed) return;
       disposed = true; clearTimeout(openTimer);
       if (timer) clearTimeout(timer);
       if (due) clearTimeout(due);
-      clearInterval(scan);
-      for (const { watcher } of watchers.values()) watcher.close();
-      watchers.clear(); subscribers.clear(); viewers.clear();
-      void engine.close();
+      clearInterval(heartbeat); clearInterval(reconcile); controller.abort();
+      for (const watcher of watchers) watcher.close();
+      subscribers.clear(); viewers.clear(); invalidations.clear(); reconciliations.clear();
+      engineClosed = engine.close();
     };
     const server: Server = createServer(async (req, res) => {
       if (!/^127\.0\.0\.1:\d+$/.test(req.headers.host ?? '')) { res.writeHead(403); res.end(); return; }
@@ -226,6 +242,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       const path = req.url?.split('?')[0];
       if (path === '/api/version' && req.method === 'GET') {
         await releases.refresh();
+        extra = extras(); broadcast();
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify(versions())); return;
       }
@@ -259,6 +276,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           if (typeof input.enabled !== 'boolean') { res.writeHead(400); res.end(); return; }
           const recording = path === '/api/recording';
           (recording ? setRecording : setDashboard)(sources.env, input.enabled);
+          preferencesChanged();
           res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify((recording ? recordingStatus : dashboardStatus)(sources.env)));
         } catch { res.writeHead(500); res.end(); }
         return;
@@ -278,7 +296,8 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           if (changed && loaded) { for (const at = startedAt + wait(); Date.now() < at;) await new Promise(resolve => setTimeout(resolve, at - Date.now())); await refresh(); }
         }
         await ensureWhole();
-        const body = wholeFrame(extras());
+        extra = extras();
+        const body = wholeFrame(extra);
         res.writeHead(body ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(body ?? JSON.stringify({ error: 'activity_unavailable' }));
         return;
@@ -307,14 +326,15 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         let held: { activity: string; extra: string } | null = null;
         let heartbeatAt = Date.now();
         let closed = false;
-        const send = (text: string): void => { heartbeatAt = Date.now(); res.write(`${prefix}${text}\n\n`); prefix = ''; };
-        const publish = (extra: string): void => {
-          if (closed) return;
+        let blocked = false;
+        const send = (text: string): void => { heartbeatAt = Date.now(); blocked = !res.write(`${prefix}${text}\n\n`); prefix = ''; };
+        const publish = (extra: string, heartbeat = false): void => {
+          if (closed || blocked) return;
           const activity = loaded?.key;
           if (activity && held && (held.activity === activity || step?.base === held.activity && step.key === activity)) {
             if (held.activity === activity && held.extra === extra) {
               // A first rebuild can take seconds; the heartbeat shows the stream is alive meanwhile.
-              if (Date.now() - heartbeatAt >= 5000) send(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date().toISOString() })}`);
+              if (heartbeat || Date.now() - heartbeatAt >= 5000) send(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date().toISOString() })}`);
               return;
             }
             // Only the change goes out: a patch between consecutive rebuilds, and the preferences only when they moved.
@@ -325,15 +345,16 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
           }
           if (activity && whole?.key === activity) { send(`data: ${wholeFrame(extra)}`); held = { activity, extra }; return; }
           if (activity) void ensureWhole();
-          if (Date.now() - heartbeatAt >= 5000) send(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date().toISOString() })}`);
+          if (heartbeat || Date.now() - heartbeatAt >= 5000) send(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date().toISOString() })}`);
         };
         subscribers.add(publish);
         void refresh();
-        publish(extras());
+        publish(extra); expiry();
         const stop = (): void => {
           if (closed) return;
           closed = true;
           subscribers.delete(publish);
+          if (!subscribers.size) { if (due) clearTimeout(due); due = null; if (timer) clearTimeout(timer); timer = null; }
           const leased = viewers.delete(viewer);
           if (leased) viewers.set(viewer, Date.now() + 15_000);
           pruneViewers(viewers, Date.now());
@@ -341,6 +362,8 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         };
         req.on('close', stop);
         res.on('error', stop);
+        // A slow tab gets the current frame after draining, instead of retaining every intermediate patch in memory.
+        res.on('drain', () => { blocked = false; publish(extra); });
         return;
       }
       if (req.method === 'GET' && (path === '/' || path === '/index.html')) {
@@ -348,6 +371,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         loadingUntil = Date.now() + 10_000;
         // The version badge's text sets its width, so it is in the first frame rather than arriving after it.
         await releases.refresh();
+        extra = extras(); broadcast();
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" });
         res.end(PAGE.replace('/*JEV_VERSION*/null', JSON.stringify(versions()).replace(/</g, '\\u003c')));
         return;
@@ -359,7 +383,9 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       sockets.add(socket);
       socket.on('close', () => sockets.delete(socket));
     });
-    server.on('close', dispose);
+    let completed = (): void => undefined;
+    const closed = new Promise<void>(done => { completed = done; });
+    server.on('close', () => { dispose(); void engineClosed?.finally(completed); });
     server.on('error', err => { dispose(); reject(err); });
     // Loopback only. The records stay on this machine.
     server.listen(port, '127.0.0.1', () => {
@@ -370,12 +396,13 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
         url,
         port: actual,
         ensureOpen,
-        close: () =>
-          new Promise((done, fail) => {
-            dispose();
-            for (const socket of sockets) socket.destroy();
-            server.close((err) => (err ? fail(err) : done()));
-          }),
+        closed,
+        close: async () => {
+          dispose();
+          for (const socket of sockets) socket.destroy();
+          if (server.listening) server.close();
+          await closed;
+        },
       });
     });
   });

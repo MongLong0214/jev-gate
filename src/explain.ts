@@ -136,6 +136,11 @@ type DirectoryState = { identity: string; modified: number; scanned: number; val
 export class TraceDirectoryReader {
   private dirs = new Map<string, DirectoryState>();
   constructor(private reconciliationMs = 30_000) {}
+  /** Discover missed names without invalidating the cached contents of immutable records. */
+  reconcile(dir: string): void {
+    const state = this.dirs.get(join(dir, '.'));
+    if (state) state.scanned = Number.NEGATIVE_INFINITY;
+  }
   invalidate(dir: string, name?: string): void {
     const state = this.dirs.get(join(dir, '.'));
     if (!state) return;
