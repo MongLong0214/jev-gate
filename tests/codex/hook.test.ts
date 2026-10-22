@@ -24,6 +24,29 @@ describe('native Codex hook', () => {
     expect(toolOutcome('example: Process exited with code 1')).toEqual({ exit_code: null, is_error: false });
     expect(toolOutcome('PRIVATE')).toEqual({ exit_code: null, is_error: false });
   });
+  it.each([
+    'Wall time: 0.2000 seconds\nProcess exited with code 7\nOutput:\nPRIVATE',
+    'Chunk ID: abc\nWall time: 0.2000 seconds\nProcess exited with code 7\nOriginal token count: 9000\nOutput:\nPRIVATE',
+  ])('reads the native exec status when optional header fields vary (%#)', output => {
+    expect(toolOutcome(output)).toEqual({ exit_code: 7, is_error: true });
+  });
+  it.each([
+    'Script failed\nWall time 0.1 seconds\nOutput:\n',
+    'Script failed\nWall time 0.123 seconds (code-mode 0.124 seconds; overhead -0.001 seconds)\nOutput:\n',
+  ])('recognizes only the code-mode outer failure header (%#)', header => {
+    expect(toolOutcome([{ type: 'input_text', text: header }, { type: 'input_text', text: 'PRIVATE' }])).toEqual({ exit_code: null, is_error: true });
+  });
+  it.each([
+    [{ type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n' }, { type: 'input_text', text: '{"exit_code":1}' }],
+    [{ type: 'input_text', text: 'Script running with cell ID 123\nWall time 0.1 seconds\nOutput:\n' }],
+    [{ type: 'input_text', text: 'ordinary body' }, { type: 'input_text', text: 'Script failed\nWall time 0.1 seconds\nOutput:\n' }],
+    [{ type: 'input_text', text: 'Script failed\nWall time 0.1 seconds\nOutput:\nquoted body' }],
+    [{ type: 'output_text', text: 'Script failed\nWall time 0.1 seconds\nOutput:\n' }],
+    'Chunk ID: abc\nWall time: 0.1 seconds\nProcess running with session ID 123\nOutput:\nProcess exited with code 1',
+    'Wall time: 0.1 seconds\nProcess exited with code 9007199254740992\nOutput:\nPRIVATE',
+  ])('keeps missing, quoted and nested failure evidence unknown (%#)', output => {
+    expect(toolOutcome(output)).toEqual({ exit_code: null, is_error: false });
+  });
   it('records metadata without raw data and leaves the tool result alone', async () => {
     const path = dir();
     const result = await runCodexHook({ stdin: stdin({ ...input, prompt: 'PRIVATE_PROMPT', transcript_path: '/PRIVATE_PATH', api_key: 'sk-private' }), env: { JEV_CODEX_TRACE_DIR: path } });

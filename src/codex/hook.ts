@@ -6,6 +6,8 @@ import { codexTraceDir } from '../codex-paths.js';
 import { openTraceDir, type TraceWriter } from '../trace.js';
 import { looksSecret } from '../outbound-text.js';
 import { PROVIDER, connectionOwner, connectionRequest, ensureConnection, helperRequest, recordConnectionFailure, type ConnectionFailure } from './connection.js';
+import { toolOutcome } from './tool-outcome.js';
+export { toolOutcome } from './tool-outcome.js';
 
 type Rec = Record<string, unknown>;
 const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Rec : null;
@@ -13,17 +15,6 @@ const record = (v: unknown): Rec | null => v !== null && typeof v === 'object' &
 const token = (v: unknown): string | null => typeof v === 'string' && /^[A-Za-z0-9_.:/+@-]{1,160}$/.test(v) && !looksSecret(v) && !v.toLowerCase().includes('sk-') ? v : null;
 const EVENTS = new Set(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt', 'PreCompact', 'PostCompact']);
 const LIMIT = 2 * 1024 * 1024;
-
-/** Only explicit structured status or the anchored native exec envelope; never infer from command output. */
-export const toolOutcome = (value: unknown): { exit_code: number | null; is_error: boolean } => {
-  const response = record(value);
-  let code = Number.isSafeInteger(response?.['exit_code']) ? response!['exit_code'] as number : null;
-  if (typeof value === 'string') {
-    const match = /^Chunk ID: [A-Za-z0-9_-]+\nWall time: [\d.]+ seconds\nProcess exited with code (-?\d+)\n(?:Final output:|Output:)\n/.exec(value);
-    if (match && Number.isSafeInteger(Number(match[1]))) code = Number(match[1]);
-  }
-  return { exit_code: code, is_error: response?.['isError'] === true || response?.['is_error'] === true || code !== null && code !== 0 };
-};
 
 /** #282: a new session's rollout opens with session_meta, the provider and originator it started with. Only those are read. */
 const startedSession = (input: Rec): Rec | null => {

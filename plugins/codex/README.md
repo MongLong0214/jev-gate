@@ -103,6 +103,10 @@ An eligible direct conversation can delegate one bounded subtask without startin
 
 Automatic Astra targets default to **OFF**, including Gate children even when Router is off. A manual Astra root remains usable. To opt in, set `{"router":{"allowAstra":true}}` in this host’s optional policy file; only boolean true is valid. Claude has separate `routerAllowFable` (combined) and `allowFable` (standalone) settings. No file or model mapping is required for ordinary eligible models.
 
+Known native command failures are included as closed continuation metadata; a completion receipt alone does not establish command success. Effort judgments identify the actual candidate model and its supported default. When Router changes a full-context model/effort pair, stable execution guidance encourages independent read batches, reuse of current context and coherent edits with observable required checks. User constraints, native tools and permissions remain authoritative; dependencies stay sequential. Original context is retained. Unchanged/pinned requests, incremental context and native compaction receive no added guidance. Submission accounting retains its identity before guidance and independent Compact processing.
+
+An actual OAuth/Jev development comparison of three coding episodes, five turns each, observed 1,413,312 OFF versus 1,117,885 ON raw Codex tokens (20.90% lower), with all 18 quality check groups passing and all six cells included. One episode increased 4.76%. This reused development corpus does not establish savings for every workload or actual included-plan allowance reduction. External Jev consumption is separate; this Router-only result is not a Compact saving. See [#300](https://github.com/MongLong0214/jev-gate/issues/300) for the complete comparisons and limits.
+
 Observed in Codex CLI 0.159.2 on 2026-09-30:
 
 | Native model | Supported routing efforts |

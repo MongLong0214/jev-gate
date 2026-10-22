@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.53",
+  "version": "0.8.54",
   "license": "MIT",
   "interface": {
     "logo": "./assets/icon.png",

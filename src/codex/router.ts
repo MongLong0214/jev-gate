@@ -66,6 +66,25 @@ export const routeCodex = async (args: {
     ...(args.child ? { scope: 'child' as const } : args.continuation ? { scope: 'continuation' as const } : {}), model: config.router.model && !modelPin, effort: config.router.effort && !effortPin,
     upgrade: config.router.minUpgradeConfidence, downgrade: config.router.minDowngradeConfidence });
   if (!offer) return skip('no_alternative', native);
+  // Codex replays the input for every tool round. Minimizing reasoning in isolation can increase total usage
+  // through extra discovery, failed edits and repeated checks. Keep this objective in this adapter only.
+  for (const [id, effort] of offer.effortQuestions) {
+    const question = offer.questions[effort.name];
+    if (question?.type !== 'score') continue;
+    const candidate = normalizeCatalog(args.catalog, true).models.find(m => m.model === id);
+    // The shared rubric names capability, while this conditional score must describe effort ON this model.
+    // https://learn.chatgpt.com/docs/agent-configuration/subagents (2026-10-22) starts explicit Luna agents at high.
+    if (id === 'gpt-6-luna') question.criteria = question.criteria.map((text, i) => effort.values[i] === 'medium'
+      ? 'Ordinary reasoning for a bounded local change whose relevant context and execution path are already clear, without coordinating discovery, implementation and verification.'
+      : effort.values[i] === 'high'
+        ? 'Strong reasoning for a coherent coding plan that coordinates discovery, related implementation and verification or edge cases, even when requirements are clear; avoid fragmented tool rounds and repeated context.'
+        : text);
+    question.instructions = question.instructions
+      .replace('Choose the lowest supported reasoning effort sufficient for this model to', 'Choose the supported reasoning effort that minimizes total tokens while enabling this model to') +
+      ` This conditional effort answer is for the actual account candidate ${id}, not an abstract capability tier or a different model.${candidate?.defaultReasoningEffort ? ` Its account-listed default effort is ${candidate.defaultReasoningEffort}; this is a reference, not a floor or pin.` : ''}` +
+      (id === 'gpt-6-luna' ? ' Official Codex agent guidance starts explicit GPT-6 Luna settings at high, then adjusts for the task. For implementation that needs coordinating discovery, code and tests, judge whether sufficient planning can avoid fragmented tool rounds; a routine capability label alone does not establish that low or medium effort is efficient. Mechanical lookup or a direct answer can still use lower effort.' : '') +
+      ' Optimize successful completion of the full contract, including repeated input on every tool round, reasoning, tool calls and corrections. Lower effort can consume MORE total tokens when it causes repeated discovery, fragmented implementation or retries. Use enough reasoning to plan coherent edits and checks; do not lower effort merely because the model is cheaper. Native nonzero tool exit status is failure evidence, while completion alone is not success; distinguish a recovered failure from an unresolved one using the available progress. Do not assume a higher effort saves tokens without a concrete need. Missing outcome evidence stays unknown; preserve every required check and native permission.';
+  }
   const state = args.child ? { task: { text: args.task, source: 'child_contract', truncated: false }, execution: { scope: 'child', step_index: args.child.step, context: args.child.context, cache: args.cache ?? { source: 'unknown' } } } : routingContext(args.task, args.previousReply, args.recentRequests, args.cache);
   const request = { model: config.gate.jevModel, state: args.continuation ? { ...state, execution: { ...state.execution, scope: 'root', step_index: args.continuation.step, context: args.continuation.context } } : state, questions: offer.questions };
   if (estimateTokens(JSON.stringify(request)) > MAX_REQUEST_TOKENS) return skip('input_too_large', native);
