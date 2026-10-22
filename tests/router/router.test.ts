@@ -2091,6 +2091,59 @@ describe('root context', () => {
       expect(resumed.f.sent[0]?.state).toMatchObject({ task: { previous_reply: 'Renamed.', recent_requests: [{ text: TEXT }, { text: 'Also the tests' }] } });
     });
 
+    it.each(['transcript', 'store'] as const)('queues the context again at session end after its first %s failure', async failing => {
+      const store = new Map<string, unknown>();
+      const first = processOf(store, 6);
+      const { transcript, saveContext } = first.f.engine;
+      let failed = false;
+      const once = <A extends unknown[], R>(fn: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => { if (!failed) { failed = true; throw new Error('transient'); } return fn(...a); };
+      first.router.turnStart({ turnId: 't1', text: TEXT });
+      await drain(first.router.turnStep(first.f.engine, step({ turnId: 't1' }), replying('Renamed.')));
+      // The turn's own save fails once; the session's end saves the same context.
+      if (failing === 'transcript') first.f.engine.transcript = once(transcript!); else first.f.engine.saveContext = once(saveContext!);
+      first.router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'Renamed.' }, first.f.engine);
+      await first.router.saved();
+      expect(store.has('context')).toBe(false);
+      await first.router.saved(first.f.engine);
+      first.router.sessionEnd();
+      const resumed = processOf(store, 7);
+      await answered(resumed, 't2', 'ㅇㅇ', '');
+      expect(resumed.f.sent[0]?.state).toMatchObject({ task: { previous_reply: 'Renamed.', recent_requests: [{ text: TEXT }] } });
+    });
+
+    it('saves the context once more when a save pending as the session ends then fails', async () => {
+      const store = new Map<string, unknown>();
+      const first = processOf(store, 6);
+      let writes = 0; const gate = deferred<void>(); const started = deferred<void>(); const save = first.f.engine.saveContext!;
+      first.f.engine.saveContext = async (c, id) => { writes++; if (writes === 1) { started.resolve(); await gate.promise; throw new Error('late'); } return save(c, id); };
+      first.router.turnStart({ turnId: 't1', text: TEXT });
+      await drain(first.router.turnStep(first.f.engine, step({ turnId: 't1' }), replying('Renamed.')));
+      first.router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'Renamed.' }, first.f.engine);
+      await started.promise;
+      const ending = first.router.saved(first.f.engine);
+      gate.resolve();
+      await ending;
+      expect(writes).toBe(2);
+      expect(store.get('context')).toMatchObject({ reply: 'Renamed.', requests: [TEXT] });
+    });
+
+    it('saves an unchanged context once, and a late failure keeps the newer context marked', async () => {
+      const store = new Map<string, unknown>();
+      const first = processOf(store, 6);
+      let writes = 0; const gate = deferred<void>(); const save = first.f.engine.saveContext!;
+      first.f.engine.saveContext = async (c, id) => { writes++; if (writes === 1) { await gate.promise; throw new Error('late'); } return save(c, id); };
+      await answered(first, 't1', TEXT, 'Renamed.');
+      first.router.turnStart({ turnId: 't2', text: 'Also the tests' });
+      await drain(first.router.turnStep(first.f.engine, step({ turnId: 't2' }), replying('Done.')));
+      first.router.turnComplete({ turnId: 't2', reason: 'answer', answer: 'Done.' }, first.f.engine);
+      gate.resolve();
+      await first.router.saved(first.f.engine);
+      expect(writes).toBe(2);
+      await first.router.saved(first.f.engine);
+      expect(writes).toBe(2);
+      expect(store.get('context')).toMatchObject({ reply: 'Done.', requests: [TEXT, 'Also the tests'] });
+    });
+
     it.each([
       ['a shorter transcript (a rewind or compaction since)', 5, 'shorter_transcript'],
       ['an unread transcript', null, 'transcript_unknown'],

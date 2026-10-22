@@ -819,15 +819,20 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   const saveContext = (engine: Partial<RouterEngine>): void => {
     if (!engine.saveContext || !engine.sessionId || !engine.transcript) return;
     const context = { reply: lastReply === null ? null : keptTail(lastReply), requests: recentRequests.filter(t => !looksSecret(t)).slice(-RECENT_REQUESTS).map(keptTail) };
-    if (JSON.stringify(context) === contextSaved) return;
-    contextSaved = JSON.stringify(context);
+    const saved = JSON.stringify(context);
+    if (saved === contextSaved) return;
+    contextSaved = saved;
     const queuedIn = engine.sessionId();
     rootSaving = rootSaving.then(async () => {
       const id = await queuedIn;
       if (id !== await engine.sessionId!()) return;
       const length = (await engine.transcript!().catch(() => null))?.length;
-      if (length !== undefined) await engine.saveContext!({ ...context, transcript: length }, id);
-    }).catch(() => undefined);
+      if (length === undefined) throw new Error('transcript unread');
+      await engine.saveContext!({ ...context, transcript: length }, id);
+    }).catch(() => {
+      // An unsaved context is not marked saved, so session.end queues it again; a newer context queued since keeps its mark.
+      if (contextSaved === saved) contextSaved = '';
+    });
   };
   /** Whether a native model to restore may still be sent, by the checks every target passes. */
   const nativeAllowed = async (engine: RouterEngine, model: string, signal: AbortSignal): Promise<boolean> => {
@@ -1704,7 +1709,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     },
     agentSpawn,
     /** The queued root record and context saves, settled: a closing process waits on them so its last turn's land. */
-    saved: (engine?: Partial<RouterEngine>): Promise<void> => { if (engine) saveContext(engine); return rootSaving; },
+    saved: async (engine?: Partial<RouterEngine>): Promise<void> => {
+      if (engine) saveContext(engine);
+      await rootSaving;
+      // A save that was pending when the session began to end and then failed has cleared its mark: queue it once more.
+      if (engine) { saveContext(engine); await rootSaving; }
+    },
     sessionEnd: (engine?: Pick<RouterEngine, 'log'>): void => {
       if (engine && stepEnabled) log(engine, { event: 'session_end' });
       session.abort();

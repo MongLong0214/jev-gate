@@ -293,7 +293,7 @@ describe('dashboard live interactions', () => {
     const p = page(); p.push(snapshot([run('r', 'claude', [step('a', 'admission', 'jev', { durationMs: 90, receipt: rc('direct') }), step('m', 'router', 'jev', { durationMs: 120, receipt: rc('claude-sonnet-5 · high', { threshold: .6, direction: 'downgrade' }) })])]));
     const segs = (id: string) => [...node(p, id).querySelectorAll('.dec b span')].map(s => s.textContent);
     expect(segs('router')).toEqual(['sonnet', 'high']); expect(segs('admission')).toEqual(['직접', '확신 87%']);
-    p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('120ms'); expect(text(p, 'circuit-inspector')).not.toMatch(/87|60%|0\.6/);
+    p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('120ms'); expect(text(p, 'circuit-inspector')).not.toMatch(/\b87%|\b0\.87\b|\b60%|\b0\.6\b|확신/);
     // The log row carries input tokens; probability and threshold live once, in the decision basis panel.
     expect(text(p, 'rc')).toContain('1,200'); expect(text(p, 'rc')).not.toContain('0.87'); expect(text(p, 'rc')).not.toContain('≈$');
     expect(text(p, 'basis-meta')).toContain('최신 호출을 따라갑니다'); expect(text(p, 'basis-q')).toContain('0.87'); expect(p.get('basis-q').querySelector('b')).toBeNull();
