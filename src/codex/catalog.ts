@@ -50,8 +50,12 @@ export const codexSuccessor = (id: string, catalog: readonly CodexModel[]): stri
   return best?.id ?? null;
 };
 
-/** Product roles from the account's descriptions, not inferred prices or a version performance ranking. */
+/** Verified current product guidance, otherwise account descriptions; never prices or version performance guesses. */
 export const codexModelRole = (m: CodexModel): { rank: number; description: string } | undefined => {
+  // Official guidance explicitly includes focused coding and well-scoped problem solving, beyond mechanical edits.
+  // https://learn.chatgpt.com/docs/models and https://developers.openai.com/api/docs/guides/model-selection (2026-10-22).
+  // This exact documented model must still be present/eligible in the account catalog. Future variants are not inferred.
+  if (m.model === 'gpt-6-luna') return { rank: 1, description: 'standard: focused coding and problem solving with clear contracts and checks; complex end-to-end reasoning stays deep.' };
   const text = m.description ?? '';
   if (/frontier|most demanding|most intelligent/i.test(text)) return { rank: 3, description: 'frontier: exceptional unresolved foundational reasoning.' };
   if (/fast|efficient|affordable|easier|lightweight/i.test(text)) return { rank: 0, description: 'fast: prioritize for file discovery, lookup, listing and mechanical edits with clear checks.' };

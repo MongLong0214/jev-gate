@@ -24,7 +24,7 @@ export interface PairOffer {
   downgrade: number;
   /** Comparison metadata survives pair eligibility filtering; it does not authorize execution. */
   baselineCandidate?: RouteCandidate;
-  /** Present when every candidate has a documented role: the offered roles, cheapest first, each served by one model. */
+  /** Present when every candidate has a documented role: each capability is served by the least sufficient available model. */
   roles?: readonly { option: string; rank: number; model: string }[];
   /** A retry's failed attempt's role; the selection serves at least the next offered role above it. */
   retryRank?: number | null;
@@ -135,7 +135,11 @@ const offerRoles = (args: RouteArgs): PairOffer | null => {
   const order = (c: RouteCandidate): number => c.id === base.id ? -1 : prefer.includes(c.id) ? prefer.indexOf(c.id) : prefer.length + candidates.indexOf(c);
   const served = [...candidates].sort((a, b) => order(a) - order(b)).filter((c, i, all) => all.findIndex(o => o.rank === c.rank) === i).sort((a, b) => a.rank! - b.rank!);
   const offered = args.model && served.length > 1 ? served : [base];
-  const roles = offered.map(c => ({ option: CAPABILITY[c.rank!]!.option, rank: c.rank!, model: c.id }));
+  // Missing model tiers do not remove task classes from the question. A missing class is served upward by the
+  // least capable available model, including retrieval when the lightest available model serves ordinary coding.
+  const roles = CAPABILITY.slice(0, offered.at(-1)!.rank! + 1).map((capability, rank) => ({
+    option: capability.option, rank, model: offered.find(c => c.rank! >= rank)!.id,
+  }));
   const questions: Record<string, Question> = {};
   if (offered.length > 1) questions['capability'] = { type: 'choice', instructions: `${CONTEXT} ${CAPABILITY_INSTRUCTIONS}`,
     // Most capable first: Jev leans toward the first option, and this order put less mass below the label on the dev split (bench:router).
@@ -230,8 +234,8 @@ export const toolBound = (offer: PairOffer, raw: unknown, chosen: string, readOn
   const { baselineCandidate: base, roles } = offer;
   if (!roles || !offer.modelAsked || base?.rank === undefined) return null;
   const current = offer.candidates.find(c => c.id === chosen)?.rank ?? base.rank;
-  const standard = roles.find(r => r.rank === 1);
-  if (!readOnly && current < 1 && chosen !== base.id) return { model: standard && standard.rank <= base.rank ? standard.model : base.id, reason: 'tool_editing_floor' };
+  const standard = offer.candidates.find(c => c.id === roles.find(r => r.rank === 1)?.model);
+  if (!readOnly && current < 1 && chosen !== base.id) return { model: standard && standard.rank! <= base.rank ? standard.id : base.id, reason: 'tool_editing_floor' };
   const answers = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   const { control } = readControl(answers);
   const risk = validateChoice(answers['action_risk'], ['ordinary', 'consequential', 'unclear']);
@@ -243,8 +247,8 @@ export const toolBound = (offer: PairOffer, raw: unknown, chosen: string, readOn
   if (!control || !['task_clear', 'effort_lock'].includes(control.choice) || (control.probabilities[control.choice] ?? 0) < offer.downgrade) return null;
   if (!risk || risk.choice !== 'ordinary' || (risk.probabilities['ordinary'] ?? 0) < offer.downgrade) return null;
   if (!capability || !lightOptions.includes(capability.choice) || light < offer.downgrade) return null;
-  const role = readOnly ? roles[0] : standard;
-  return role && role.rank < Math.min(current, base.rank) ? { model: role.model, reason: readOnly ? 'tool_read_only' : 'tool_editing' } : null;
+  const target = readOnly ? offer.candidates.find(c => c.id === roles[0]?.model) : standard;
+  return target && target.rank! < Math.min(current, base.rank) ? { model: target.id, reason: readOnly ? 'tool_read_only' : 'tool_editing' } : null;
 };
 
 /** Holding a model reuses ONLY that model's conditional effort answer from the same batch. */
@@ -276,8 +280,10 @@ export const selectPair = (offer: PairOffer, raw: unknown): PairDecision => {
     const answer = q && q.type === 'choice' ? validateChoice(answers[name], Object.keys(q.criteria)) : null;
     const base = offer.baselineCandidate ?? offer.candidates.find(c => c.id === model);
     const options = answer?.probabilities ?? (q && q.type === 'choice' ? choiceDistribution(answers[name], Object.keys(q.criteria)) : null);
-    // A capability option's mass is its one model's; `unclear` adds to no role, so it can only hold.
-    const mass = options && offer.roles ? Object.fromEntries(offer.roles.map(r => [r.model, options[r.option] ?? 0])) : options;
+    // Several task classes can share one available model. Sum those disjoint classes once; unclear adds no mass.
+    const mass = options && offer.roles ? Object.fromEntries(offer.candidates.map(c => [c.id,
+      offer.roles!.filter(r => r.model === c.id).reduce((sum, r) => sum + (options[r.option] ?? 0), 0),
+    ])) : options;
     unclear = !!offer.roles && answer?.choice === 'unclear';
     const ordered = mass && !unclear ? orderedModel(offer, base, mass) : null;
     const pick = ordered?.id ?? (offer.roles ? undefined : answer?.choice);
