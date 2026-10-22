@@ -1350,6 +1350,44 @@ describe('spawn model', () => {
     });
   });
 
+  describe('a retry of a lowered spawn steps up (#353)', () => {
+    const setup = () => {
+      const router = createRouter(configOf({ ...SPAWN_ONLY, routeExplicitSpawnModel: true }));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['standard', 0.95] }) });
+      router.agentOffer(OFFER_BUILT_IN('general-purpose'));
+      let id = 0;
+      const send = async (e: SpawnEvent) => {
+        const n = spawnNext(x => ({ model: x.model ?? 'claude-opus-5-5', agentId: `a${++id}` }));
+        await router.agentSpawn(f.engine, e, n.next);
+        return { model: n.calls[0]?.model, log: f.logs.filter(l => l.event === 'spawn' && l.assessment === 'ok').at(-1) };
+      };
+      return { router, send };
+    };
+    const task = spawn({ subagentType: 'general-purpose', model: 'opus', prompt: 'Fix the race in src/queue.ts where two workers claim the same job, and add a test that runs 50 claims concurrently.' });
+
+    it('serves the same task again, after the lowered child ended, one role up', async () => {
+      const { router, send } = setup();
+      expect((await send(task)).model).toBe('claude-sonnet-5-5');
+      router.turnComplete({ turnId: 'c1', agentId: 'a1', reason: 'answer' });
+      const retry = await send({ ...task, tool_use_id: 'tu2', prompt: `${task.prompt} The last attempt left the test failing.` });
+      // One role up from Sonnet is the declared Opus itself, so the spawn keeps its own model.
+      expect(retry.model).toBe('opus');
+      expect(retry.log).toMatchObject({ reasons: { model: 'retry_step_up' }, retry_of: 'a1' });
+    });
+
+    it('keeps a parallel spawn of the same task, and a different task, on the lowered role', async () => {
+      const { router, send } = setup();
+      expect((await send(task)).model).toBe('claude-sonnet-5-5');
+      const parallel = await send({ ...task, tool_use_id: 'tu2' });
+      expect(parallel.model).toBe('claude-sonnet-5-5');
+      expect(parallel.log).not.toHaveProperty('retry_of');
+      router.turnComplete({ turnId: 'c1', agentId: 'a1', reason: 'answer' });
+      const other = await send({ ...task, tool_use_id: 'tu3', prompt: 'Document every public option of the CLI in README.md with one example each.' });
+      expect(other.model).toBe('claude-sonnet-5-5');
+      expect(other.log).not.toHaveProperty('retry_of');
+    });
+  });
+
   it('records the model and agent a routed spawn resolved to', async () => {
     const router = createRouter(configOf(SPAWN_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['fast', 0.95] }) });

@@ -175,6 +175,9 @@ const TASK_NOTIFICATION = /^\s*<task-notification>[\s\S]*<\/task-notification>\s
 const MAX_OFFERS = 64;
 /** Subagents whose spawn answer is kept for their steps. */
 const MAX_CHILDREN = 64;
+/** Prompt-word overlap at which a spawn after an ended, lowered spawn of the same type is its retry (#353). */
+const RETRY_SIMILARITY = 0.6;
+const promptWords = (text: string): Set<string> => new Set(text.toLowerCase().match(/[\p{L}\p{N}_]{3,}/gu) ?? []);
 /** The tail of the last root reply a root turn is assessed with; replies end on what they ask or announce next. */
 
 /**
@@ -513,6 +516,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   const turnTexts = bounded<string, string>(MAX_TURNS);
   const turns = bounded<string, TurnRouting>(MAX_TURNS, (t) => t.controller.abort());
   const offers = bounded<string, boolean>(MAX_OFFERS);
+  /**
+   * Spawns this Router ran below their native model, by agentId (#353). The same agent type given the same task again
+   * after one ended is a retry, and the retry is served at least one role above it, as a Gate retry is: the parent asked
+   * again, so the cheaper attempt did not settle the work. Prompt words are kept in memory only, never logged.
+   */
+  const lowered = bounded<string, { type: string; words: Set<string>; model: string; ended: boolean }>(MAX_CHILDREN);
   let session = new AbortController();
   let keyWait: ((signal: AbortSignal) => Promise<KeyState | typeof ABORTED>) | null = null;
   let diagnosed = false;
@@ -1414,6 +1423,18 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     finally { wait.dispose(); }
   };
 
+  // ponytail: word-set Jaccard over the prompt; a template reused for a different target can read as a retry and costs
+  // one role up for that spawn, never a lower model. Upgrade to a contract hash if that proves frequent.
+  const retryOf = (e: SpawnEvent): { agentId: string; model: string } | null => {
+    const words = promptWords(e.prompt);
+    for (const [agentId, l] of [...lowered.entries()].reverse()) {
+      if (!l.ended || l.type !== e.subagentType) continue;
+      let shared = 0; for (const w of words) if (l.words.has(w)) shared++;
+      if (shared / (words.size + l.words.size - shared || 1) >= RETRY_SIMILARITY) return { agentId, model: l.model };
+    }
+    return null;
+  };
+
   /**
    * A spawn is asked about its model, its subagent's effort, or both. The model moves for an inheriting built-in and,
    * unless configured otherwise, for any call that names one: `model: "opus"` on an Agent call is the caller's default,
@@ -1484,7 +1505,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const candidates = capped ? eligible.filter(c => c.rank !== undefined && c.rank <= ceiling!) : eligible;
     if (!candidates.length) return denied('no_eligible_model', 'No eligible automatic child model. Continue in the main session; no child started.');
     const inheritedEffort = engine.currentEffort ? await within(engine.currentEffort().catch(() => undefined), live) : lastRoot?.effort ?? lastIncoming?.effort;
-    const offer = offerRoute({ baseline: { model: baselineModel, effort: inheritedEffort ?? null }, candidates, prefer: preferred(aliases), scope: 'spawn',
+    const retry = retryOf(e);
+    const offer = offerRoute({ baseline: { model: baselineModel, effort: inheritedEffort ?? null }, candidates, prefer: preferred(aliases), scope: 'spawn', ...(retry ? { retryFrom: retry.model } : {}),
       model: config.routeSubagentModel && !pins.subagentModel && (!explicit || config.routeExplicitSpawnModel) && !inheritance,
       effort: config.routeSubagentEffort && !pins.mainEffort && !childHistoryFull,
       upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
@@ -1502,7 +1524,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (!result.ok) { log(engine, { event: 'spawn', tool_use_id: e.tool_use_id, type: typeLabel(e), assessment: result.reason, sent: result.sent, usage: loggable(result.usage), ...timing }); return !claudeTargetAllowed(baselineModel, allowFable) ? denied('restricted_baseline', 'Restricted automatic child disabled; continue in the main session.') : null; }
     const selected = selectPair(offer, result.answers);
     let target = selected.patch.model ?? null;
-    const bound = toolClass ? toolBound(offer, result.answers, target ?? baselineModel, toolClass === 'read_only') : null;
+    const bound = toolClass && selected.reasons.model !== 'retry_step_up' ? toolBound(offer, result.answers, target ?? baselineModel, toolClass === 'read_only') : null;
     if (bound) target = bound.model === baselineModel ? null : bound.model;
     if (childHistoryFull && target && !candidates.find(c => c.id === target)?.efforts.includes(String(inheritedEffort))) target = null;
     // A new subagent's conversation is cold for every model, so prices alone decide. A restricted baseline cannot stay: its alternative is a denial.
@@ -1526,7 +1548,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       usage: loggable(result.usage), explicit: explicit !== null, patch: selected.patch, cost, cost_reason: costReason, reasons: { ...selected.reasons, ...(bound ? { model: bound.reason } : {}), ...(hold ? { model: costReason } : {}), ...(toolHold ? { model: toolHold } : {}) },
       spawn_tool_class: toolClass, model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0,
       discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, allow_fable: allowFable,
-      selection: selected.diagnostics, answers: pairReceipt(offer, result.answers) });
+      selection: selected.diagnostics, answers: pairReceipt(offer, result.answers), ...(retry ? { retry_of: retry.agentId } : {}) });
     return { target, answers: {}, pair: { offer, raw: result.answers } };
   };
 
@@ -1645,6 +1667,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         if (result.deny !== undefined) log(engine, { event: 'spawn_result', tool_use_id: e.tool_use_id, requested: target, denied: true });
         else {
           const matched = sameModel(target, result.model);
+          const offer = plan?.pair?.offer;
+          const rank = offer?.candidates.find(c => sameModel(c.id, target))?.rank;
+          if (matched && result.agentId !== undefined && offer?.baselineCandidate?.rank !== undefined && rank !== undefined && rank < offer.baselineCandidate.rank)
+            lowered.put(result.agentId, { type: e.subagentType, words: promptWords(e.prompt), model: target, ended: false });
           log(engine, {
             event: 'spawn_result',
             tool_use_id: e.tool_use_id,
@@ -1703,6 +1729,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       else {
         const c = children.get(e.agentId);
         if (c) { c.stopped = true; c.controller.abort(); }
+        const l = lowered.get(e.agentId);
+        if (l) l.ended = true;
         children.delete(e.agentId);
         rememberNativeChild(e.agentId);
       }
@@ -1728,6 +1756,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       for (const c of children.values()) c.controller.abort();
       children.clear();
       nativeChildren.clear();
+      lowered.clear();
       childHistoryFull = false;
       lastReply = null; currentRootTurn = null; recentRequests.length = 0; notices.clear(); messageCounts.clear(); announced.clear();
       lastRoot = null; rootCaches.clear(); preservedEffortModels.clear(); missedEffortModels.clear(); storedEffortHits.clear(); cacheEpoch++;

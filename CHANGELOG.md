@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.53 — 2026-10-22 — Route well-specified work to Sonnet by outcome
+
+- Correct the Router's routine/complex boundary from measured outcomes. Jev sent six checker-backed coding jobs to Opus as complex because of their topic (concurrency, a format migration, compatibility, an algorithm), although each spelled out its cause or required behaviour and had checks. Sonnet 5.5 passed every checker run of the five that Opus passed, at 49–56% of Opus's notional cost (the sixth failed the same check on both). Routine now covers that work; complex keeps an uncertain cause, constraints the request leaves open, live client or data compatibility, permission or money logic, open algorithm design and reviews (`bench/results/tier-outcome-2026-10-22`, #352).
+- With `jev-1.14.0` the jobs now route to Sonnet (13/13 with variants); a fresh held-out set of 12 requests and 6 injection probes was 18/18 exact; the frozen test split was 83/84 with no under-route (old rubric the same day: 82/84); dev 82/84 with no under-route. The golden spawn split gains the five outcome-labelled jobs.
+- Step a retried spawn up instead of repeating the cheaper model (#353). When a child the Router lowered has ended and the parent spawns the same agent type with a prompt sharing at least 60% of its words, the new spawn runs at least one role above the lowered model (`retry_step_up`, `retry_of`), up to its native or declared model. Children still running are parallel work and stay lowered.
+- Codex shares the rubric; its routine/complex models were not outcome-tested. No live saving is claimed until the installed trace is measured.
+
 ## v0.8.52 — 2026-10-22 — Assess old Codex evidence with separate OAuth accounting
 
 - Let confirmed ChatGPT OAuth traffic use Compact's existing bounded Jev assessment budget for older unique tool evidence (#317). The previous preflight added external Jev raw tokens one-for-one to OpenAI tokens and excluded those candidates before assessment. API and unknown traffic retain the conservative combined-token preflight. Decisions are isolated by billing family; recent results, instructions, request topology, native compact windows, confidence and failure preservation stay intact.
