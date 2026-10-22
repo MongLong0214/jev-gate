@@ -1984,17 +1984,19 @@ describe('root effort and the prompt cache: the model that answered', () => {
 });
 
 describe('root context', () => {
+  const replying = (answer: string) =>
+    Object.assign(
+      async function* (e: TurnStepEvent): AsyncGenerator<string, { answer: string; usage: { model: string } }> {
+        yield 'chunk';
+        return { answer, usage: { model: e.model } };
+      },
+      { signal: new AbortController().signal },
+    );
+  const previousReplies = (sent: { state?: unknown }[]) => sent.map(s => (s.state as { task: { previous_reply?: string } }).task.previous_reply);
+
   it("sends the conversation's last visible reply with the next root turn, and forgets it when the session ends", async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
-    const replying = (answer: string) =>
-      Object.assign(
-        async function* (e: TurnStepEvent): AsyncGenerator<string, { answer: string; usage: { model: string } }> {
-          yield 'chunk';
-          return { answer, usage: { model: e.model } };
-        },
-        { signal: new AbortController().signal },
-      );
     router.turnStart({ turnId: 't1', text: TEXT });
     await drain(router.turnStep(f.engine, step(), replying('Renamed. Shall I also update the docs?')));
     router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'Renamed. Shall I also update the docs?' });
@@ -2013,14 +2015,6 @@ describe('root context', () => {
   it('screens the whole reply before keeping its tail, and carries none of a screened one', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
-    const replying = (answer: string) =>
-      Object.assign(
-        async function* (e: TurnStepEvent): AsyncGenerator<string, { answer: string; usage: { model: string } }> {
-          yield 'chunk';
-          return { answer, usage: { model: e.model } };
-        },
-        { signal: new AbortController().signal },
-      );
     // The key's header falls outside the kept tail; the tail alone passes the screen.
     const key = `-----BEGIN PRIVATE KEY-----\n${'A'.repeat(2200)}\n-----END PRIVATE KEY-----`;
     router.turnStart({ turnId: 't1', text: TEXT });
@@ -2031,6 +2025,151 @@ describe('root context', () => {
     expect(f.sent[1]?.state).toMatchObject({ task: { text: 'Continue' } });
     expect((f.sent[1]?.state as { task: object }).task).not.toHaveProperty('previous_reply');
     expect(JSON.stringify(f.sent)).not.toContain('AAAA');
+  });
+
+  // An error or an interruption shows no reply of its own: the last completed one is still the conversation's last.
+  it('keeps the last completed reply past turns that ended without one', async () => {
+    const router = createRouter(configOf(EFFORT_ONLY));
+    const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    await drain(router.turnStep(f.engine, step(), replying('Renamed. Shall I also update the docs?')));
+    router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'Renamed. Shall I also update the docs?' });
+    for (const [turnId, reason] of [['t2', 'error'], ['t3', 'aborted']] as const) {
+      router.turnStart({ turnId, text: 'Retry' });
+      await drain(router.turnStep(f.engine, step({ turnId }), replying('')));
+      router.turnComplete({ turnId, reason });
+    }
+    router.turnStart({ turnId: 't4', text: 'ㅇㅇ' });
+    await drain(router.turnStep(f.engine, step({ turnId: 't4' }), replying('')));
+    expect(previousReplies(f.sent)).toEqual([undefined, ...Array(3).fill('Renamed. Shall I also update the docs?')]);
+  });
+
+  describe('across a resume', () => {
+    /** One process of a session over the plugin store `store`, which outlives it; `length` is the host transcript's. */
+    const processOf = (store: Map<string, unknown>, length: number | null) => {
+      const router = createRouter(configOf(EFFORT_ONLY));
+      const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['medium', 0.95] }) });
+      f.engine.sessionId = async () => 'session';
+      f.engine.transcript = async () => { if (length === null) throw new Error('unread'); return { length, answered: true }; };
+      f.engine.loadContext = async () => store.get('context');
+      f.engine.saveContext = async context => { store.set('context', JSON.parse(JSON.stringify(context))); };
+      return { router, f };
+    };
+    const answered = async ({ router, f }: ReturnType<typeof processOf>, turnId: string, text: string, answer: string) => {
+      router.turnStart({ turnId, text });
+      await drain(router.turnStep(f.engine, step({ turnId }), replying(answer)));
+      router.turnComplete({ turnId, reason: 'answer', answer }, f.engine);
+      await settle();
+    };
+    const firstProcess = async (store: Map<string, unknown>) => {
+      const first = processOf(store, 6);
+      await answered(first, 't1', TEXT, 'First answer.');
+      await answered(first, 't2', 'Second request', 'Renamed. Shall I also update the docs?');
+      first.router.sessionEnd();
+    };
+
+    it('sends the last reply and requests the process before saw', async () => {
+      const store = new Map<string, unknown>();
+      await firstProcess(store);
+      const resumed = processOf(store, 7);
+      await answered(resumed, 't3', 'ㅇㅇ', '');
+      expect(resumed.f.sent[0]?.state).toMatchObject({ task: { text: 'ㅇㅇ', previous_reply: 'Renamed. Shall I also update the docs?', previous_reply_truncated: false,
+        recent_requests: [{ text: TEXT, truncated: false }, { text: 'Second request', truncated: false }] } });
+      expect(resumed.f.logs).toContainEqual(expect.objectContaining({ event: 'context_restored', scope: 'root', turn: 't3', reply_chars: 'Renamed. Shall I also update the docs?'.length, requests: 2 }));
+    });
+
+    it('saves the context at session end when the host ends the session before a failed turn completes', async () => {
+      const store = new Map<string, unknown>();
+      const first = processOf(store, 6);
+      await answered(first, 't1', TEXT, 'Renamed.');
+      first.router.turnStart({ turnId: 't2', text: 'Also the tests' });
+      await drain(first.router.turnStep(first.f.engine, step({ turnId: 't2' }), replying('')));
+      await first.router.saved(first.f.engine);
+      first.router.sessionEnd();
+      const resumed = processOf(store, 7);
+      await answered(resumed, 't3', 'ㅇㅇ', '');
+      expect(resumed.f.sent[0]?.state).toMatchObject({ task: { previous_reply: 'Renamed.', recent_requests: [{ text: TEXT }, { text: 'Also the tests' }] } });
+    });
+
+    it.each(['transcript', 'store'] as const)('queues the context again at session end after its first %s failure', async failing => {
+      const store = new Map<string, unknown>();
+      const first = processOf(store, 6);
+      const { transcript, saveContext } = first.f.engine;
+      let failed = false;
+      const once = <A extends unknown[], R>(fn: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => { if (!failed) { failed = true; throw new Error('transient'); } return fn(...a); };
+      first.router.turnStart({ turnId: 't1', text: TEXT });
+      await drain(first.router.turnStep(first.f.engine, step({ turnId: 't1' }), replying('Renamed.')));
+      // The turn's own save fails once; the session's end saves the same context.
+      if (failing === 'transcript') first.f.engine.transcript = once(transcript!); else first.f.engine.saveContext = once(saveContext!);
+      first.router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'Renamed.' }, first.f.engine);
+      await first.router.saved();
+      expect(store.has('context')).toBe(false);
+      await first.router.saved(first.f.engine);
+      first.router.sessionEnd();
+      const resumed = processOf(store, 7);
+      await answered(resumed, 't2', 'ㅇㅇ', '');
+      expect(resumed.f.sent[0]?.state).toMatchObject({ task: { previous_reply: 'Renamed.', recent_requests: [{ text: TEXT }] } });
+    });
+
+    it('saves the context once more when a save pending as the session ends then fails', async () => {
+      const store = new Map<string, unknown>();
+      const first = processOf(store, 6);
+      let writes = 0; const gate = deferred<void>(); const started = deferred<void>(); const save = first.f.engine.saveContext!;
+      first.f.engine.saveContext = async (c, id) => { writes++; if (writes === 1) { started.resolve(); await gate.promise; throw new Error('late'); } return save(c, id); };
+      first.router.turnStart({ turnId: 't1', text: TEXT });
+      await drain(first.router.turnStep(first.f.engine, step({ turnId: 't1' }), replying('Renamed.')));
+      first.router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'Renamed.' }, first.f.engine);
+      await started.promise;
+      const ending = first.router.saved(first.f.engine);
+      gate.resolve();
+      await ending;
+      expect(writes).toBe(2);
+      expect(store.get('context')).toMatchObject({ reply: 'Renamed.', requests: [TEXT] });
+    });
+
+    it('saves an unchanged context once, and a late failure keeps the newer context marked', async () => {
+      const store = new Map<string, unknown>();
+      const first = processOf(store, 6);
+      let writes = 0; const gate = deferred<void>(); const save = first.f.engine.saveContext!;
+      first.f.engine.saveContext = async (c, id) => { writes++; if (writes === 1) { await gate.promise; throw new Error('late'); } return save(c, id); };
+      await answered(first, 't1', TEXT, 'Renamed.');
+      first.router.turnStart({ turnId: 't2', text: 'Also the tests' });
+      await drain(first.router.turnStep(first.f.engine, step({ turnId: 't2' }), replying('Done.')));
+      first.router.turnComplete({ turnId: 't2', reason: 'answer', answer: 'Done.' }, first.f.engine);
+      gate.resolve();
+      await first.router.saved(first.f.engine);
+      expect(writes).toBe(2);
+      await first.router.saved(first.f.engine);
+      expect(writes).toBe(2);
+      expect(store.get('context')).toMatchObject({ reply: 'Done.', requests: [TEXT, 'Also the tests'] });
+    });
+
+    it.each([
+      ['a shorter transcript (a rewind or compaction since)', 5, 'shorter_transcript'],
+      ['an unread transcript', null, 'transcript_unknown'],
+    ] as const)('restores nothing over %s', async (_, length, reason) => {
+      const store = new Map<string, unknown>();
+      await firstProcess(store);
+      const resumed = processOf(store, length);
+      await answered(resumed, 't3', 'ㅇㅇ', '');
+      expect(resumed.f.sent[0]?.state).toMatchObject({ task: { text: 'ㅇㅇ', recent_requests: [] } });
+      expect((resumed.f.sent[0]?.state as { task: object }).task).not.toHaveProperty('previous_reply');
+      expect(resumed.f.logs).toContainEqual(expect.objectContaining({ event: 'context_restore_skipped', reason, transcript: length, stored_transcript: 6 }));
+    });
+
+    it('stores no screened text, and only the tail a question sends with its truncation', async () => {
+      const store = new Map<string, unknown>();
+      const first = processOf(store, 6);
+      const key = `-----BEGIN PRIVATE KEY-----\n${'A'.repeat(2200)}\n-----END PRIVATE KEY-----`;
+      await answered(first, 't1', key, 'Noted.');
+      await answered(first, 't2', 'Summarize the log', `${'x'.repeat(5000)}END`);
+      first.router.sessionEnd();
+      expect(JSON.stringify([...store])).not.toContain('AAAA');
+      expect(JSON.stringify([...store]).length).toBeLessThan(2400);
+      const resumed = processOf(store, 7);
+      await answered(resumed, 't3', 'ㅇㅇ', '');
+      expect(resumed.f.sent[0]?.state).toMatchObject({ task: { previous_reply: `${'x'.repeat(1997)}END`, previous_reply_truncated: true, recent_requests: [{ text: 'Summarize the log' }] } });
+    });
   });
 });
 

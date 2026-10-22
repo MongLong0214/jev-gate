@@ -276,7 +276,7 @@ const ROUTER_EVENT: Record<string, string> = {
   router: '세션 설정', request: 'Jev 요청', root: '루트 턴 판단', root_result: '루트 응답 모델 확인', root_stop: '루트 판단 중단', spawn: 'Agent 생성 판단',
   spawn_result: 'Agent 응답 모델 확인', spawn_native_result: 'Agent 응답 모델 확인', spawn_stop: 'Agent 판단 중단', spawn_denied: 'Agent 생성 거부', spawn_dimension: 'Agent 항목 미적용',
   child: '하위 실행 등록', child_route: '하위 단계 판단', child_result: '하위 단계 응답 모델 확인', child_stop: '하위 단계 판단 중단', cache_restored: '캐시 기준 복원',
-  cache_restore_skipped: '캐시 기준 복원 생략', effort_cache: 'effort 캐시 유지', context_reset: '문맥 초기화', budget_timeout: '판단 시간 초과', late: '늦은 응답',
+  cache_restore_skipped: '캐시 기준 복원 생략', context_restored: '대화 문맥 복원', context_restore_skipped: '대화 문맥 복원 생략', effort_cache: 'effort 캐시 유지', context_reset: '문맥 초기화', budget_timeout: '판단 시간 초과', late: '늦은 응답',
 };
 const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>, live: Liveness): OperationStep | null => {
   const phase = token(r['phase']);
