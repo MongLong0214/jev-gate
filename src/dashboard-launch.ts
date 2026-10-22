@@ -21,7 +21,7 @@ const versionAt = (root: string): string => {
 const healthy = async (state: Record<string, unknown> | null): Promise<boolean> => {
   if (!state || !urlOf(state['url']) || !tokenOf(state['token'])) return false;
   try {
-    const reply = await fetch(`${state['url']}api/health`, { signal: AbortSignal.timeout(3000) });
+    const reply = await fetch(`${state['url']}api/health`, { headers: { authorization: `Bearer ${state['token']}` }, signal: AbortSignal.timeout(3000), redirect: 'error' });
     const body = await reply.json() as Record<string, unknown>;
     return reply.ok && body['service'] === 'jev-gate-dashboard' && body['token'] === state['token'];
   } catch { return false; }

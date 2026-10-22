@@ -248,7 +248,9 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       }
       if (path === '/api/health' && req.method === 'GET') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify({ service: 'jev-gate-dashboard', token: runtime.token ?? null })); return;
+        // Public liveness never discloses the capability; an owner probe already possesses it.
+        const owner = runtime.token && req.headers.authorization === `Bearer ${runtime.token}`;
+        res.end(JSON.stringify({ service: 'jev-gate-dashboard', ...(owner ? { token: runtime.token } : {}) })); return;
       }
       if (path === '/api/open' && req.method === 'POST') {
         if (!runtime.token || req.headers.authorization !== `Bearer ${runtime.token}`) { res.writeHead(403); res.end(); return; }
