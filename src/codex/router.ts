@@ -42,6 +42,7 @@ export const routeCodex = async (args: {
   cache?: RoutingCache; modelCache?: ModelCache; epoch?: string;
   billing?: CodexBilling; serviceTier?: unknown; cachePolicy?: unknown;
   child?: { agentId: string; step: number; context: unknown };
+  continuation?: { step: number; context: unknown };
 }): Promise<PairPatch> => {
   const { config, env, signal } = args;
   const write = (event: Parameters<TraceWriter['write']>[0], facts: Record<string, unknown>): void => { try { args.trace?.write(event, facts); } catch { /* Optional diagnostics cannot change a request. */ } };
@@ -62,14 +63,15 @@ export const routeCodex = async (args: {
   if (looksSecret(args.task)) return skip('input_secret', native);
   const candidates = codexCandidates(args.catalog, config.router.allowAstra, model);
   const offer = offerRoute({ baseline: { model, effort: args.effort }, candidates, prefer: Object.values(config.gate.models),
-    ...(args.child ? { scope: 'child' as const } : {}), model: config.router.model && !modelPin, effort: config.router.effort && !effortPin,
+    ...(args.child ? { scope: 'child' as const } : args.continuation ? { scope: 'continuation' as const } : {}), model: config.router.model && !modelPin, effort: config.router.effort && !effortPin,
     upgrade: config.router.minUpgradeConfidence, downgrade: config.router.minDowngradeConfidence });
   if (!offer) return skip('no_alternative', native);
-  const request = { model: config.gate.jevModel, state: args.child ? { task: { text: args.task, source: 'child_contract', truncated: false }, execution: { scope: 'child', step_index: args.child.step, context: args.child.context, cache: args.cache ?? { source: 'unknown' } } } : routingContext(args.task, args.previousReply, args.recentRequests, args.cache), questions: offer.questions };
+  const state = args.child ? { task: { text: args.task, source: 'child_contract', truncated: false }, execution: { scope: 'child', step_index: args.child.step, context: args.child.context, cache: args.cache ?? { source: 'unknown' } } } : routingContext(args.task, args.previousReply, args.recentRequests, args.cache);
+  const request = { model: config.gate.jevModel, state: args.continuation ? { ...state, execution: { ...state.execution, scope: 'root', step_index: args.continuation.step, context: args.continuation.context } } : state, questions: offer.questions };
   if (estimateTokens(JSON.stringify(request)) > MAX_REQUEST_TOKENS) return skip('input_too_large', native);
   const requestId = randomUUID();
   const diagnostic = { ...facts, request_id: requestId, baseline_model: args.model, baseline_effort: args.effort, ...(moved ? { superseded_baseline: { from: args.model, to: moved } } : {}),
-    scope: args.child ? 'child' : 'root', ...(args.child ? { agent_id: args.child.agentId, index: args.child.step } : {}), excluded: { ...args.catalogExcluded,
+    scope: args.child ? 'child' : 'root', ...(args.child ? { agent_id: args.child.agentId, index: args.child.step } : args.continuation ? { index: args.continuation.step } : {}), excluded: { ...args.catalogExcluded,
       astra_disabled_by_config: args.catalog.filter(m => m.model !== args.model && !codexTargetAllowed(m.model, config.router.allowAstra)).length,
       ineligible: args.catalog.filter(m => m.model !== args.model && !generalCodexModel(m)).length, superseded: args.catalog.filter(m => m.model !== model && codexSuccessor(m.model, args.catalog)).length },
     discovered_count: args.catalog.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: args.catalogComplete ?? true,

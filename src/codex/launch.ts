@@ -124,6 +124,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       let payload = raw;
       let modified = false;
       let compact: CompactReceipt | undefined;
+      let routedInput: Obj | undefined;
       const nativeCompact = req.method === 'POST' && (route === '/responses/compact' || route === '/responses' && compactionRequest(req.headers['x-codex-turn-metadata']));
       if (req.method === 'POST' && (route === '/responses' || route === '/responses/compact')) {
         // Hook trust is the root's; a native child request is checked against the root it was sent for.
@@ -135,6 +136,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           if (route === '/responses' && !nativeCompact) {
             const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator'], codexBilling(configured, account));
             parsed = selected.request;
+            routedInput = parsed;
           }
           const prepared = await policy.compactRequest(sessionId, parsed, cancelled.signal, nativeCompact ? 'native' : 'inference');
           compact = prepared.receipt;
@@ -203,7 +205,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       upstream.on('error', fail);
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
       if (!nativeCompact && req.method === 'POST' && route === '/responses' && sessionId && policy) {
-        try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}, codexBilling(configured, account)); } catch { /* Observation does not block sending. */ }
+        try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}, codexBilling(configured, account), routedInput); } catch { /* Observation does not block sending. */ }
       }
       if (sessionId && compact && (nativeCompact || compact.applied)) { const receipt = compact; upstream.once('finish', () => policy?.recordCompact(sessionId, receipt, 'submitted', { sent: true })); }
       upstream.end(payload);

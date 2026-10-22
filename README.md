@@ -111,7 +111,7 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Feature | Behavior | Jev usage |
 | --- | --- | --- |
 | Gate | Chooses direct execution or one background worker. Code accepts only observed passing checks. | Eligible admission and allocation judgments |
-| Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | Root turns are assessed once; mapped Claude workers are assessed again at each inference after spawn |
+| Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | New root tasks are assessed once; eligible Codex tool continuations and mapped Claude workers can be assessed at subsequent inferences |
 | Compact | Claude Code builds an extractive digest; Codex selects obsolete plaintext from older tool results, preserving native context and recent evidence. | Bounded judgments; missing context, timeout or invalid output preserves the native path |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 
@@ -141,7 +141,7 @@ Claude sends native completion notifications. Codex's coordinator can query `jev
 
 ### Understand model routing
 
-The model picker establishes the baseline. Router reassesses each new root task; selecting Sonnet once does not lock future tasks to Sonnet. Jev judges the capability the work needs (mechanical, routine, complex, or an open problem when Fable/Astra is enabled) and the effort each candidate model would need; code maps that to one model per role and moves only when the probability clears the configured floors. The README for Router lists [every model and effort combination and when each is chosen](mods/router/README.md#how-a-move-is-decided). A Gate retry is served at least one role above the attempt that failed. Claude workers with a known native identity receive a fresh effort assessment before each inference after spawn, including inference following tool results; their model is chosen once, at the spawn. Codex reuses the current task assessment. Gate B owns the initial allocation for Jev workers; eligible ordinary agents use Router.
+The model picker establishes the baseline. Router reassesses each new root task; selecting Sonnet once does not lock future tasks to Sonnet. Jev judges the capability the work needs (mechanical, routine, complex, or an open problem when Fable/Astra is enabled) and the effort each candidate model would need; code maps that to one model per role and moves only when the probability clears the configured floors. The README for Router lists [every model and effort combination and when each is chosen](mods/router/README.md#how-a-move-is-decided). A Gate retry is served at least one role above the attempt that failed. Claude workers with a known native identity receive a fresh effort assessment before each inference after spawn, including inference following tool results; their model is chosen once, at the spawn. Codex can reassess model and effort after completed tool calls when the current contract and a visible assistant progress update are available. Each distinct inference is assessed at most once; retries reuse its decision. Missing continuation context retains the original whole-task decision, and an uncertain judgment keeps the native request. Gate B owns the initial allocation for Jev workers; eligible ordinary agents use Router.
 
 Simple lookup and mechanical worker tasks prefer current Haiku in Claude or current account-listed Luna in Codex. New automatic targets exclude previous generations. Haiku 5.5 requires Claude Code 2.1.293 or later and supports effort; `xhigh`/`max` depend on thinking mode, so hooks offer its universally valid `low`/`medium`/`high` levels. Native host pins and account availability remain authoritative.
 
@@ -205,7 +205,7 @@ The key is stored in `~/.config/jev-gate/auth/credentials.json` (0700 directory/
 When enabled and eligible, these inputs can leave the machine:
 
 - **Gate:** one admission judgment uses the current request once; each eligible worker dispatch sends its task prompt. Earlier user turns are not retried or added to admission.
-- **Router:** the task text and routing/cache facts used for its judgment.
+- **Router:** the task text and routing/cache facts used for its judgment. Eligible Codex root continuations also include a screened, bounded visible assistant progress update and tool completion metadata; their tool arguments, tool-result contents and opaque reasoning are not added to that judgment.
 - **Compact:** the current task and a bounded set of older tool-result text. Claude uses excerpts; Codex sends complete candidate chunks, with bounded tool-input context, and retains all unoffered text. Sensitive candidates are filtered before sending. Preservation and size limits remain local.
 
 The plugin does not upload the whole repository. Filters are not a DLP or retention guarantee. The dashboard is local.

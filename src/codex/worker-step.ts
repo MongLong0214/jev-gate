@@ -1,5 +1,6 @@
 import { childStepContext } from '../router-child-context.js';
 import { obj, type Obj } from './source.js';
+import { looksSecret } from '../outbound-text.js';
 
 /** Only closed tool metadata leaves the local native wire; contents and arguments never do. */
 export const workerStepContext = (input: unknown) => {
@@ -22,3 +23,18 @@ export const workerStepContext = (input: unknown) => {
 };
 
 export const requestStepKey = (request: Obj): string => JSON.stringify([request['input'], request['previous_response_id'] ?? null]);
+
+/** A root continuation needs its current contract and visible progress, not a guess from tool names alone. */
+export const rootStepContext = (input: unknown, task: string) => {
+  if (!Array.isArray(input)) return null;
+  const text = (value: unknown): string | null => typeof value === 'string' ? value : Array.isArray(value) && value.every(part =>
+    ['input_text', 'output_text'].includes(String(obj(part)?.['type'])) && typeof obj(part)?.['text'] === 'string') ? value.map(part => obj(part)!['text']).join('\n') : null;
+  const current = input.findLastIndex(raw => { const item = obj(raw); return item?.['type'] === 'message' && item['role'] === 'user' && text(item['content']) === task; });
+  if (current < 0) return null;
+  const rows = input.slice(current + 1), context = workerStepContext(rows);
+  if (!context || context.pending !== 0 || !context.tools.length) return null;
+  const assistant = rows.findLast(raw => { const item = obj(raw); return item?.['type'] === 'message' && item['role'] === 'assistant' && item['phase'] === 'commentary'; });
+  const update = text(obj(assistant)?.['content']);
+  if (!update?.trim() || looksSecret(update)) return null;
+  return { ...context, assistant_update: { text: update.slice(-2000), source: 'untrusted_native_assistant_update', truncated: update.length > 2000 } };
+};
