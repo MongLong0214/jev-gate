@@ -90,6 +90,30 @@ describe('Codex ordered routing and recorded application', () => {
     expect(view.feed.find(s => s.lane === 'host')?.model?.status).toBe('unobserved');
     expect(view.feed.some(s => s.judgements?.length)).toBe(true);
   });
+  it('judges effort for the actual conditional model without turning model guidance into a floor', async () => {
+    const account = [
+      { ...catalog[0]!, description: 'Latest workhorse model for coding and everyday work.', defaultReasoningEffort: 'low' },
+      { ...catalog[0]!, model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', defaultReasoningEffort: 'medium' },
+    ];
+    let sent: Obj | undefined;
+    const fetchImpl = vi.fn(async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return response({ model: sent!['model'], answers: answersFor(sent!, 'mechanical', 'low') });
+    });
+    const patch = await routeCodex({ model: 'gpt-6.1-sol', effort: 'xhigh', task: 'Return the number 1.', session: 's', prompt: 'p',
+      catalog: account, config, billing: 'chatgpt', env: { TYPESAFE_API_KEY: 'fake-key' }, fetchImpl });
+    expect(patch).toMatchObject({ model: 'gpt-6-luna', effort: 'low' });
+    const questions = Object.values(sent!['questions'] as Record<string, { type: string; instructions: string; criteria: string[] }>).filter(q => q.type === 'score');
+    const luna = questions.find(q => q.instructions.includes('actual account candidate gpt-6-luna'))!;
+    const sol = questions.find(q => q.instructions.includes('actual account candidate gpt-6.1-sol'))!;
+    expect(luna.instructions).toContain('account-listed default effort is medium');
+    expect(luna.instructions).toContain('starts explicit GPT-6 Luna settings at high');
+    expect(sol.instructions).toContain('account-listed default effort is low');
+    expect(sol.instructions).not.toContain('starts explicit GPT-6 Luna');
+    expect(luna.criteria.find(v => v.startsWith('Strong'))).toContain('coordinates discovery');
+    expect(sol.criteria.find(v => v.startsWith('Strong'))).not.toContain('coordinates discovery');
+    for (const q of questions) expect(q.instructions).toContain('not a floor or pin');
+  });
   it.each(['locked', 'invalid', 'failed', 'model-mismatch', 'disabled'])('preserves the original call on %s', async kind => {
     const r = await invoke(kind); expect(r.patch).toEqual({}); expect(r.fetchImpl).toHaveBeenCalledTimes(kind === 'disabled' ? 0 : 1);
   });

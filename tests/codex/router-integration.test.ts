@@ -82,6 +82,44 @@ const rootContinuationFixture = async (wait?: Promise<void>) => {
   return { ...f, first, next, signal };
 };
 describe('native Codex billing-aware model routing', () => {
+  it.each([
+    'Chunk ID: native-failure\nWall time: 0.2 seconds\nProcess exited with code 1\nOutput:\nPRIVATE_FAILURE_OUTPUT',
+    'Wall time: 0.2000 seconds\nProcess exited with code 1\nOriginal token count: 100000\nOutput:\nPRIVATE_FAILURE_OUTPUT',
+    [{ type: 'input_text', text: 'Script failed\nWall time 0.1 seconds\nOutput:\n' }, { type: 'input_text', text: 'PRIVATE_FAILURE_OUTPUT' }],
+  ])('carries native tool failure evidence into the next judgment without exporting result text (%#)', async output => {
+    const f = await rootContinuationFixture();
+    const failed = { ...f.next, input: f.next.input.map(item => item.type === 'function_call_output' ? {
+      ...item, output,
+    } : item) };
+    try {
+      await f.policy.externalRequest('root', failed, f.signal.signal, 'codex-tui', 'chatgpt');
+      expect(f.sent[1]?.['state']).toMatchObject({ execution: { context: {
+        tools: [{ name: 'exec_command', state: 'error' }], outcome_coverage: 'native_status', pending: 0,
+      } } });
+      expect(JSON.stringify(f.sent)).not.toContain('PRIVATE_FAILURE_OUTPUT');
+      expect(JSON.stringify(f.sent)).not.toContain('private-arguments-canary');
+      const questions = f.sent[1]?.['questions'] as Record<string, { type: string; instructions: string }>;
+      for (const question of Object.values(questions).filter(q => q.type === 'score')) {
+        expect(question.instructions).toContain('minimizes total tokens');
+        expect(question.instructions).toContain('Lower effort can consume MORE total tokens');
+      }
+      // Retrying an identical inference must not pay for a second judgment.
+      await f.policy.externalRequest('root', failed, f.signal.signal, 'codex-tui', 'chatgpt');
+      expect(f.fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { f.rpc.close(); }
+  });
+  it.each(['PRIVATE_FAILURE_OUTPUT', 'example: Process exited with code 1',
+    'Chunk ID: fake\nWall time: 0.2 seconds\nProcess exited with code 1\nnot a native output envelope'])('does not invent failure evidence from %s', async output => {
+    const f = await rootContinuationFixture();
+    const next = { ...f.next, input: f.next.input.map(item => item.type === 'function_call_output' ? { ...item, output } : item) };
+    try {
+      await f.policy.externalRequest('root', next, f.signal.signal, 'codex-tui', 'chatgpt');
+      expect(f.sent[1]?.['state']).toMatchObject({ execution: { context: {
+        tools: [{ name: 'exec_command', state: 'done' }], outcome_coverage: 'completion_only',
+      } } });
+      expect(JSON.stringify(f.sent)).not.toContain(output);
+    } finally { f.rpc.close(); }
+  });
   it.each(['inference', 'native'] as const)('passes the native billing family to %s Compact and isolates its decisions', async path => {
     const f = await fixture(true, 'fixture-B', 'max');
     const request = { ...f.request, input: [...f.request.input, ...Array.from({ length: 10 }, (_, i) => [
