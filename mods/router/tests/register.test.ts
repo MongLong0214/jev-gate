@@ -105,7 +105,7 @@ for (const mode of ['keep', 'effort', 'model', 'both'] as const) for (const chil
           return [name, { type: 'choice', choice: value, confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === value ? 1 : 0])) }];
         }
         const levels = q.criteria as string[];
-        const target = mode === 'both' && q.instructions.includes('Work where competing constraints') ? levels.length - 1 : mode === 'effort' ? 0 : 2;
+        const target = mode === 'both' && q.instructions.includes('constraints the request does not settle') ? levels.length - 1 : mode === 'effort' ? 0 : 2;
         return [name, { type: 'score', score: target, confidence: 1, probabilities: Object.fromEntries(levels.map((_, i) => [i, i === target ? 1 : 0])) }];
       }));
       return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify({ model: body.model, answers }) } };
