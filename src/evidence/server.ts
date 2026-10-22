@@ -17,7 +17,7 @@ import { claudeSetupMessage, claudeTraceDir, integratedClaudePlugin, prepareClau
 import { startOnboarding } from '../onboarding.js';
 import { ensureDashboard } from '../dashboard-launch.js';
 
-export const SERVER_VERSION = '0.8.52';
+export const SERVER_VERSION = '0.8.53';
 
 /** Claude Code lists no tool here; this process onboards the key and starts the dashboard. Codex lists only `jev_agent`. */
 export const createServer = (deps: { dispatch?: (args: unknown, meta: unknown, signal: AbortSignal) => Promise<string> }): Server => {
