@@ -81,16 +81,33 @@ it('keeps worker cards without a contract verdict honest in both languages', () 
   p.click('#language'); expect(node(p, 'workers').querySelector('.dec b')!.textContent).toBe('No verdict');
 });
 
-it('renders doctor activity facts and unknown measurements in existing node lines and inspector', () => {
+it('keeps doctor activity facts and unknown measurements in the full stage detail', () => {
   const p = page(), s = snapshot([run('r', 'claude', [step('x', 'router', 'host')])]);
   const facts = [{ feature: 'router', level: 'warn', metrics: { fired: 9, applied: 3, effect: null, regression: 1 }, current: { model: { selected: 'sonnet', selectedEffort: 'high', observed: null } } }];
   p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
   expect(node(p, 'router').querySelector('.ds')!.textContent).toContain('발화 9 · 적용 3 · 회귀 1');
   p.click('.node[data-feature=router]'); expect(text(p, 'circuit-inspector')).toContain('효과 (루트 비용 추정) 미확인');
-  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain('루트 비용 추정');
+  p.click('.inspect-more summary');expect(p.get('circuit-inspector').querySelector('.inspect-more')!.hasAttribute('open')).toBe(true);expect(text(p,'circuit-inspector')).toContain('루트 비용 추정');
   expect(text(p, 'circuit-inspector')).toContain('최근 루트 (전체 실행) · 선택 · sonnet · high');
   p.click('#language'); expect(text(p, 'circuit-inspector')).toContain('effect (root cost estimate) unknown');
   p.click('[data-host=codex]'); expect(node(p, 'router').querySelector('.ds')!.textContent).toBe('24h untrackable');
+});
+
+it('keeps complete activity facts in the expandable detail while core status stays first (#338)', () => {
+  const p=page(),s=step('row-router','router','host',{title:'모델 응답 확인',summary:'선택과 응답이 다름',model:{selected:'gpt-6.1-sol',observed:'gpt-6-luna',status:'mismatch',selectedEffort:'xhigh',observedEffort:'low'}});
+  const facts=[{feature:'router',level:'warn',metrics:{fired:9,applied:3,regression:1,effect:null}}];
+  p.push({...snapshot([run('r','codex',[s])]),activity24h:{all:facts,claude:[],codex:facts}});p.click('.node[data-feature=router]');
+  const root=p.get('circuit-inspector'),primary=root.querySelector('.b>.kv')!,more=root.querySelector('details.inspect-more')!;
+  expect([...primary.querySelectorAll('dt')].map(e=>e.textContent)).toEqual(['실행','판정','모델 · effort','상태와 사유']);
+  expect(primary.textContent).toContain('gpt-6.1-sol · xhigh');expect(primary.textContent).toContain('gpt-6-luna · low');
+  expect(primary.querySelector('.status-value')?.textContent).toContain('모델 응답 확인\n선택과 응답이 다름');
+  expect(primary.querySelector('.status-value')?.textContent).not.toContain('\\n');
+  expect(more.hasAttribute('open')).toBe(false);p.click('.inspect-more summary');
+  expect(more.textContent).toContain('발화 9 · 적용 3 · 회귀 1');expect(more.textContent).toContain('미확인');
+  const field=primary.querySelector('dd')!;
+  p.push({...snapshot([run('r','codex',[s,{...s,id:'row-new',at:new Date(Date.parse(s.at)+1).toISOString()}])]),activity24h:{all:facts,claude:[],codex:facts}});
+  expect(root.querySelector('.b>.kv dd')).toBe(field);expect(root.querySelector('details.inspect-more')).toBe(more);expect(more.hasAttribute('open')).toBe(true);
+  p.click('#language');expect(root.querySelector('h2')?.textContent).toBe('Stage details');expect(root.querySelector('.insp-feature')?.textContent).toBe('Router');expect(root.querySelector('.inspect-more')?.textContent).toContain('regressions 1');
 });
 
 it('shows each host Compact facts without borrowing Claude restore metrics for Codex', () => {
@@ -115,7 +132,7 @@ it('shows each host Compact facts without borrowing Claude restore metrics for C
 it.each([[0, '+$0.00'], [-.67486, '−$0.67'], [[-.1, .2], '−$0.10 / +$0.20']])('renders Router net %j without cache-price assumptions', (effect, expected) => {
   const p = page(), s = snapshot([]), facts = [{ feature: 'router', level: 'ok', metrics: { fired: 1, applied: 1, regression: 0, effect } }];
   p.push({ ...s, activity24h: { all: facts, claude: facts, codex: [] } });
-  expect(node(p, 'router').querySelector('.nt')!.textContent).toContain(expected);
+  expect(node(p, 'router').querySelector('.nt')!.textContent).toBe('24h 집계는 단계 상세에서');
   p.click('.node[data-feature=router]');
   expect(text(p, 'circuit-inspector')).toContain(expected);
 });
@@ -284,7 +301,7 @@ describe('dashboard live interactions', () => {
     expect(p.w.document.querySelectorAll('#runs')).toHaveLength(1); expect(rows(p)).toHaveLength(2); expect(text(p, 'run-count')).toBe('실행 2개 표시');
     p.click('.node[data-feature="router"]');
     expect(rows(p)).toHaveLength(1); expect(text(p, 'runs')).toContain('codex execution'); expect(text(p, 'run-count')).toBe('실행 1개 표시 · Router 기록만');
-    expect(p.get('circuit-inspector').querySelector('h2')?.textContent).toBe('Router'); expect(node(p, 'router').getAttribute('aria-pressed')).toBe('true');
+    expect(p.get('circuit-inspector').querySelector('h2')?.textContent).toBe('단계 상세'); expect(p.get('circuit-inspector').querySelector('.insp-feature')?.textContent).toBe('Router'); expect(node(p, 'router').getAttribute('aria-pressed')).toBe('true');
     p.click('.node[data-feature="router"]'); expect(rows(p)).toHaveLength(2); expect(text(p, 'run-count')).toBe('실행 2개 표시');
     p.click('[data-circuit-mode="run"]'); p.click('.node[data-feature="admission"]'); expect(rows(p)).toHaveLength(2);
   });
