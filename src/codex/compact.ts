@@ -4,6 +4,7 @@ import { looksSecret, estimateTokens } from '../outbound-text.js';
 import type { Env } from '../config.js';
 import type { TraceWriter } from '../trace.js';
 import { obj, type Obj } from './source.js';
+import type { CodexBilling } from './route-cost.js';
 
 export interface CodexCompactConfig { enabled: boolean; timeoutMs: number }
 export interface CompactState {
@@ -126,7 +127,7 @@ export const compactCandidates = (input: unknown): Candidate[] => {
       if (text.length < 2048 || looksSecret(text) || protectedText.test(text)) continue;
       // Head/tail retain tool receipts and local orientation. Every offered interior is complete,
       // never a head-only excerpt standing in for unseen evidence. Unoffered text stays byte-for-byte.
-      for (let start = 256; start < text.length - 1280;) {
+      for (let start = /[\uDC00-\uDFFF]/.test(text[256] ?? '') ? 257 : 256; start < text.length - 1280;) {
         let end = Math.min(start + 4096, text.length - 256);
         if (end < text.length - 256) { const line = text.lastIndexOf('\n', end); if (line > start + 1024) end = line + 1; }
         if (/[\uDC00-\uDFFF]/.test(text[end] ?? '')) end--;
@@ -152,6 +153,7 @@ export const prepareCodexCompact = async (args: {
   request: Obj; task: string; recentRequests: readonly string[]; state: CompactState;
   session: string; prompt: string; config: CodexCompactConfig; jevModel: string; env: Env;
   path: 'inference' | 'native'; signal: AbortSignal; current: () => boolean;
+  billing?: CodexBilling;
   trace?: TraceWriter; fetchImpl?: typeof fetch;
 }): Promise<{ request: Obj; receipt: CompactReceipt }> => {
   const { request: original, state } = args;
@@ -191,11 +193,13 @@ export const prepareCodexCompact = async (args: {
       const body = JSON.stringify(makeRequest());
       if (Buffer.byteLength(body) > MAX_REQUEST_BYTES || estimateTokens(body) > 24000) { chosen.pop(); break; }
     }
-    // A unique one-shot excerpt is transferred to Jev rather than saved. Do not pay for a batch
-    // whose best-case reduction cannot repay its request and typed-answer overhead now.
-    // These use the same local estimate, not a tokenizer guarantee or assumed future reuse.
-    let bestCount = 0, bestGain = 0, possibleReduction = 0;
-    for (const [i, c] of chosen.entries()) {
+    // OAuth allowance and external Jev usage are separate. A one-for-one raw-token sum
+    // would exclude every unique excerpt before relevance is judged. Keep the existing
+    // bounded assessment budget; never call its potential removal an allowance saving.
+    // API/custom traffic retains the conservative combined-token preflight.
+    const separateAllowance = args.billing === 'chatgpt';
+    let bestCount = separateAllowance ? chosen.length : 0, bestGain = 0, possibleReduction = 0;
+    for (const [i, c] of (separateAllowance ? [] : chosen).entries()) {
       possibleReduction += Math.max(0, estimateTokens(c.text) - estimateTokens(marker(c.text.length))) * c.parts.length;
       const offered = chosen.slice(0, i + 1);
       const answerTemplate = { model: args.jevModel, answers: Object.fromEntries(offered.map(v => [v.id, { type: 'choice', choice: 'remove', confidence: .99, probabilities: { keep: .005, remove: .99, unclear: .005 } }])) };
@@ -203,12 +207,13 @@ export const prepareCodexCompact = async (args: {
       if (possibleReduction - assessmentCost > bestGain) { bestCount = i + 1; bestGain = possibleReduction - assessmentCost; }
     }
     if (chosen.length && !bestCount) preserveReason = 'assessment_not_amortized';
-    chosen.splice(bestCount); // Do not dilute a useful repeated prefix with unprofitable unique tails.
+    chosen.splice(bestCount);
     if (chosen.length) {
       state.calls++;
       const selectionId = randomUUID(); receipt.selection_ids.push(selectionId);
       const pending = (async () => {
-        write('selection_intent', { selection_id: selectionId, attempted: true, candidates: chosen.length });
+        const accounting = { assessment_basis: separateAllowance ? 'oauth_separate_service_budget' : 'combined_token_preflight', included_allowance_saving: 'unmeasured', jev_usage: 'separate_service' };
+        write('selection_intent', { selection_id: selectionId, attempted: true, candidates: chosen.length, ...accounting });
         const out = await callJev(makeRequest(), { apiKey: args.env['TYPESAFE_API_KEY']!, deadlineMs: args.config.timeoutMs, signal: args.signal, ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}) });
         let reason = out.ok ? 'assessed' : out.code;
         const decisions = new Map<string, boolean>();
@@ -223,7 +228,7 @@ export const prepareCodexCompact = async (args: {
         if (args.signal.aborted || !args.current()) reason = 'stale';
         if (reason === 'assessed') for (const [id, remove] of decisions) { state.decisions.set(id, remove); state.selections.set(id, selectionId); }
         else { assessmentFailed = true; if (reason !== 'stale') for (const c of chosen) state.decisions.set(c.id, false); }
-        write('selection_result', { selection_id: selectionId, attempted: true, reason, duration_ms: out.durationMs, candidates: chosen.length,
+        write('selection_result', { selection_id: selectionId, attempted: true, reason, duration_ms: out.durationMs, candidates: chosen.length, ...accounting,
           selected: reason === 'assessed' ? [...decisions.values()].filter(Boolean).length : 0, jev: { model: out.ok ? out.response.model : out.model ?? null, usage: out.ok ? out.response.usage : out.usage ?? null }, applied: false });
       })().finally(() => { if (state.pending === pending) delete state.pending; });
       state.pending = pending; await pending;

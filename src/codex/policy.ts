@@ -233,16 +233,16 @@ export class CodexPolicy {
   }
 
   /** Select optional tool text from the actual wire only; no transcript or history file is edited. */
-  async compactRequest(id: string, request: Obj, signal: AbortSignal, path: 'inference' | 'native'): Promise<{ request: Obj; receipt?: CompactReceipt }> {
+  async compactRequest(id: string, request: Obj, signal: AbortSignal, path: 'inference' | 'native', billing: CodexBilling = 'unknown'): Promise<{ request: Obj; receipt?: CompactReceipt }> {
     const session = this.sessions.get(id);
     if (!session?.prompt || !session.task || !this.hooked.has(id) || requestedUpdateEffort(request).present) return { request };
     const prompt = session.prompt; const controller = session.controller;
     const config = runtimeCodexPolicy(this.env, this.catalog);
-    const key = compactScope(request, session.task, prompt) + JSON.stringify(config.compact);
+    const key = compactScope(request, session.task, prompt) + JSON.stringify([config.compact, billing]);
     const state = session.compact?.key === key ? session.compact : newCompactState(key);
     session.compact = state;
     try { return await prepareCodexCompact({ request, task: session.task, recentRequests: session.recentRequests ?? [], state,
-      session: id, prompt, config: config.compact, jevModel: config.gate.jevModel, env: this.env, path,
+      session: id, prompt, config: config.compact, jevModel: config.gate.jevModel, env: this.env, path, billing,
       signal: controller ? AbortSignal.any([signal, controller.signal]) : signal,
       current: () => this.sessions.get(id) === session && session.prompt === prompt && session.compact === state && JSON.stringify(runtimeCodexPolicy(this.env, this.catalog).compact) === JSON.stringify(config.compact),
       ...(this.trace ? { trace: this.trace } : {}), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });

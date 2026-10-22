@@ -138,7 +138,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
             parsed = selected.request;
             routedInput = parsed;
           }
-          const prepared = await policy.compactRequest(sessionId, parsed, cancelled.signal, nativeCompact ? 'native' : 'inference');
+          const prepared = await policy.compactRequest(sessionId, parsed, cancelled.signal, nativeCompact ? 'native' : 'inference', codexBilling(configured, account));
           compact = prepared.receipt;
           if (prepared.request !== parsed || !nativeCompact) { payload = Buffer.from(JSON.stringify(prepared.request)); modified = true; }
         }

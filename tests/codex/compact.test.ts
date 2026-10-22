@@ -25,6 +25,42 @@ const answer = (body: string, options: { invalid?: boolean; confidence?: number;
 const argsFor = (request = fixture()) => ({ request, task: 'Implement the new parser; keep its public contract.', recentRequests: [], state: newCompactState('task'), session: 's', prompt: 'p', config: { enabled: true, timeoutMs: 200 }, jevModel: 'systemone', env: { TYPESAFE_API_KEY: 'local-fake' }, path: 'inference' as const, signal: new AbortController().signal, current: () => true });
 
 describe('Codex Jev Compact wire selector (#317)', () => {
+  it('offers complete Unicode scalars when an emoji straddles the preserved head boundary', () => {
+    const request = fixture(), output = (request.input as Obj[]).find(i => i.type === 'custom_tool_call_output')!;
+    (output.output as Obj[])[0]!.text = 'h'.repeat(255) + '😀' + 'Completed unrelated setup details.\n'.repeat(200);
+    const candidates = compactCandidates(request.input);
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const candidate of candidates) {
+      expect(candidate.text).toBe(Buffer.from(candidate.text, 'utf8').toString('utf8'));
+    }
+  });
+
+  it('assesses unique OAuth evidence without treating separate Jev usage as subscription debit', async () => {
+    const request = fixture();
+    for (const [i, item] of (request.input as Obj[]).entries()) if (item.type === 'custom_tool_call_output') {
+      (item.output as Obj[])[0]!.text = Array.from({ length: 90 }, (_, j) => `Archived sample ${i}:${j}: completed unrelated color survey with no parser dependency.\n`).join('');
+    }
+    const args = { ...argsFor(request), billing: 'chatgpt' as const }, before = structuredClone(request);
+    const fetchImpl = vi.fn(async (_url, init) => answer(String(init?.body)));
+    const first = await prepareCodexCompact({ ...args, fetchImpl });
+    const retry = await prepareCodexCompact({ ...args, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(first.receipt.applied).toBe(true); expect(first.receipt.removed_chars).toBeGreaterThan(8192);
+    expect(retry.request).toEqual(first.request); expect(request).toEqual(before);
+    expect((first.request.input as Obj[]).slice(-12)).toEqual((request.input as Obj[]).slice(-12));
+    expect((first.request.input as Obj[]).map(({ output: _output, ...item }) => item)).toEqual((request.input as Obj[]).map(({ output: _output, ...item }) => item));
+  });
+
+  it.each(['api', 'unknown'] as const)('keeps the existing one-shot assessment budget for %s traffic', async billing => {
+    const request = fixture();
+    for (const [i, item] of (request.input as Obj[]).entries()) if (item.type === 'custom_tool_call_output') {
+      (item.output as Obj[])[0]!.text = Array.from({ length: 90 }, (_, j) => `Archived sample ${i}:${j}: completed unrelated color survey with no parser dependency.\n`).join('');
+    }
+    const fetchImpl = vi.fn();
+    const out = await prepareCodexCompact({ ...argsFor(request), billing, fetchImpl });
+    expect(fetchImpl).not.toHaveBeenCalled(); expect(out.request).toBe(request);
+  });
+
   it('preserves unique one-shot evidence when even all removals cannot repay a new assessment (#321)', async () => {
     const request = fixture();
     for (const [i, item] of (request.input as Obj[]).entries()) if (item.type === 'custom_tool_call_output') {
