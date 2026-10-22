@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.54 — 2026-10-22 — Reduce repeated Codex execution rounds
+
+- Preserve known native tool failures in continuation routing and distinguish explicit status from completion-only evidence. Judge effort against the actual account-listed candidate and its validated default (#300).
+- Add execution guidance when Router changes a full-context model/effort pair: batch independent reads, reuse current context, coordinate related edits and observe every required check. Dependencies stay sequential. Bind submission accounting before guidance and independent Compact processing; pins, incremental requests and native compaction retain their original path.
+- In a complete three-episode, five-turn actual OAuth/Jev development comparison, Codex raw usage was 1,413,312 OFF versus 1,117,885 ON (20.90% lower), with all 18 quality check groups passing. One episode increased 4.76%; the reused development corpus does not establish a universal saving or actual included-plan allowance reduction. External Jev usage is recorded separately. The user accepted this observed result for the current iteration; the earlier 40% goal was not achieved.
+- Close the current Compact delivery scope (#317) with its published implementation, installed automatic-hook/native-compaction checks and bounded effect measurements. Router's 20.90% is not a Compact result. Preserve the Compact no-application coding comparison and limitations on representative long-work savings.
+- Claude implementation is unchanged. Common version and archive metadata advance under the existing release contract; this delivery installs Codex only.
+
 ## v0.8.53 — 2026-10-22 — Route well-specified work to Sonnet by outcome
 
 - Correct the Router's routine/complex boundary from measured outcomes. Jev sent six checker-backed coding jobs to Opus as complex because of their topic (concurrency, a format migration, compatibility, an algorithm), although each spelled out its cause or required behaviour and had checks. Sonnet 5.5 passed every checker run of the five that Opus passed, at 49–56% of Opus's notional cost (the sixth failed the same check on both). Routine now covers that work; complex keeps an uncertain cause, constraints the request leaves open, live client or data compatibility, permission or money logic, open algorithm design and reviews (`bench/results/tier-outcome-2026-10-22`, #352).
