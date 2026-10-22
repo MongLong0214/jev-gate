@@ -27,7 +27,7 @@ import { selectRecentPrompts } from '../recent-prompts.js';
 import { wireSource } from './wire.js';
 import { normalizeUsage, usageCost, ModelCache } from '../cost.js';
 import { providerPrice, providerContextLimit } from '../provider-prices.js';
-import { workerStepContext, requestStepKey } from './worker-step.js';
+import { workerStepContext, rootStepContext, requestStepKey } from './worker-step.js';
 import { requestedUpdateEffort } from './effort-update.js';
 import { compactScope, newCompactState, prepareCodexCompact, type CompactReceipt, type CompactState } from './compact.js';
 import { observedDelegationPrices } from '../delegation-prices.js';
@@ -44,6 +44,10 @@ interface WorkerDispatch {
   /** Definite pre-send evidence; a native terminal turn has none. */
   failure?: CodexFailure; unconfirmed?: string;
   pendingReason?: string;
+}
+interface InferenceRoute {
+  index: number; model: string; effort: string | null; patch: PairPatch;
+  billing?: string; config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void>;
 }
 interface Session {
   id: string; settings: Obj; baseline: { model: string; effort: string | null }; policy: CodexPolicyConfig;
@@ -65,8 +69,11 @@ interface Session {
   dispatch?: WorkerDispatch;
   cache?: RoutingCache & { at: number };
   modelCache?: ModelCache;
-  stepRoutes?: Map<string, { index: number; model: string; effort: string | null; patch: PairPatch; billing?: string; config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void> }>;
+  stepRoutes?: Map<string, InferenceRoute>;
   stepIndex?: number;
+  rootRoutes?: Map<string, InferenceRoute>;
+  rootInput?: string;
+  rootNativeChanged?: boolean;
   settingsEpoch?: number;
   compact?: CompactState;
 }
@@ -213,6 +220,7 @@ export class CodexPolicy {
       if (session.completedReply) session.previousReply = session.completedReply; else delete session.previousReply;
       delete session.routePending; delete session.routeDeadline;
       delete session.routed; delete session.route;
+      delete session.rootRoutes; delete session.rootInput; delete session.rootNativeChanged;
     }
     if (event === 'Interrupt' || event === 'SessionEnd') {
       session.controller?.abort(); await this.interruptChildren(session, event === 'SessionEnd');
@@ -248,7 +256,7 @@ export class CodexPolicy {
     try { this.trace?.write('codex_compact', { host: 'codex', session_id: id, ...receipt, stage, ...facts }); } catch { /* Optional metadata. */ }
   }
 
-  /** Selection is made once from the actual submitted prompt; every original Responses field is preserved. */
+  /** The original contract is judged once; observable tool continuations may get their own bounded decision. */
   async externalRequest(id: string, request: Obj, signal: AbortSignal, originator?: unknown, billing: CodexBilling = 'unknown'): Promise<{ request: Obj }> {
     const session = this.sessions.get(id);
     if (requestedUpdateEffort(request).present) {
@@ -274,11 +282,14 @@ export class CodexPolicy {
     if (typeof model !== 'string') return { request };
     const cachePolicy = request['prompt_cache_options'] !== undefined || request['prompt_cache_retention'] !== undefined ? [request['prompt_cache_options'], request['prompt_cache_retention']] : undefined;
     const billingKey = JSON.stringify([billing, request['service_tier'] ?? null, cachePolicy]);
+    const key = createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex');
     if ((session.routed === session.prompt || session.routePending) && session.routeBilling !== billingKey) {
       session.routeBilling = 'changed'; delete session.route;
     }
     if (session.routed !== session.prompt && !session.routePending) {
       session.baseline = { model, effort: typeof effort === 'string' ? effort : null };
+      session.rootInput = key;
+      session.rootRoutes = new Map([[key, { index: 0, ...session.baseline, patch: {} }]]);
       const prompt = session.prompt;
       session.routed = prompt;
       session.routeBilling = billingKey;
@@ -311,16 +322,75 @@ export class CodexPolicy {
     }
     if (session.routePending) await session.routePending;
     if (signal.aborted || requestController?.signal.aborted || session.prompt !== requestPrompt) throw new Error('interrupted policy');
+    if (key !== session.rootInput) return this.rootContinuation(session, request, signal, originator, billing, billingKey, cachePolicy);
     const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
     if (session.routeBilling !== billingKey) delete session.route;
     if (session.routeConfig !== JSON.stringify(current.router)) delete session.route;
     const nativeEffort = typeof effort === 'string' ? effort : null;
     // A plugin-applied value is not a manual edit. A genuinely new native value wins for this turn.
-    if (model !== session.baseline.model && model !== session.route?.model || nativeEffort !== session.baseline.effort && nativeEffort !== session.route?.effort && !(session.route?.effortEdit?.kind === 'omit' && nativeEffort === null)) delete session.route;
+    if (model !== session.baseline.model && model !== session.route?.model || nativeEffort !== session.baseline.effort && nativeEffort !== session.route?.effort && !(session.route?.effortEdit?.kind === 'omit' && nativeEffort === null)) {
+      delete session.route; session.rootNativeChanged = true;
+    }
     if (session.route?.model && (!codexTargetAllowed(session.route.model, current.router.allowAstra) || !this.catalog.some(m => m.model === session.route!.model && generalCodexModel(m)))) delete session.route;
     const reasoning = applyEffort(obj(request['reasoning']) ?? {}, session.route?.effortEdit);
     const selected = { ...request, ...(session.route?.model ? { model: session.route.model } : {}), ...(session.route?.effortEdit && session.route.effortEdit.kind !== 'keep' ? { reasoning } : {}) };
+    const first = session.rootRoutes?.get(key); if (first) first.patch = session.route ?? {};
     return { request: selected };
+  }
+  private async rootContinuation(session: Session, request: Obj, signal: AbortSignal, originator: unknown, billing: CodexBilling, billingKey: string, cachePolicy: unknown): Promise<{ request: Obj }> {
+    const model = String(request['model']), effort = obj(request['reasoning'])?.['effort'];
+    const nativeEffort = typeof effort === 'string' ? effort : null;
+    const prompt = session.prompt!, controller = session.controller, sourceEpoch = session.epoch;
+    const key = createHash('sha256').update(JSON.stringify([sourceEpoch, requestStepKey(request)])).digest('hex');
+    const steps = session.rootRoutes!;
+    const nativePair = (s: { model: string; effort: string | null }): boolean => model === s.model && nativeEffort === s.effort;
+    const selectedPair = (s: InferenceRoute): boolean => nativePair({ model: s.patch.model ?? s.model, effort: s.patch.effortEdit?.kind === 'omit' ? null : s.patch.effort ?? s.effort });
+    if (!nativePair(session.baseline) && ![...steps.values()].some(selectedPair)) session.rootNativeChanged = true;
+    let step = steps.get(key);
+    if (!step) {
+      // Keep retry identities for the entire prompt; never evict one into another paid judgment.
+      if (steps.size >= 128) {
+        this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: prompt, scope: 'root', index: null, reason: 'root_step_limit', known_not_sent: true });
+        return { request };
+      }
+      const config = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog), epoch = this.catalogEpoch;
+      const compatible = !session.rootNativeChanged && session.routeBilling === billingKey && session.routeConfig === JSON.stringify(config.router);
+      // The first decision covers the whole contract. Never carry a next-inference-only patch into another step.
+      step = { index: steps.size, model, effort: nativeEffort, patch: compatible ? session.route ?? {} : {}, billing: billingKey,
+        config: JSON.stringify(config.router), catalogEpoch: epoch, settingsEpoch: session.settingsEpoch ?? 0 };
+      steps.set(key, step);
+      const context = !request['previous_response_id'] ? rootStepContext(request['input'], session.task!) : null;
+      if (compatible && context) {
+        const owned = step, task = session.task!, pinned = originator === 'codex_exec';
+        owned.pending = (async () => {
+          const catalog = this.catalog.map(m => ({ ...m, supportedReasoningEfforts: m.supportedReasoningEfforts.filter(e => !['ultra', 'ultracode', 'auto', 'ultrafast'].includes(e.reasoningEffort)) }));
+          const patch = await routeCodex({ model, effort: nativeEffort, task, session: session.id, prompt,
+            modelPinned: pinned, effortPinned: pinned, billing, serviceTier: request['service_tier'], cachePolicy,
+            ...(session.previousReply ? { previousReply: session.previousReply } : {}), recentRequests: session.recentRequests ?? [], continuation: { step: owned.index, context },
+            catalog, catalogComplete: this.catalogComplete, catalogExcluded: this.catalogExcluded, config, env: this.env,
+            epoch: sourceEpoch, ...(session.modelCache ? { modelCache: session.modelCache } : {}),
+            ...(session.cache ? { cache: { ...session.cache, ageMs: Math.max(0, Date.now() - session.cache.at) } } : {}),
+            ...(this.trace ? { trace: this.trace } : {}), signal: controller ? AbortSignal.any([signal, controller.signal]) : signal,
+            ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
+          if (!signal.aborted && !controller?.signal.aborted && session.prompt === prompt && session.epoch === sourceEpoch && this.sessions.get(session.id) === session && this.catalogEpoch === epoch) owned.patch = patch;
+        })().catch(() => { owned.patch = {}; }).finally(() => { delete owned.pending; });
+      } else this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: prompt, scope: 'root', index: step.index, reason: 'root_continuation_context_unavailable', known_not_sent: true });
+    }
+    if (step.billing !== billingKey) { step.billing = 'changed'; step.patch = {}; }
+    if (step.pending) await step.pending;
+    if (signal.aborted || controller?.signal.aborted || session.prompt !== prompt || session.epoch !== sourceEpoch || this.sessions.get(session.id) !== session) throw new Error('interrupted policy');
+    const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
+    const target = step.patch.model ?? model, candidate = codexCandidates(this.catalog, current.router.allowAstra, model).find(c => c.id === target);
+    const selectedEffort = step.patch.effortEdit?.kind === 'omit' ? null : step.patch.effort ?? nativeEffort;
+    const valid = !session.rootNativeChanged && (nativePair(step) || selectedPair(step)) && session.routeBilling === billingKey && step.billing === billingKey &&
+      this.env['JEV_CODEX_ENABLED'] !== '0' && current.router.enabled && step.config === JSON.stringify(current.router) &&
+      step.catalogEpoch === this.catalogEpoch && step.settingsEpoch === (session.settingsEpoch ?? 0) && candidate &&
+      (!step.patch.model || codexTargetAllowed(target, current.router.allowAstra) && this.catalog.some(m => m.model === target && generalCodexModel(m)) &&
+        providerContextLimit('codex', target) !== null && Buffer.byteLength(JSON.stringify(request)) <= providerContextLimit('codex', target)!) &&
+      (selectedEffort === null ? candidate.omitEffort : candidate.efforts.includes(selectedEffort));
+    if (!valid) step.patch = {};
+    const reasoning = applyEffort(obj(request['reasoning']) ?? {}, step.patch.effortEdit);
+    return { request: { ...request, ...(step.patch.model ? { model: step.patch.model } : {}), ...(step.patch.effortEdit && step.patch.effortEdit.kind !== 'keep' ? { reasoning } : {}) } };
   }
   /** Gate B owns the first inference; each new observed native continuation gets one batched decision. */
   private async workerRequest(session: Session, request: Obj, signal: AbortSignal, billing: CodexBilling): Promise<{ request: Obj }> {
@@ -1004,11 +1074,14 @@ export class CodexPolicy {
     }
     return typeof affinity === 'string' && this.sessions.has(affinity) ? affinity : null;
   }
-  observeRequest(sessionId: string, request: Obj, billing: CodexBilling = 'unknown'): CodexSubmission | undefined {
+  observeRequest(sessionId: string, request: Obj, billing: CodexBilling = 'unknown', routedInput?: Obj): CodexSubmission | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    const step = session.role ? session.stepRoutes?.get(createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex')) : undefined;
-    const route = requestedUpdateEffort(request).present ? undefined : session.role ? step?.patch : session.route;
+    // Compact may rewrite the submitted history after Router selected this inference.
+    // Bind its pre-Compact identity, but always report the actual submitted model/effort.
+    const key = createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(routedInput ?? request)])).digest('hex');
+    const step = (session.role ? session.stepRoutes : session.rootRoutes)?.get(key);
+    const route = requestedUpdateEffort(request).present ? undefined : session.role || session.rootRoutes ? step?.patch : session.route;
     const baseline = step ?? session.baseline;
     const effort = obj(request['reasoning'])?.['effort'];
     if (typeof request['model'] === 'string') session.requestModel = request['model'];

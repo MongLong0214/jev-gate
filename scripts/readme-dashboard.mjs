@@ -40,7 +40,7 @@ try {
   for (const s of calls) { const t = today[s.host] ??= { calls: 0, input: 0, costUsd: 0, unpriced: 0 }; t.calls++; t.input += s.receipt.input; t.costUsd += s.receipt.costUsd; }
   const activity = ids.map((feature, i) => ({ feature, level: 'ok', metrics: { fired: 32 + i * 8, applied: 12 + i * 3, regression: 0, effect: null, accepted: 12, rejected: 0, pending: 1, cancelled: 0, restored: 8, budgetUsed: 12000, budget: 16000 } }));
   const frame = { at: ago(0), host: 'mixed', unreadable: 0, recording: { enabled: true }, dashboard: { enabled: true }, version: { running: version, installed: version, release: { latest: version } },
-    activity24h: { all: activity, claude: activity, codex: activity.filter(a => a.feature !== 'compact') },
+    activity24h: { all: activity, claude: activity, codex: activity },
     operations: { runs, feed, active: 1, attention: 0, requests: calls.length, features: ids.map((id, i) => ({ id, label: names[i], source: 'trace', count: feed.filter(s => s.feature === id && !s.lifecycle).length, state: 'observed', lastAt: feed.find(s => s.feature === id).at })),
       latency: { measured: values.length, p50: values[Math.ceil(values.length / 2) - 1], p95: values[Math.ceil(values.length * .95) - 1], fastest: values[0], latest: calls[0].durationMs, recent: calls.slice(0, 16).reverse().map(s => ({ at: s.at, ms: s.durationMs })), today } } };
   server = createServer((req, res) => {

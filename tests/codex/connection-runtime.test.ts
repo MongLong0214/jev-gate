@@ -38,7 +38,11 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         if (step === 4) item = fn('exec_command', { cmd: 'vitest run', login: false, max_output_tokens: 8000 });
         if (step === 5) item = final('```json\n' + JSON.stringify({ status: 'done', summary: 'Fixture checked', changed_files: [], interfaces: [], checks: [{ check_id: 'vitest run', result: 'pass', note: 'observed check' }], blockers: [] }) + '\n```');
       } else if (mode === 'compact') { step++; if (step === 1) item = final('Old unrelated narrative. '.repeat(6000)); }
-      const output = mode === 'gate' && step === 4 ? [{ type: 'reasoning', id: `${id}_reasoning`, summary: [], encrypted_content: 'opaque-native-fixture' }, item] : [item];
+      else if (mode === 'continuation') { step++; if (step <= 2) item = fn('exec_command', { cmd: 'printf native-continuation-check', login: false }); }
+      const output = mode === 'continuation' && step <= 2 ? [
+        { type: 'reasoning', id: `${id}_reasoning`, summary: [], encrypted_content: 'opaque-native-root-fixture' },
+        { ...final(step === 1 ? 'The algorithm is implemented. Next, list the fixture files.' : 'A conflicting invariant now requires redesigning the algorithm.'), phase: 'commentary' }, item,
+      ] : mode === 'gate' && step === 4 ? [{ type: 'reasoning', id: `${id}_reasoning`, summary: [], encrypted_content: 'opaque-native-fixture' }, item] : [item];
       const events = [{ type: 'response.created', response: { id, status: 'in_progress', output: [] } }, ...output.flatMap((part, output_index) => [{ type: 'response.output_item.added', output_index, item: part }, { type: 'response.output_item.done', output_index, item: part }]), { type: 'response.completed', response: { id, model: input['model'], status: 'completed', output, usage: { input_tokens: 150000, output_tokens: 3, total_tokens: 150003 } } }];
       // Actual native responses can omit Content-Type. Exercise this through the real transport.
       const bytes = Buffer.from(events.map(event => `data: ${JSON.stringify(event)}\r\n\r\n`).join(''));
@@ -46,7 +50,7 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
     });
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1`;
-    writeFileSync(preload, `const original=globalThis.fetch;globalThis.fetch=async(url,init)=>{if(String(url)!=='https://api.typesafe.ai/v1/systemone')return original(url,init);const r=JSON.parse(init.body);const answers={};for(const [k,q] of Object.entries(r.questions)){const score=k==='tool_calls'?4:k==='size'?2:r.state?.execution?.scope==='child'&&k.startsWith('effort_')?q.criteria.findIndex(v=>v.startsWith('Strong reasoning')):0;const picks={work_shape:'sustained_task',handoff_scope:'self_contained',control:'task_clear',action_risk:'ordinary'};const pick=k.startsWith('relation_')?'omit':picks[k]??Object.keys(q.criteria??{})[0];answers[k]=q.type==='score'?{type:'score',score,confidence:1,probabilities:Object.fromEntries(q.criteria.map((_,i)=>[i,i===score?1:0]))}:q.type==='noul'?{type:'noul',noul:0}:{type:'choice',choice:pick,confidence:1,probabilities:Object.fromEntries(Object.keys(q.criteria).map(v=>[v,v===pick?1:0]))};}return new Response(JSON.stringify({model:r.model,answers}),{headers:{'content-type':'application/json'}})};`);
+    writeFileSync(preload, `const original=globalThis.fetch;globalThis.fetch=async(url,init)=>{if(String(url)!=='https://api.typesafe.ai/v1/systemone')return original(url,init);const r=JSON.parse(init.body);const answers={};for(const [k,q] of Object.entries(r.questions)){const score=k==='tool_calls'?4:k==='size'?2:(r.state?.execution?.scope==='child'||r.state?.execution?.scope==='root'&&r.state?.execution?.step_index===1)&&k.startsWith('effort_')?q.criteria.findIndex(v=>v.startsWith('Strong reasoning')):0;const picks={work_shape:'sustained_task',handoff_scope:'self_contained',control:'task_clear',action_risk:'ordinary'};const pick=k.startsWith('relation_')?'omit':picks[k]??Object.keys(q.criteria??{})[0];answers[k]=q.type==='score'?{type:'score',score,confidence:1,probabilities:Object.fromEntries(q.criteria.map((_,i)=>[i,i===score?1:0]))}:q.type==='noul'?{type:'noul',noul:0}:{type:'choice',choice:pick,confidence:1,probabilities:Object.fromEntries(Object.keys(q.criteria).map(v=>[v,v===pick?1:0]))};}return new Response(JSON.stringify({model:r.model,answers}),{headers:{'content-type':'application/json'}})};`);
     cpSync(join(root, 'plugins/codex'), plugin, { recursive: true, filter: p => !p.includes('/dist/') && !p.endsWith('/dist') });
     const built = spawnSync(process.execPath, [join(root, 'scripts/build-codex.mjs'), join(plugin, 'dist')], { encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
@@ -135,6 +139,18 @@ describe.skipIf(process.env['JEV_CODEX_E2E'] !== '1')('ordinary native Codex aut
         expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === 'low' && r['applied'] === true)).toBe(true);
         expect(nativeRows.filter(r => r['phase'] === 'codex_model_request')).toHaveLength(2);
         expect(nativeRows.some(r => r['phase'] === 'codex_route_applied' && r['applied'] === false)).toBe(false);
+        // Native tool loops preserve opaque reasoning and every tool result while reassessing visible progress.
+        writeFileSync(policyFile, JSON.stringify({ gate: { mode: 'off' }, compact: { enabled: false } }));
+        mode = 'continuation'; step = 0; const rootAt = requests.length, rootContinuation = await start();
+        await turn(rootContinuation, 'Implement and verify the native continuation fixture.');
+        const rootRequests = requests.slice(rootAt);
+        expect(rootRequests.map(r => (r['reasoning'] as Obj)['effort']), nativeErrors).toEqual(['low', 'high', 'low']);
+        expect(JSON.stringify(rootRequests.at(-1)?.['input']), nativeErrors).toContain('opaque-native-root-fixture');
+        expect(JSON.stringify(rootRequests.at(-1)?.['input']), nativeErrors).toContain('native-continuation-check');
+        const rootRows = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj).filter(r => r['session_id'] === rootContinuation);
+        expect(rootRows.filter(r => r['phase'] === 'codex_model_request').map(r => r['index']).sort(), nativeErrors).toEqual([0, 1, 2]);
+        expect(rootRows.filter(r => r['phase'] === 'codex_router_result').map(r => r['index'] ?? 0).sort(), nativeErrors).toEqual([0, 1, 2]);
+        expect(rootRows.filter(r => r['phase'] === 'codex_route_applied').every(r => r['applied'] === true), nativeErrors).toBe(true);
         writeFileSync(policyFile, '{}');
         mode = 'gate'; step = 0; const gateStart = requests.length; const gate = await start();
         await turn(gate, 'Seed the native context.');

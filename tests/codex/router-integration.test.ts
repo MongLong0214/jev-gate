@@ -65,7 +65,135 @@ const nativeBillingFixture = async (wait?: Promise<void>) => {
   ];
   return { ...f, request: { ...f.request, model: 'gpt-6.1-sol' } };
 };
+const rootContinuationFixture = async (wait?: Promise<void>) => {
+  const f = await nativeBillingFixture(), signal = new AbortController();
+  f.fetchImpl.mockImplementation(async (_url, init) => {
+    const req = JSON.parse(String(init?.body)); f.sent.push(req);
+    if (f.sent.length > 1 && wait) await wait;
+    return new Response(JSON.stringify({ model: req.model, answers: answers(req, f.sent.length === 1 ? 'gpt-6-luna' : 'gpt-6.1-sol', 'low') }), { headers: { 'content-type': 'application/json' } });
+  });
+  const first = { ...f.request, input: [{ type: 'message', role: 'user', content: 'Implement the fixture.' }] };
+  await f.policy.externalRequest('root', first, signal.signal, 'codex-tui', 'chatgpt');
+  const next = { ...first, input: [...first.input,
+    { type: 'reasoning', id: 'native-reasoning', encrypted_content: 'opaque-reasoning-canary', summary: [] },
+    { type: 'message', role: 'assistant', phase: 'commentary', content: 'A conflicting invariant now requires redesigning the algorithm.' },
+    { type: 'function_call', call_id: 'check', name: 'exec_command', arguments: 'private-arguments-canary' },
+    { type: 'function_call_output', call_id: 'check', output: 'private-results-canary' }] };
+  return { ...f, first, next, signal };
+};
 describe('native Codex billing-aware model routing', () => {
+  it('reassesses a root tool continuation without replacing its contract or repeating a retry assessment', async () => {
+    const f = await nativeBillingFixture(), signal = new AbortController().signal;
+    f.fetchImpl.mockImplementation(async (_url, init) => {
+      const req = JSON.parse(String(init?.body)); f.sent.push(req);
+      const model = f.sent.length === 2 ? 'gpt-6-luna' : 'gpt-6.1-sol';
+      return new Response(JSON.stringify({ model: req.model, answers: answers(req, model, 'low') }), { headers: { 'content-type': 'application/json' } });
+    });
+    const first = { ...f.request, input: [{ type: 'message', role: 'user', content: 'Implement the fixture.' }] };
+    expect((await f.policy.externalRequest('root', first, signal, 'codex-tui', 'chatgpt')).request.model).toBe('gpt-6.1-sol');
+    const next = { ...first, input: [...first.input,
+      { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'The algorithm is implemented. Next, list the fixture files.' }] },
+      { type: 'function_call', call_id: 'files', name: 'exec_command', arguments: 'private-arguments-canary' },
+      { type: 'function_call_output', call_id: 'files', output: 'private-results-canary' }] };
+    const selected = (await f.policy.externalRequest('root', next, signal, 'codex-tui', 'chatgpt')).request;
+    expect(selected).toEqual({ ...next, model: 'gpt-6-luna', reasoning: { ...next.reasoning, effort: 'low' } });
+    expect(selected.input).toBe(next.input); expect(selected.tools).toBe(next.tools);
+    expect(f.policy.observeRequest('root', selected)).toMatchObject({ index: 1, scope: 'root', model: 'gpt-6-luna' });
+    expect((await f.policy.externalRequest('root', next, signal, 'codex-tui', 'chatgpt')).request).toEqual(selected);
+    expect(f.fetchImpl).toHaveBeenCalledTimes(2);
+    expect(f.sent[1]?.state).toMatchObject({ task: { text: 'Implement the fixture.' }, execution: { scope: 'root', step_index: 1,
+      context: { outcome_coverage: 'completion_only', assistant_update: { text: 'The algorithm is implemented. Next, list the fixture files.' } } } });
+    expect(JSON.stringify(f.sent[1])).not.toContain('private-arguments-canary'); expect(JSON.stringify(f.sent[1])).not.toContain('private-results-canary');
+    expect(JSON.stringify(f.sent[1]?.questions)).toContain('NEXT inference');
+    const hard = { ...next, input: [...next.input,
+      { type: 'message', role: 'assistant', phase: 'commentary', content: 'A conflicting invariant requires redesigning the algorithm.' },
+      { type: 'function_call', call_id: 'check', name: 'exec_command', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'check', output: 'failure details stay local' }] };
+    expect((await f.policy.externalRequest('root', hard, signal, 'codex-tui', 'chatgpt')).request.model).toBe('gpt-6.1-sol');
+    expect(f.fetchImpl).toHaveBeenCalledTimes(3); f.rpc.close();
+  });
+  it('shares a pending continuation and preserves opaque history, native fields and submission attribution', async () => {
+    let release!: () => void; const f = await rootContinuationFixture(new Promise<void>(resolve => { release = resolve; }));
+    const one = f.policy.externalRequest('root', f.next, f.signal.signal, 'codex-tui', 'chatgpt');
+    const two = f.policy.externalRequest('root', f.next, f.signal.signal, 'codex-tui', 'chatgpt');
+    await vi.waitFor(() => expect(f.sent).toHaveLength(2)); release();
+    const selected = (await one).request;
+    expect(selected).toEqual({ ...f.next, reasoning: { ...f.next.reasoning, effort: 'low' } });
+    expect((await two).request).toEqual(selected); expect(selected.input).toBe(f.next.input);
+    const binding = f.policy.observeRequest('root', selected)!;
+    expect(binding).toMatchObject({ index: 1, scope: 'root' });
+    const rows = readdirSync(join(dir, 'trace')).map(file => JSON.parse(readFileSync(join(dir, 'trace', file), 'utf8')));
+    expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_route_applied', request_id: binding.requestId, index: 1, applied: true }));
+    for (const canary of ['opaque-reasoning-canary', 'private-arguments-canary', 'private-results-canary']) expect(JSON.stringify(f.sent)).not.toContain(canary);
+    expect(f.fetchImpl).toHaveBeenCalledTimes(2); f.rpc.close();
+  });
+  it('binds Router decisions to the actual submitted request after Compact rewrites older tool evidence', async () => {
+    const f = await nativeBillingFixture(), signal = new AbortController().signal;
+    const older = Array.from({ length: 8 }, (_, i) => [
+      { type: 'function_call', call_id: `old-${i}`, name: 'exec_command', arguments: '{}' },
+      { type: 'function_call_output', call_id: `old-${i}`, output: 'Archived exact fixture record.\n'.repeat(800) },
+    ]).flat();
+    const first = { ...f.request, input: [...older, { type: 'message', role: 'user', content: 'Implement the fixture.' }] };
+    const next = { ...first, input: [...first.input,
+      { type: 'message', role: 'assistant', phase: 'commentary', content: 'The implementation is ready; next list the fixture files.' },
+      { type: 'function_call', call_id: 'current', name: 'exec_command', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'current', output: 'current evidence' }] };
+    for (const [index, request] of [first, next].entries()) {
+      const selected = (await f.policy.externalRequest('root', request, signal, 'codex-tui', 'chatgpt')).request;
+      const compacted = await f.policy.compactRequest('root', selected, signal, 'inference');
+      expect(compacted.receipt?.applied).toBe(true); expect(compacted.request.input).not.toEqual(selected.input);
+      const binding = f.policy.observeRequest('root', compacted.request, 'chatgpt', selected)!;
+      expect(binding).toMatchObject({ index, model: 'gpt-6-luna', effort: 'low' });
+      const rows = readdirSync(join(dir, 'trace')).map(file => JSON.parse(readFileSync(join(dir, 'trace', file), 'utf8')));
+      expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_route_applied', request_id: binding.requestId, index, applied: true }));
+    }
+    f.rpc.close();
+  });
+  it.each(['config', 'catalog', 'settings', 'billing', 'manual'] as const)('rejects a pending continuation and its retry when %s changes', async kind => {
+    let release!: () => void; const f = await rootContinuationFixture(new Promise<void>(resolve => { release = resolve; }));
+    const pending = f.policy.externalRequest('root', f.next, f.signal.signal, 'codex-tui', 'chatgpt');
+    await vi.waitFor(() => expect(f.sent).toHaveLength(2));
+    if (kind === 'config') saveConfig({ enabled: false });
+    if (kind === 'catalog') f.policy.catalog = f.policy.catalog.map(m => m.model === 'gpt-6.1-sol' ? { ...m, supportedReasoningEfforts: [{ reasoningEffort: 'high' }] } : m);
+    if (kind === 'settings') await f.rpc.onResponse({}, 'thread/settings/update', { threadId: 'root', model: 'gpt-6.1-sol', effort: 'high' });
+    const changed = kind === 'manual' ? { ...f.next, model: 'manual-model' } : f.next;
+    const retry = kind === 'billing' || kind === 'manual' ? f.policy.externalRequest('root', changed, f.signal.signal, 'codex-tui', kind === 'billing' ? 'api' : 'chatgpt') : null;
+    release(); expect((await pending).request).toEqual(f.next);
+    if (retry) expect((await retry).request).toEqual(changed);
+    expect((await f.policy.externalRequest('root', changed, f.signal.signal, 'codex-tui', 'chatgpt')).request).toEqual(changed);
+    expect(f.fetchImpl).toHaveBeenCalledTimes(2); f.rpc.close();
+  });
+  it.each(['prompt', 'interrupt', 'compact'] as const)('never applies a continuation after its %s generation ends', async kind => {
+    let release!: () => void; const f = await rootContinuationFixture(new Promise<void>(resolve => { release = resolve; }));
+    const pending = f.policy.externalRequest('root', f.next, f.signal.signal, 'codex-tui', 'chatgpt');
+    const rejected = expect(pending).rejects.toThrow('interrupted policy');
+    await vi.waitFor(() => expect(f.sent).toHaveLength(2));
+    await f.policy.externalHook({ hook_event_name: kind === 'prompt' ? 'UserPromptSubmit' : kind === 'compact' ? 'PostCompact' : 'Interrupt', session_id: 'root', turn_id: 'replacement', prompt: 'A new task.' });
+    release(); await rejected; expect(f.fetchImpl).toHaveBeenCalledTimes(2); f.rpc.close();
+  });
+  it.each(['no_progress', 'secret', 'orphan', 'incremental', 'unknown'] as const)('keeps the whole-contract decision without another paid assessment for %s context', async kind => {
+    const f = await rootContinuationFixture();
+    const input: Obj[] = f.next.input.map(item => item.type === 'message' && item.role === 'assistant' ? { ...item, content: kind === 'secret' ? 'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789' : kind === 'no_progress' ? '' : item.content, phase: kind === 'no_progress' ? 'analysis' : 'commentary' } : item);
+    if (kind === 'orphan') input.push({ type: 'function_call_output', call_id: 'unknown', output: 'private' });
+    if (kind === 'unknown') input.push({ type: 'unknown_native_item' });
+    const request = { ...f.next, input, ...(kind === 'incremental' ? { previous_response_id: 'native-response' } : {}) };
+    expect((await f.policy.externalRequest('root', request, f.signal.signal, 'codex-tui', 'chatgpt')).request).toEqual({ ...request, model: 'gpt-6-luna', reasoning: { ...request.reasoning, effort: 'low' } });
+    expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
+  });
+  it('does not carry a next-inference patch into an unobservable later step or reassess after the bound', async () => {
+    const f = await rootContinuationFixture();
+    await f.policy.externalRequest('root', f.next, f.signal.signal, 'codex-tui', 'chatgpt');
+    const next = { ...f.first, input: [...f.first.input, { type: 'reasoning', encrypted_content: 'opaque-only-next' }] };
+    expect((await f.policy.externalRequest('root', next, f.signal.signal, 'codex-tui', 'chatgpt')).request.model).toBe('gpt-6-luna');
+    const steps = f.policy.sessions.get('root')!.rootRoutes!, last = [...steps.values()].at(-1)!;
+    while (steps.size < 128) steps.set(`bound-${steps.size}`, { ...last, index: steps.size });
+    const overflow = { ...f.next, input: [...f.next.input, { type: 'message', role: 'assistant', phase: 'commentary', content: 'Next bounded step.' }] };
+    expect((await f.policy.externalRequest('root', overflow, f.signal.signal, 'codex-tui', 'chatgpt')).request).toBe(overflow);
+    const binding = f.policy.observeRequest('root', overflow)!;
+    const rows = readdirSync(join(dir, 'trace')).map(file => JSON.parse(readFileSync(join(dir, 'trace', file), 'utf8')));
+    expect(rows.filter(row => row.phase === 'codex_route_applied' && row.request_id === binding.requestId)).toHaveLength(0);
+    expect(f.fetchImpl).toHaveBeenCalledTimes(2); f.rpc.close();
+  });
   it.each(['chatgpt', 'api', 'unknown'] as const)('preserves the native input and applies only an eligible pair for %s billing', async billing => {
     const f = await nativeBillingFixture();
     const expected = billing === 'chatgpt' ? 'gpt-6-luna' : f.request.model;

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.44 — 2026-10-22 — Route observable root continuations
+
+- Allow Codex to reassess model and effort within a long root tool loop instead of reusing its first whole-task selection for every inference (#300). Retain the original contract and use only screened visible progress and closed tool metadata for a next-step judgment; uncertain judgments preserve native execution. Missing continuation context retains the initial whole-task decision.
+- Deduplicate retries and concurrent assessments, bound identities per prompt, and invalidate stale decisions after cancellation, compaction, user settings, policy, account or catalog changes. Preserve native input, tool results, assistant phases, opaque reasoning and permissions.
+- Bind Router submission records to their selection even when independent Compact processing changes older history. Continue recording the actual submitted model and effort.
+- A bounded real OAuth protocol diagnostic with scripted judgments completed Sol → Luna → Sol and returned the required result. Actual Jev judgments on a separate fixed three-phase diagnostic conservatively kept Sol at an uncertain easy step; no confidence floor was lowered. Neither diagnostic proves the required 40% reduction in weekly subscription allowance. Native allowance readings and response headers were integer percentages, so unchanged readings are not zero consumption. #300 and #317 remain open for measured product effect.
+
 ## v0.8.43 — 2026-10-21 — Preserve standalone repetition counts
 
 - Represent a wholly repeated eligible old tool output with its exact unit and count even when no identical invocation exists (#317). Keep the latest six results, tool links, metadata, error and secret handling, request boundaries and native compaction output unchanged. Exact representations remain protected from semantic omission; no paid assessment or external retrieval is added.
