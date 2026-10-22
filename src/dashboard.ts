@@ -158,9 +158,12 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
     };
     // Removing a large directory notifies once per file; the names go to the activity thread in one message.
     const invalidations = new Map<string, Set<string> | null>(); // null: the whole directory
+    const reconciliations = new Set<string>();
     const flush = (): void => {
       for (const [dir, names] of invalidations) engine.invalidate(dir, names ? [...names] : undefined).catch(() => { /* A replaced thread starts from a full read. */ });
       invalidations.clear();
+      for (const dir of reconciliations) engine.reconcile(dir).catch(() => { /* A replaced thread starts from a full read. */ });
+      reconciliations.clear();
     };
     const kick = (dir: string, name?: string): void => {
       if (disposed) return;
@@ -200,22 +203,27 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       return loading ?? Promise.resolve();
     };
     const preferencesChanged = (): void => { if (!disposed) { extra = extras(); changed = true; broadcast(); schedule(); } };
+    const traceWatchers = [...directories].map(dir => watchDashboardPath(dir, true, name => kick(dir, name), () => { reconciliations.add(dir); changed = true; schedule(); }));
     const watchers = [
-      ...[...directories].map(dir => watchDashboardPath(dir, true, name => kick(dir, name))),
+      ...traceWatchers,
       ...[recordingPath(sources.env), dashboardSettingsPath(sources.env), credentialsPath(sources.env),
         join(sources.env['HOME'] ?? homedir(), '.claude/plugins/installed_plugins.json'),
         ...['.claude-plugin', '.codex-plugin'].map(kind => join(PLUGIN_ROOT, kind, 'plugin.json'))]
         .map(path => watchDashboardPath(path, false, preferencesChanged)),
       ...(sources.host === 'codex' ? [] : [watchDashboardPath(livenessPath(sources.env), false, () => { changed = true; schedule(); })]),
     ];
-    // A quiet stream only sends a small heartbeat. Slow reconciliation recovers missed OS notifications and failed
-    // watchers; the reader reuses immutable trace records, rather than rebuilding or rereading history every second.
+    // A quiet stream only sends a small heartbeat. A constant number of metadata checks covers OS notifications
+    // missed during watcher registration or a busy batch, without loading or rereading an unchanged history.
     const heartbeat = setInterval(() => broadcast(true), 5000); heartbeat.unref();
+    let checks = 0;
     const reconcile = setInterval(() => {
       for (const watcher of watchers) watcher.reconcile();
-      extra = extras();
-      if (subscribers.size) { changed = true; schedule(); }
-    }, 30_000); reconcile.unref();
+      // Rare filename reconciliation also covers a filesystem with unchanged directory timestamps.
+      if (++checks % 60 === 0) {
+        extra = extras();
+        if (subscribers.size) { changed = true; schedule(); }
+      }
+    }, 500); reconcile.unref();
     let engineClosed: Promise<void> | undefined;
     const dispose = (): void => {
       if (disposed) return;
@@ -224,7 +232,7 @@ export const startDashboard = (sources: DashboardSources, port: number, runtime:
       if (due) clearTimeout(due);
       clearInterval(heartbeat); clearInterval(reconcile); controller.abort();
       for (const watcher of watchers) watcher.close();
-      subscribers.clear(); viewers.clear(); invalidations.clear();
+      subscribers.clear(); viewers.clear(); invalidations.clear(); reconciliations.clear();
       engineClosed = engine.close();
     };
     const server: Server = createServer(async (req, res) => {

@@ -118,7 +118,8 @@ export const serveAutomaticDashboard = async (root: string, env: Env, token: str
     if (!dashboardStatus(env).enabled || state?.['token'] !== token) stop();
   };
   const watchers = [dashboardSettingsPath(env), runtimePath(env)].map(path => watchDashboardPath(path, false, verify));
-  const check = setInterval(() => { for (const watcher of watchers) watcher.reconcile(); verify(); }, 30_000);
+  let checks = 0;
+  const check = setInterval(() => { for (const watcher of watchers) watcher.reconcile(); if (++checks % 60 === 0) verify(); }, 500);
   check.unref(); process.once('SIGTERM', stop); process.once('SIGINT', stop);
   void server.closed.finally(cleanup);
   verify(); // Catch a preference or ownership change between startup and watcher registration.

@@ -61,6 +61,7 @@ export const activityHandler = (sources: DashboardSources) => {
       return step ? JSON.stringify(step) : null;
     },
     invalidate(dir: string, names?: string[]): void { if (names) for (const name of names) traceReader.invalidate(dir, name); else traceReader.invalidate(dir); },
+    reconcile(dir: string): void { traceReader.reconcile(dir); },
   };
 };
 
@@ -108,6 +109,7 @@ export const activityEngine = (sources: DashboardSources): ActivityEngine => {
     full: () => call({ op: 'full', args: [] }),
     step: (runId, stepId) => call({ op: 'step', args: [runId, stepId] }),
     invalidate: (dir, names) => call({ op: 'invalidate', args: [dir, names] }),
+    reconcile: dir => call({ op: 'reconcile', args: [dir] }),
     close: async () => { const thread = worker; stop(); await thread?.terminate(); },
   };
 };

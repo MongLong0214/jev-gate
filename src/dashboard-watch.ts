@@ -3,8 +3,8 @@ import { basename, dirname, relative } from 'node:path';
 
 /** Watch a directory's contents or one file, including creation and atomic replacement. A missing path is followed
  * from its nearest existing parent; no polling of every descendant is needed while a host has not recorded yet. */
-export const watchDashboardPath = (path: string, directory: boolean, changed: (name?: string) => void) => {
-  let watchers: FSWatcher[] = [], binding = '', stamp = '', closed = false;
+export const watchDashboardPath = (path: string, directory: boolean, changed: (name?: string) => void, reconciled: () => void = changed) => {
+  let watchers: FSWatcher[] = [], binding = '', stamp = '', knownIdentity = '', closed = false;
   const sync = (notify = true): void => {
     if (closed) return;
     let identity = '', nextStamp = '';
@@ -12,12 +12,11 @@ export const watchDashboardPath = (path: string, directory: boolean, changed: (n
       const stat = lstatSync(path);
       if (!stat.isSymbolicLink() && (directory ? stat.isDirectory() : stat.isFile())) {
         identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
-        // Immutable traces are reconciled by filename in the activity reader. A directory's mtime moving after an
-        // already observed append must not invalidate and reread its entire history at the next safety check.
-        nextStamp = directory ? identity : `${identity}:${stat.mtimeMs}:${stat.size}`;
+        nextStamp = `${identity}:${stat.mtimeMs}:${stat.ctimeMs}:${directory ? '' : stat.size}`;
       }
     } catch { /* A parent watcher follows a path that appears later. */ }
-    const moved = nextStamp !== stamp; stamp = nextStamp;
+    const moved = nextStamp !== stamp, replaced = identity !== knownIdentity;
+    stamp = nextStamp; knownIdentity = identity;
     let parent = dirname(path);
     for (;;) {
       try { const stat = lstatSync(parent); if (stat.isDirectory() && !stat.isSymbolicLink()) break; } catch { /* Keep walking. */ }
@@ -37,8 +36,9 @@ export const watchDashboardPath = (path: string, directory: boolean, changed: (n
       add(parent, name => { if (name === undefined || name === child) { sync(false); changed(); } });
       if (directory && identity) add(path, name => changed(name));
     }
-    if (notify && moved) changed();
+    // An unnotified append needs a name reconciliation, not an explicit invalidation that rereads every immutable file.
+    if (notify && moved) (directory && !replaced ? reconciled : changed)();
   };
   sync(false);
-  return { reconcile: (): void => sync(), close: (): void => { closed = true; for (const watcher of watchers) watcher.close(); watchers = []; } };
+  return { reconcile: (notify = true): void => sync(notify), close: (): void => { closed = true; for (const watcher of watchers) watcher.close(); watchers = []; } };
 };

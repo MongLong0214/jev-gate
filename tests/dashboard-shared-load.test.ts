@@ -98,6 +98,16 @@ describe('dashboard rebuild sharing (#210)', () => {
     expect(loads.count).toBe(3);
   });
 
+  it('discovers a missed name alongside a notified name on explicit name reconciliation', async () => {
+    const trace = make(), handler = activityHandler({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } });
+    const record = (name: string): void => writeFileSync(join(trace, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
+    record('a.json'); await handler.load();
+    record('b.json'); record('missed.json');
+    handler.invalidate(trace, ['b.json']); await handler.load();
+    handler.reconcile(trace); await handler.load();
+    expect(JSON.parse(handler.full()!.json).traceFiles).toBe(3);
+  });
+
   it('rebuilds when only the liveness ring changed', async () => {
     const trace = make(), state = make(), handler = activityHandler({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: state } });
     writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
@@ -354,8 +364,7 @@ describe('event driven dashboard (#327)', () => {
     } finally { release(); await stream.close(); await server.close(); }
   });
 
-  it('recovers dropped file and preference notifications with one bounded reconciliation', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  it('recovers dropped file and preference notifications promptly with one load only when metadata changes', async () => {
     const trace = make(), env = { HOME: make(), JEV_GATE_STATE_DIR: make() }; record(trace, 'a.json');
     const server = await startDashboard({ traceDir: trace, env }, 0), stream = await viewer(server.url);
     try {
@@ -364,11 +373,12 @@ describe('event driven dashboard (#327)', () => {
       await new Promise(resolve => setTimeout(resolve, 100));
       expect(stream.states.at(-1)?.['traceFiles']).toBe(1);
       const before = gate.started;
-      await vi.advanceTimersByTimeAsync(30_000);
-      await vi.waitFor(() => expect(stream.states.at(-1)?.['traceFiles']).toBe(2));
+      await vi.waitFor(() => expect(stream.states.at(-1)?.['traceFiles']).toBe(2), { timeout: 1500 });
       expect(stream.states.at(-1)?.['recording']).toEqual({ enabled: false });
       expect(gate.started - before).toBe(1);
-    } finally { watchEvents.dropped = false; await stream.close(); await server.close(); vi.useRealTimers(); }
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      expect(gate.started - before).toBe(1);
+    } finally { watchEvents.dropped = false; await stream.close(); await server.close(); }
   });
 
   it('updates the 24-hour fact boundary on its deadline without a new file or polling', async () => {
