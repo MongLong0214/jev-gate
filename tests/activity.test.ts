@@ -98,7 +98,7 @@ describe('credit exhaustion', () => {
   });
   it('shows the alert in the page only when the snapshot says so', () => {
     expect(DASHBOARD_PAGE).toContain('id="credit"');
-    expect(DASHBOARD_PAGE).toContain("c.className='credit'+(credit?.exhausted?' er':'')");
+    expect(DASHBOARD_PAGE).toContain("c.textContent=credit?.exhausted?label('크레딧 소진','Credit exhausted'):''");
   });
 });
 
@@ -308,15 +308,16 @@ describe('dashboard server', () => {
   it.each(['ko', 'en'])('renders unknown and mismatched versions without interrupting live rendering (%s)', lang => {
     const functions = DASHBOARD_PAGE.split('\n').filter(line => line.startsWith('function showVersion(') || line.startsWith('function versionState(')).join('\n');
     const render = (version: { running: string; installed: string | null }) => {
-      const badge = { dataset: {} as Record<string, string>, hidden: true, textContent: '', title: '' };
+      const badge = { dataset: {} as Record<string, string>, hidden: true, textContent: '', title: '', ariaLabel: '' };
       runInNewContext(`${functions}\nshowVersion(version)`, { lang, version, $: () => badge, date: (s: string) => s, label: (ko: string, en: string) => lang === 'ko' ? ko : en });
       return badge;
     };
     const unknown = render({ running: '0.7.1', installed: null });
-    expect(unknown.hidden).toBe(false); expect(unknown.textContent).toBe(lang === 'ko' ? 'v0.7.1 · 최신 여부 미확인' : 'v0.7.1 · Update status unknown');
+    expect(unknown.hidden).toBe(false); expect(unknown.textContent).toBe('v0.7.1');
+    expect(unknown.ariaLabel).toMatch(lang === 'ko' ? /^v0\.7\.1 · 최신 여부 미확인 · / : /^v0\.7\.1 · Update status unknown · /);
     expect(unknown.title).toContain(lang === 'ko' ? '설치된 Claude 플러그인: 미확인' : 'Installed Claude plugin: unknown');
     const mismatch = render({ running: '0.7.0', installed: '0.7.1' });
-    expect(mismatch.textContent).toContain(lang === 'ko' ? '설치 버전 다름' : 'Installed version differs');
+    expect(mismatch.textContent).toBe('v0.7.0 ≠ v0.7.1'); expect(mismatch.ariaLabel).toContain(lang === 'ko' ? '설치 버전 다름' : 'Installed version differs');
     expect(mismatch.title).toContain(lang === 'ko' ? '기존 세션은 이전 훅' : 'Existing sessions can retain older hooks');
   });
 
@@ -366,7 +367,7 @@ describe('dashboard server', () => {
       const page = await fetch(server.url);
       expect(page.status).toBe(200);
       const html = await page.text();
-      expect(html).toContain('실행 회로');
+      expect(html).toContain('id="stages"');
       expect(html).toContain('id="theme"');
       expect(html).toContain('id="language"');
       const body = (await (await fetch(`${server.url}api/snapshot`)).json()) as Record<string, unknown> & { operations: { runs: unknown[] } };
@@ -385,10 +386,10 @@ describe('dashboard server', () => {
     const server = await startDashboard({ traceDir: trace, env: { JEV_GATE_STATE_DIR: make() } }, 0);
     try {
       type Shown = Record<string, unknown>;
-      const body = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { runs: Array<{ id: string; steps: Shown[] }>; feed: Shown[] } };
-      const shown = [...body.operations.runs.flatMap(r => r.steps), ...body.operations.feed];
-      expect(shown.length).toBeGreaterThan(0);
-      for (const s of shown) for (const field of ['details', 'routing', 'sessionId', 'agentId']) expect(s).not.toHaveProperty(field);
+      const body = await (await fetch(`${server.url}api/snapshot`)).json() as { operations: { runs: Array<{ id: string; steps: Shown[] }> } };
+      const shown = body.operations.runs.flatMap(r => r.steps);
+      expect(shown.length).toBeGreaterThan(0); expect(body.operations).not.toHaveProperty('feed');
+      for (const s of shown) for (const field of ['details', 'routing', 'sessionId', 'agentId', 'callId']) expect(s).not.toHaveProperty(field);
       const run = body.operations.runs[0]!, full: Shown[] = [];
       for (const s of run.steps) {
         const response = await fetch(`${server.url}api/step?run=${encodeURIComponent(run.id)}&step=${encodeURIComponent(String(s['id']))}`);
@@ -413,10 +414,11 @@ describe('dashboard server', () => {
     if (!reader) throw new Error('no body');
     const frames = liveFrames(reader);
     type Step = { state: string; title: string; summary: string; executionPath?: string };
-    const pull = (): Promise<{ operations: { feed: Step[] } }> => frames.next(2500, 'live event');
+    const pull = (): Promise<{ operations: { runs: Array<{ steps: Step[] }> } }> => frames.next(2500, 'live event');
+    const steps = (frame: { operations: { runs: Array<{ steps: Step[] }> } }): Step[] => frame.operations.runs.flatMap(run => run.steps);
     try {
       const first = await pull();
-      expect(first.operations.feed).toEqual([]);
+      expect(steps(first)).toEqual([]);
       write(trace, 'admission_intent-1.json', {
         phase: 'admission_intent',
         written_at: new Date().toISOString(),
@@ -427,8 +429,8 @@ describe('dashboard server', () => {
       });
       let working = first;
       const until = Date.now() + 2500;
-      while (!working.operations.feed.length && Date.now() < until) working = await pull();
-      expect(working.operations.feed[0]).toMatchObject({ state: 'active', title: 'Gate A · Jev 요청' });
+      while (!steps(working).length && Date.now() < until) working = await pull();
+      expect(steps(working).find(step => step.title === 'Gate A · Jev 요청')).toMatchObject({ state: 'active' });
       expect(JSON.stringify(working)).not.toContain('SUPER_SECRET_PROMPT_TEXT');
       write(trace, 'admission_result-1.json', {
         phase: 'admission_result',
@@ -443,9 +445,9 @@ describe('dashboard server', () => {
       });
       let shut = working;
       const untilDone = Date.now() + 2500;
-      while (!shut.operations.feed.some((step) => step.executionPath === 'direct') && Date.now() < untilDone) shut = await pull();
-      expect(shut.operations.feed.some((step) => step.state === 'active')).toBe(false);
-      expect(shut.operations.feed.find((step) => step.executionPath)).toMatchObject({ executionPath: 'direct', summary: '위임 이득 부족' });
+      while (!steps(shut).some((step) => step.executionPath === 'direct') && Date.now() < untilDone) shut = await pull();
+      expect(steps(shut).some((step) => step.state === 'active')).toBe(false);
+      expect(steps(shut).find((step) => step.executionPath)).toMatchObject({ executionPath: 'direct', summary: '위임 이득 부족' });
     } finally {
       await reader.cancel();
       await server.close();

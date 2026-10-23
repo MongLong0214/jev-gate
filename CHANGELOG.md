@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.61 — 2026-10-23 — Rebuild the dashboard layout and cut its live-update cost
+
+- Rebuild the dashboard to the approved layout: a KPI row, a Jev call scatter (one dot per call, height = response time) with a 60-minute band and the last recorded round trip replayed on a Gate⇄Jev track, a stage strip for Gate A, Gate B, workers, Router and Compact, 24-hour status per feature, the call log with its decision basis, and the run list with a run trace view (timeline and stage detail). Korean/English and light/dark switching stay; the palette is neutral with a blue accent and prefers locally installed Geist/Inter (no font is downloaded). `src/dashboard-circuit.ts` is removed and the README previews are regenerated.
+- Values stay recorded facts: an absent value shows "–", recorded text is written as text, and the page CSP is unchanged.
+- Live frames no longer carry the server's recent feed (the page derives it from runs) or each step's `callId` (server-side pairing; `/api/step` still returns it). Live updates are coalesced to at most four a second (previously every 16 ms). A rebuild finds the next age edge from new records alone while the earliest known edge is still ahead, and the activity thread caps its young generation at 32 MB.
+- The page redraws time labels once a second and slides the dot layer with one transform in between, does nothing in a hidden tab and draws the newest frame when it is shown, drops dots due to leave the window within a second, steps its blink animations, and switches event highlights without color transitions.
+- Measured once each on a replay of a real 38.7k-file (29.6 MB) Claude and Codex history: at 2 new records/s, bytes streamed per 60 s fell from 10.24 MB to 1.22 MB, server process CPU from 12.0% to 10.9% of one core and peak RSS from 481 MB to 370 MB; headless Chrome (all processes) used 11.3% instead of 20.5% while streaming and 4.3% instead of 13.1% idle. These are display costs, not token savings.
+- Display only. Gate, Router, Compact, Codex and recording behavior are unchanged.
+
 ## v0.8.60 — 2026-10-23 — Diagnose the installed Codex hook bootstrap correctly
 
 - Compare installed Codex hook commands against the actual command captured when the package is built, instead of the obsolete direct-file invocation. Check PreCompact and PostCompact as well as the other nine events, including exact native timeouts. Changed commands, matchers, duplicate/missing handlers and invalid timeouts still fail (#373).

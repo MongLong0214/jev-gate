@@ -34,6 +34,17 @@ export const activityHandler = (sources: DashboardSources) => {
   const livenessStamp = (): string => {
     try { const stat = livenessFile ? statSync(livenessFile, { throwIfNoEntry: false }) : undefined; return stat ? `${stat.ino}:${stat.mtimeMs}:${stat.size}` : ''; } catch { return ''; }
   };
+  // New records extend a directory's sorted history, so while the earliest age edge found last time is still ahead, only
+  // they can bring an earlier one. Scanning every record's edges took over a third of each rebuild of a long history.
+  const edges = new Map<string, { records: TraceRead['records']; until: number }>();
+  const edgeOf = (dir: string, records: TraceRead['records'], now: number): number => {
+    const known = edges.get(dir);
+    const until = known && known.until > now && records.length >= known.records.length && known.records.every((r, i) => records[i] === r)
+      ? Math.min(known.until, activityStableUntil(records.slice(known.records.length), now))
+      : activityStableUntil(records, now);
+    edges.set(dir, { records, until });
+    return until;
+  };
   const preferenceStamp = (): string => [recordingPath(sources.env), credentialsPath(sources.env)].map(path => {
     try { const stat = statSync(path, { throwIfNoEntry: false }); return stat ? `${stat.ino}:${stat.mtimeMs}:${stat.size}` : ''; } catch { return ''; }
   }).join('|');
@@ -48,7 +59,7 @@ export const activityHandler = (sources: DashboardSources) => {
       const { events: _events, live: _live, ...rest } = activity, shown = { ...rest, operations: frameOperations(activity.operations) };
       const base = memo?.key ?? null, diff = diffFrame(memo, shown, () => `${epoch}.${++sequence}`);
       memo = diff.memo; current = shown; whole = null; operations = activity.operations;
-      checks.edge = Math.min(...reads.map(read => activityStableUntil(read.records, now.getTime())));
+      checks.edge = Math.min(...reads.map((read, i) => edgeOf(dirs[i]!, read.records, now.getTime())));
       const until = Math.min(operationsStableUntil(), checks.due, checks.edge);
       const loaded = { key: memo.key, base: diff.patch ? base : null, patch: diff.patch, until, ms: performance.now() - started };
       last = { loaded, reads, liveness, preferences };
@@ -89,7 +100,9 @@ export const activityEngine = (sources: DashboardSources): ActivityEngine => {
   if (existsSync(fileURLToPath(script))) {
     try {
       // The thread needs no Node flags, and an inherited `--input-type`/`-e` from the parent would stop it from starting.
-      const started: Worker = new Worker(script, { execArgv: [], workerData: { ...sources, env: { ...sources.env } } });
+      // V8 grew the young generation past 100 MB for the first read of a long history and kept it; a 32 MB cap held a
+      // day's history in about 80 MB less memory at the same rebuild time.
+      const started: Worker = new Worker(script, { execArgv: [], workerData: { ...sources, env: { ...sources.env } }, resourceLimits: { maxYoungGenerationSizeMb: 32 } });
       started.on('message', ({ id, value, error }: { id: number; value?: never; error?: string }) => {
         const call = calls.get(id); if (!call) return;
         calls.delete(id);
