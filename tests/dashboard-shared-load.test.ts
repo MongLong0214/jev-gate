@@ -376,10 +376,10 @@ describe('event driven dashboard (#327)', () => {
     try {
       await vi.waitFor(() => expect(stream.states.at(-1)?.['traceFiles']).toBe(1));
       await new Promise(resolve => setTimeout(resolve, rebuildWait(0) + 100));
-      watchEvents.dropped = true; record(trace, 'b.json'); setRecording(env, false);
-      await new Promise(resolve => setTimeout(resolve, 100));
-      expect(stream.states.at(-1)?.['traceFiles']).toBe(1);
+      // The 500 ms reconciliation can run immediately after this change. Count
+      // its rebuild from before the change; prompt recovery need not stay stale.
       const before = gate.started;
+      watchEvents.dropped = true; record(trace, 'b.json'); setRecording(env, false);
       await vi.waitFor(() => expect(stream.states.at(-1)?.['traceFiles']).toBe(2), { timeout: 1500 });
       expect(stream.states.at(-1)?.['recording']).toEqual({ enabled: false });
       expect(gate.started - before).toBe(1);
