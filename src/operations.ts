@@ -284,7 +284,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   const connection = phase === 'failure' ? codexConnectionFailure(r) : null;
   if (connection) {
     const at = iso(r['written_at']); if (!at) return null;
-    const event = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionEnd', 'Interrupt', 'PreCompact', 'PostCompact'].includes(String(r['event'])) ? String(r['event']) : '훅 종류 미확인';
+    const event = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'Stop', 'SessionEnd', 'Interrupt', 'PreCompact', 'PostCompact'].includes(String(r['event'])) ? String(r['event']) : '훅 종류 미확인';
     return { id: id(token(r['invocation_id']) ?? `connection:${at}:${event}:${connection[0]}`), at, feature: 'connection', lifecycle: true, state: 'error', lane: 'host', issue: 'host', cause: connection[0],
       ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
       title: 'Codex 훅 · 연결 실패', summary: text(event, token(r['tool_name']), connection[1]),

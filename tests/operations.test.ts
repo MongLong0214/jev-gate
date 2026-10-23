@@ -12,6 +12,11 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: ModRecord['component'], rec: Record<string, unknown>, time = at): ModRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it.each(['SubagentStart', 'SubagentStop'])('identifies a %s hook connection incident without inventing a worker outcome (#382)', event => {
+    const view = buildOperations([{ ...base, host: 'codex', phase: 'failure', event, connection_failure: 'http_error' }], [], new Date(later), { trace: true, host: 'codex' });
+    expect(view.feed[0]).toMatchObject({ feature: 'connection', lifecycle: true, summary: `${event} · HTTP 응답 오류` });
+    expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, state: 'waiting' });
+  });
   it.each(['timeout', 'http_error', 'invalid_reply', 'state_missing', 'unreachable', 'aborted'])('keeps a Codex hook %s visible without inventing worker or Bash failure (#382)', connection_failure => {
     const view = buildOperations([{ ...base, host: 'codex', phase: 'failure', event: 'PostToolUse', tool_name: 'Bash', connection_failure, error_first_line: `connection_${connection_failure}` }], [], new Date(later), { trace: true, host: 'codex' });
     expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, lastAt: null, state: 'waiting' });
