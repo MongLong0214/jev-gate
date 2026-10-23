@@ -1,0 +1,452 @@
+{
+  "scope": "Finite synthetic functional and safety checks, separate from held-out efficacy. All attempts retained. Original native tool-history injection is artificial; server residency unknown. No quota polling or installed-plugin claim.",
+  "checks": [
+    {
+      "name": "jev-cache-functional-20261023",
+      "manifest": {
+        "createdAt": "2026-10-23T02:18:25.570Z",
+        "kind": "synthetic functional check, not representative savings",
+        "arms": [
+          "off",
+          "compact"
+        ],
+        "turns": 2,
+        "model": "gpt-6.1-sol",
+        "effort": "low",
+        "repeatCount": 1600,
+        "unitHash": "7ef156e699d1191d946f8999239b9d7ae452830a92bd5d86ae804535acd1c83d",
+        "maxTurnMs": 90000,
+        "maxSubmittedRequests": 4,
+        "nativeMemory": false,
+        "scope": "Fresh ordinary OAuth threads; injected synthetic native tool history; real inference. No reruns, no quota polling. Check original and recent facts jointly; include both turns and failures. Not part of held-out comparison."
+      },
+      "manifest_sha256": "1b629be56f1326d4ad932145d3192b047ddae63139ee7f8960ac2c171eb73271",
+      "cells": [
+        {
+          "arm": "off",
+          "turns": [
+            {
+              "index": 0,
+              "status": "completed",
+              "duration_ms": 3247,
+              "quality_passed": true
+            },
+            {
+              "index": 1,
+              "status": "completed",
+              "duration_ms": 3055,
+              "quality_passed": true
+            }
+          ],
+          "requests": 2,
+          "responses": 2,
+          "coverage": "complete",
+          "usage": {
+            "input": 14638,
+            "read": 33152,
+            "write": 0,
+            "output": 76
+          },
+          "observed_raw_total": 47866,
+          "standard_credits_estimate": 0.83378,
+          "actual_allowance": "unmeasured",
+          "applied_requests": 0,
+          "receipts": [],
+          "error": null,
+          "jev_selections": []
+        },
+        {
+          "arm": "compact",
+          "turns": [
+            {
+              "index": 0,
+              "status": "completed",
+              "duration_ms": 3866,
+              "quality_passed": true
+            },
+            {
+              "index": 1,
+              "status": "completed",
+              "duration_ms": 4393,
+              "quality_passed": true
+            }
+          ],
+          "requests": 2,
+          "responses": 2,
+          "coverage": "complete",
+          "usage": {
+            "input": 14638,
+            "read": 33152,
+            "write": 0,
+            "output": 76
+          },
+          "observed_raw_total": 47866,
+          "standard_credits_estimate": 0.83378,
+          "actual_allowance": "unmeasured",
+          "applied_requests": 0,
+          "receipts": [],
+          "error": null,
+          "jev_selections": [
+            {
+              "jev": {
+                "model": "jev-1.14.0",
+                "usage": {
+                  "input_tokens": 5372,
+                  "output_tokens": 374
+                }
+              },
+              "selected": 0,
+              "candidates": 4,
+              "duration_ms": 412,
+              "reason": "assessed"
+            }
+          ]
+        }
+      ],
+      "diagnostic_script_sha256": "329349eb7700852da6c1e350cc2a2ffbde99f258c8c882a37c1d6d86f5c8d651",
+      "implementation_bundle_sha256": "75022a39bb3ca7f6c09d3e8a1ee2158bbf689b01c6ce3fd514b3e1875428f33d",
+      "shipped_policy": "pre-final candidate; favorable warm-edit estimates do not authorize changes in the shipped policy"
+    },
+    {
+      "name": "jev-cache-functional-v2-20261023",
+      "manifest": {
+        "createdAt": "2026-10-23T02:19:43.853Z",
+        "kind": "synthetic functional check with an output below native tool truncation; not representative savings",
+        "previousNoApplicationCheck": "/tmp/jev-cache-functional-20261023",
+        "arms": [
+          "off",
+          "compact"
+        ],
+        "turns": 2,
+        "model": "gpt-6.1-sol",
+        "effort": "low",
+        "repeatCount": 200,
+        "unitHash": "7ef156e699d1191d946f8999239b9d7ae452830a92bd5d86ae804535acd1c83d",
+        "maxTurnMs": 90000,
+        "maxSubmittedRequests": 4,
+        "nativeMemory": false,
+        "scope": "Fresh ordinary OAuth threads; injected synthetic native tool history; real inference. No reruns, no quota polling. Check original and recent facts jointly; include both turns and failures. Not part of held-out comparison."
+      },
+      "manifest_sha256": "d272801b447a61217577ca57486fc669009bca82212dd8b2ac1fa507a256b6af",
+      "cells": [
+        {
+          "arm": "off",
+          "turns": [
+            {
+              "index": 0,
+              "status": "completed",
+              "duration_ms": 4669,
+              "quality_passed": true
+            },
+            {
+              "index": 1,
+              "status": "completed",
+              "duration_ms": 4876,
+              "quality_passed": true
+            }
+          ],
+          "requests": 2,
+          "responses": 2,
+          "coverage": "complete",
+          "usage": {
+            "input": 7624,
+            "read": 26240,
+            "write": 0,
+            "output": 76
+          },
+          "observed_raw_total": 33940,
+          "standard_credits_estimate": 0.4658,
+          "actual_allowance": "unmeasured",
+          "applied_requests": 0,
+          "receipts": [],
+          "error": null,
+          "jev_selections": []
+        },
+        {
+          "arm": "compact",
+          "turns": [
+            {
+              "index": 0,
+              "status": "completed",
+              "duration_ms": 3144,
+              "quality_passed": true
+            },
+            {
+              "index": 1,
+              "status": "completed",
+              "duration_ms": 3160,
+              "quality_passed": true
+            }
+          ],
+          "requests": 2,
+          "responses": 2,
+          "coverage": "complete",
+          "usage": {
+            "input": 10312,
+            "read": 19200,
+            "write": 0,
+            "output": 76
+          },
+          "observed_raw_total": 29588,
+          "standard_credits_estimate": 0.5826,
+          "actual_allowance": "unmeasured",
+          "applied_requests": 1,
+          "receipts": [
+            {
+              "stage": "prepared",
+              "path": "inference",
+              "applied": true,
+              "reason": "exact_repetition",
+              "removed_chars": 18375,
+              "cache_effect": {
+                "basis": "serialized_input_estimate",
+                "cache_residency": "unknown",
+                "total_token_saving": "unmeasured",
+                "future_requests": "not_assumed",
+                "first_changed_item": 7,
+                "retained_suffix_estimated_tokens": 2441,
+                "estimated_input_tokens_removed": 12378,
+                "shared_prefix_estimated_tokens": 53319,
+                "lost_prefix_estimated_tokens": 12759,
+                "allow": true,
+                "reason": "estimated_net_benefit",
+                "estimated_credit_delta": -0.0128475,
+                "included_allowance": "unknown"
+              }
+            },
+            {
+              "stage": "result",
+              "path": "inference",
+              "applied": true,
+              "removed_chars": 18375,
+              "cache_effect": {
+                "basis": "serialized_input_estimate",
+                "cache_residency": "unknown",
+                "total_token_saving": "unmeasured",
+                "future_requests": "not_assumed",
+                "first_changed_item": 7,
+                "retained_suffix_estimated_tokens": 2441,
+                "estimated_input_tokens_removed": 12378,
+                "shared_prefix_estimated_tokens": 53319,
+                "lost_prefix_estimated_tokens": 12759,
+                "allow": true,
+                "reason": "estimated_net_benefit",
+                "estimated_credit_delta": -0.0128475,
+                "included_allowance": "unknown"
+              },
+              "usage": {
+                "input": 3159,
+                "read": 9600,
+                "write": 0,
+                "write5m": null,
+                "write1h": null,
+                "output": 46,
+                "thinking": 0,
+                "coverage": "complete"
+              },
+              "outcome": "completed"
+            }
+          ],
+          "error": null,
+          "jev_selections": []
+        }
+      ],
+      "diagnostic_script_sha256": "0d2f5701e692402fef856cfaa6db6d4d77bd381d5a6fc57720da16cc840fd758",
+      "implementation_bundle_sha256": "75022a39bb3ca7f6c09d3e8a1ee2158bbf689b01c6ce3fd514b3e1875428f33d",
+      "shipped_policy": "pre-final candidate; favorable warm-edit estimates do not authorize changes in the shipped policy"
+    },
+    {
+      "name": "jev-cache-functional-v3-20261023",
+      "manifest": {
+        "createdAt": "2026-10-23T02:22:27.153Z",
+        "kind": "synthetic application with no prior request comparison; backend residency unknown; not representative savings",
+        "previousChecks": [
+          "/tmp/jev-cache-functional-20261023",
+          "/tmp/jev-cache-functional-v2-20261023"
+        ],
+        "arms": [
+          "off",
+          "compact"
+        ],
+        "turns": 2,
+        "model": "gpt-6.1-sol",
+        "effort": "low",
+        "repeatCount": 200,
+        "unitHash": "7ef156e699d1191d946f8999239b9d7ae452830a92bd5d86ae804535acd1c83d",
+        "maxTurnMs": 90000,
+        "maxSubmittedRequests": 4,
+        "nativeMemory": false,
+        "scope": "Fresh ordinary OAuth threads; injected synthetic native tool history; real inference. No reruns, no quota polling. Check original and recent facts jointly; include both turns and failures. Not part of held-out comparison."
+      },
+      "manifest_sha256": "fb748934e8fc0808c3f984a8f9c62a5630acba2e97189816c1df851f2001441a",
+      "cells": [
+        {
+          "arm": "off",
+          "turns": [
+            {
+              "index": 0,
+              "status": "completed",
+              "duration_ms": 25034,
+              "quality_passed": true
+            },
+            {
+              "index": 1,
+              "status": "completed",
+              "duration_ms": 3896,
+              "quality_passed": true
+            }
+          ],
+          "requests": 2,
+          "responses": 2,
+          "coverage": "complete",
+          "usage": {
+            "input": 7661,
+            "read": 26496,
+            "write": 0,
+            "output": 95
+          },
+          "observed_raw_total": 34252,
+          "standard_credits_estimate": 0.47304,
+          "actual_allowance": "unmeasured",
+          "applied_requests": 0,
+          "receipts": [],
+          "error": null,
+          "jev_selections": []
+        },
+        {
+          "arm": "compact",
+          "turns": [
+            {
+              "index": 0,
+              "status": "completed",
+              "duration_ms": 3176,
+              "quality_passed": true
+            },
+            {
+              "index": 1,
+              "status": "completed",
+              "duration_ms": 3370,
+              "quality_passed": true
+            }
+          ],
+          "requests": 2,
+          "responses": 2,
+          "coverage": "complete",
+          "usage": {
+            "input": 3298,
+            "read": 22144,
+            "write": 0,
+            "output": 76
+          },
+          "observed_raw_total": 25518,
+          "standard_credits_estimate": 0.23926,
+          "actual_allowance": "unmeasured",
+          "applied_requests": 2,
+          "receipts": [
+            {
+              "stage": "result",
+              "path": "inference",
+              "applied": true,
+              "removed_chars": 18375,
+              "cache_effect": {
+                "basis": "serialized_input_estimate",
+                "cache_residency": "unknown",
+                "total_token_saving": "unmeasured",
+                "future_requests": "not_assumed",
+                "first_changed_item": 7,
+                "retained_suffix_estimated_tokens": 2025,
+                "estimated_input_tokens_removed": 12378,
+                "allow": true,
+                "reason": "reuse_unobserved"
+              },
+              "usage": {
+                "input": 3081,
+                "read": 9600,
+                "write": 0,
+                "write5m": null,
+                "write1h": null,
+                "output": 30,
+                "thinking": 0,
+                "coverage": "complete"
+              },
+              "outcome": "completed"
+            },
+            {
+              "stage": "prepared",
+              "path": "inference",
+              "applied": true,
+              "reason": "exact_repetition",
+              "removed_chars": 18375,
+              "cache_effect": {
+                "basis": "serialized_input_estimate",
+                "cache_residency": "unknown",
+                "total_token_saving": "unmeasured",
+                "future_requests": "not_assumed",
+                "first_changed_item": 7,
+                "retained_suffix_estimated_tokens": 2025,
+                "estimated_input_tokens_removed": 12378,
+                "allow": true,
+                "reason": "reuse_unobserved"
+              }
+            },
+            {
+              "stage": "result",
+              "path": "inference",
+              "applied": true,
+              "removed_chars": 18375,
+              "cache_effect": {
+                "basis": "serialized_input_estimate",
+                "cache_residency": "unknown",
+                "total_token_saving": "unmeasured",
+                "future_requests": "not_assumed",
+                "first_changed_item": 7,
+                "retained_suffix_estimated_tokens": 2441,
+                "estimated_input_tokens_removed": 12378,
+                "shared_prefix_estimated_tokens": 40560,
+                "lost_prefix_estimated_tokens": 0,
+                "allow": true,
+                "reason": "previous_prefix_preserved"
+              },
+              "usage": {
+                "input": 217,
+                "read": 12544,
+                "write": 0,
+                "write5m": null,
+                "write1h": null,
+                "output": 46,
+                "thinking": 0,
+                "coverage": "complete"
+              },
+              "outcome": "completed"
+            },
+            {
+              "stage": "prepared",
+              "path": "inference",
+              "applied": true,
+              "reason": "exact_repetition",
+              "removed_chars": 18375,
+              "cache_effect": {
+                "basis": "serialized_input_estimate",
+                "cache_residency": "unknown",
+                "total_token_saving": "unmeasured",
+                "future_requests": "not_assumed",
+                "first_changed_item": 7,
+                "retained_suffix_estimated_tokens": 2441,
+                "estimated_input_tokens_removed": 12378,
+                "shared_prefix_estimated_tokens": 40560,
+                "lost_prefix_estimated_tokens": 0,
+                "allow": true,
+                "reason": "previous_prefix_preserved"
+              }
+            }
+          ],
+          "error": null,
+          "jev_selections": []
+        }
+      ],
+      "diagnostic_script_sha256": "d49592a9597f456695a9dc04c8c6a1c7603c72bb7fb9ddc090a1dbea64af88ff",
+      "implementation_bundle_sha256": "7d4ea153aabfd48dd169172b6a6156cb3ad6f912fed8469fe92d22b0fff661f4",
+      "shipped_policy": "final preservation guard"
+    }
+  ]
+}

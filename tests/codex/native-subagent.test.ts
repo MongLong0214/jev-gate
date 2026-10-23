@@ -10,7 +10,14 @@ import { runtimeCodexPolicy } from '../../src/codex/config.js';
 const childMetadata = JSON.stringify({ thread_id: 'native-child', parent_thread_id: 's', thread_source: 'subagent', subagent_kind: 'thread_spawn', agent_name: 'explorer', sandbox_mode: 'read-only', model: 'gpt-6.1-sol', reasoning_effort: 'high' });
 
 describe('Codex native spawn_agent child requests', () => {
-  it.each([true, false])('never bind to the root session state (native connection: %s)', async connected => {
+  it.each([childMetadata,
+    JSON.stringify({ request_kind: 'memory', thread_source: 'memory_consolidation' }),
+    JSON.stringify({ request_kind: 'turn', thread_source: 'memory_consolidation', thread_id: 's' }),
+    JSON.stringify({ request_kind: 'prewarm', thread_id: 's' }),
+    JSON.stringify({ request_kind: 'future_internal_operation', thread_id: 's' }),
+    JSON.stringify({ request_kind: null, thread_id: 's' }),
+    JSON.stringify({ request_kind: 1, thread_id: 's' }),
+  ].flatMap(metadata => [true, false].map(connected => ({ metadata, connected }))))('never binds auxiliary or unknown-child requests to root state ($connected, $metadata)', async ({ connected, metadata }) => {
     const root = mkdtempSync(join(tmpdir(), 'jev-native-child-')); const trace = join(root, 'trace');
     const requests: string[] = [];
     const upstream = createServer(async (req, res) => { let body = ''; for await (const b of req) body += String(b); requests.push(body); res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { model: 'gpt-6.1-sol', usage: { input_tokens: 1 }, output: [] } }) + '\n\n'); });
@@ -27,9 +34,9 @@ describe('Codex native spawn_agent child requests', () => {
       const lastSubmitted = { prompt: 'p', model: 'gpt-6.1-sol', effort: 'low', requestId: 'root-request', epoch: native.epoch, index: null, scope: 'root' as const, parent: null };
       Object.assign(native, { prompt: 'p', task: 'Root task.', routed: 'p', baseline: { model: 'gpt-6.1-sol', effort: 'high' }, route: { effort: 'low', effortEdit: { kind: 'set', value: 'low' } }, routeConfig: JSON.stringify(runtimeCodexPolicy({ ...env, JEV_CODEX_MODEL: 'gpt-6.1-sol' }, session.policy.catalog).router), items, wire, complete: true, lastSubmitted });
       const observe = vi.spyOn(session.policy, 'observeRequest'); const usage = vi.spyOn(session.policy, 'observeUsage');
-      expect(session.policy.requestSession(childMetadata, 's')).toBeNull();
+      expect(session.policy.requestSession(metadata, 's')).toBeNull();
       const body = JSON.stringify({ model: 'gpt-6.1-sol', reasoning: { effort: 'high' }, input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Child task.' }] }] });
-      const response = await fetch(session.url.replace('ws:', 'http:') + '/responses', { method: 'POST', headers: { 'x-jev-gate-session': session.token, 'session-id': 's', 'x-codex-turn-metadata': childMetadata, 'content-type': 'application/json' }, body });
+      const response = await fetch(session.url.replace('ws:', 'http:') + '/responses', { method: 'POST', headers: { 'x-jev-gate-session': session.token, 'session-id': 's', 'x-codex-turn-metadata': metadata, 'content-type': 'application/json' }, body });
       expect(await response.text()).toContain('response.completed');
       expect(requests).toEqual([body]);
       expect(native.items).toBe(items); expect(native.wire).toBe(wire); expect(native.route?.effort).toBe('low');

@@ -14,11 +14,11 @@ describe('Codex routed execution guidance', () => {
     const original = native(), selected: Obj = { ...original, model: 'routed' }, snapshot = structuredClone(original);
     const result = routedExecution(original, selected);
     expect(original).toEqual(snapshot); expect(selected.input).toBe(original.input);
-    expect(result).toEqual({ ...selected, input: [expect.objectContaining({ type: 'message', role: 'developer' }), ...(original.input as Obj[])] });
+    expect(result).toEqual({ ...selected, input: [...(original.input as Obj[]), expect.objectContaining({ type: 'message', role: 'developer' })] });
     const input = result.input as Obj[];
-    for (let i = 0; i < (original.input as Obj[]).length; i++) expect(input[i + 1]).toBe((original.input as Obj[])[i]);
-    expect(JSON.stringify(input[0])).toContain('required verification remain authoritative');
-    expect(JSON.stringify(input[0])).toContain('Keep dependent operations sequential');
+    for (let i = 0; i < (original.input as Obj[]).length; i++) expect(input[i]).toBe((original.input as Obj[])[i]);
+    expect(JSON.stringify(input.at(-1))).toContain('required verification remain authoritative');
+    expect(JSON.stringify(input.at(-1))).toContain('Keep dependent operations sequential');
   });
 
   it('keeps a stable instruction across tool rounds and never adds the guidance twice', () => {
@@ -26,14 +26,26 @@ describe('Codex routed execution guidance', () => {
     const first = routedExecution(original, selected);
     expect(routedExecution(original, first)).toBe(first);
     const later = { ...selected, input: [...(original.input as Obj[]), { type: 'function_call_output', call_id: 'native', output: 'Later result.' }] };
-    expect((routedExecution(original, later).input as Obj[])[0]).toEqual((first.input as Obj[])[0]);
+    expect((routedExecution(original, later).input as Obj[]).at(-1)).toEqual((first.input as Obj[]).at(-1));
   });
 
   it('supports full Responses requests and preserves their exact native instructions as the prefix', () => {
     const original: Obj = { ...native(), instructions: 'Exact native instructions.\n' }, selected: Obj = { ...original, model: 'routed' };
     const result = routedExecution(original, selected);
-    expect(String(result.instructions).startsWith(original.instructions + '\n\n')).toBe(true);
-    expect(result.input).toBe(original.input); expect(routedExecution(original, result)).toBe(result);
+    expect(result.instructions).toBe(original.instructions);
+    expect((result.input as Obj[]).slice(0, -1)).toEqual(original.input); expect(routedExecution(original, result)).toBe(result);
+  });
+
+  it('keeps the entire native prefix across route/keep/route and never stores a proxy hint in native history', () => {
+    const original: Obj = { ...native(), instructions: 'Stable native instructions.' };
+    const routed = routedExecution(original, { ...original, model: 'routed' });
+    const later = { ...original, input: [...original.input as Obj[], { type: 'message', role: 'assistant', content: 'Native reply.' }] };
+    const kept = routedExecution(later, later);
+    const again = routedExecution(later, { ...later, model: 'routed' });
+    expect(routed.instructions).toBe(kept.instructions);
+    expect((routed.input as Obj[]).slice(0, -1)).toEqual((kept.input as Obj[]).slice(0, -1));
+    expect((again.input as Obj[]).slice(0, -1)).toEqual(kept.input);
+    expect(JSON.stringify(original)).not.toContain('Jev routed execution');
   });
 
   it('leaves unchanged, unknown, incremental and unsupported contexts alone', () => {
