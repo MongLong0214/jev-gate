@@ -203,7 +203,7 @@ describe('buildDigest', () => {
     }
   });
 
-  it('reads a long message of open tags, or of blank lines after its header, in linear time, and leaves it to the engine whole', () => {
+  it('reads a long message of open tags, or of blank lines after its header, in linear time, and cuts it to its start and end (#361)', () => {
     const names = Array.from({ length: 20000 }, (_, i) => `command-${i.toString(26).replace(/[0-9]/g, (c) => 'qrstuvwxyz'[Number(c)]!)}`);
     const tags = [...Array.from({ length: 80000 }, () => '<system-reminder>'), ...names.map((n) => `<${n}>`)].join('\n');
     const header = (() => {
@@ -215,7 +215,8 @@ describe('buildDigest', () => {
       const t0 = performance.now();
       const d = buildDigest([user(text), ...work(30), say('ok')], { budgetChars: 30000 });
       expect(performance.now() - t0).toBeLessThan(1000);
-      expect(d).toEqual({ ok: false, reason: 'mandatory_overflow' });
+      if (!d.ok) throw new Error(d.reason);
+      expect(requestsOf(d.result.digest)).toContain(`${escaped(text).slice(0, 520)} […] ${escaped(text).slice(-260)}`);
     }
   });
 
@@ -277,7 +278,7 @@ describe('buildDigest', () => {
     }
   });
 
-  it('keeps the summary and the request whole beside a large last exchange, or leaves them to the engine', () => {
+  it('keeps the summary and the request whole beside a large last exchange, or the request whole and the summary cut (#361)', () => {
     const rows = (repeat: number): Row[] => [
       user(`${HOST_SUMMARY}${'earlier work. '.repeat(repeat)}SUMMARY_END`),
       user('Keep REQUEST_NEEDLE in mind: ship the parser.'),
@@ -289,7 +290,11 @@ describe('buildDigest', () => {
     expect(requestsOf(d.result.digest)).toContain('▸ Keep REQUEST_NEEDLE in mind: ship the parser.');
     expect(d.result.digest).toContain(`## Previous summary\n${HOST_SUMMARY.trim()}`);
     expect(d.result.digest).toContain(`${'earlier work. '.repeat(300)}SUMMARY_END`);
-    expect(buildDigest(rows(4000), { budgetChars: 30000 })).toEqual({ ok: false, reason: 'mandatory_overflow' });
+    const over = buildDigest(rows(4000), { budgetChars: 30000 });
+    if (!over.ok) throw new Error(over.reason);
+    expect(requestsOf(over.result.digest)).toContain('▸ Keep REQUEST_NEEDLE in mind: ship the parser.');
+    expect(over.result.digest).toContain(' […] ');
+    expect(over.result.digest).toContain('SUMMARY_END');
   });
 
   it('cuts nothing out of a user-role message by its shape: reminders, the caveat, command tags', () => {
@@ -341,7 +346,10 @@ describe('buildDigest', () => {
     const pasted = buildDigest([user(`${d1.result.digest}\n\nNow also keep APPENDED_NEEDLE.`), ...work(100), say('ok')], { budgetChars: 80000 });
     if (!pasted.ok) throw new Error(pasted.reason);
     expect(requestsOf(pasted.result.digest)).toContain('APPENDED_NEEDLE');
-    expect(buildDigest([user(`${d1.result.digest}\n\nNow also keep APPENDED_NEEDLE.`), ...work(30), say('ok')], { budgetChars: 30000 })).toEqual({ ok: false, reason: 'mandatory_overflow' });
+    // Over the room (#361), the pasted request keeps its start and end, and so the appended text.
+    const tight = buildDigest([user(`${d1.result.digest}\n\nNow also keep APPENDED_NEEDLE.`), ...work(30), say('ok')], { budgetChars: 30000 });
+    if (!tight.ok) throw new Error(tight.reason);
+    expect(requestsOf(tight.result.digest)).toContain('APPENDED_NEEDLE');
     const again = buildDigest([user(`\n${d1.result.digest}\n  `), ...work(30), say('ok')], { budgetChars: 30000 });
     if (!again.ok) throw new Error(again.reason);
     expect(requestsOf(again.result.digest)).toContain('▸ Rename parseRow.');
@@ -370,9 +378,13 @@ describe('buildDigest', () => {
     }
   });
 
-  it('keeps a long engine summary whole, middle and next step, or leaves it to the engine', () => {
+  it('keeps a long engine summary whole, middle and next step, or its start and next step when it does not fit (#361)', () => {
     const rows = [user(`${HOST_SUMMARY}${'Earlier work. '.repeat(2000)}MIDDLE_NEEDLE ${'Earlier work. '.repeat(2000)}\n9. Optional Next Step: finish TASK_NEEDLE.`), ...work(120), say('ok')];
-    expect(buildDigest(rows, { budgetChars: 40000 })).toEqual({ ok: false, reason: 'mandatory_overflow' });
+    const cut = buildDigest(rows, { budgetChars: 40000 });
+    if (!cut.ok) throw new Error(cut.reason);
+    expect(cut.result.digest).toContain('## Previous summary\nThis session is being continued');
+    expect(cut.result.digest).toContain('9. Optional Next Step: finish TASK_NEEDLE.');
+    expect(cut.result.digest).not.toContain('MIDDLE_NEEDLE');
     const d = buildDigest(rows, { budgetChars: 100000 });
     if (!d.ok) throw new Error(d.reason);
     expect(d.result.digest).toContain(`## Previous summary\n${rows[0]!.text.trim()}`);
@@ -493,7 +505,7 @@ describe('buildDigest', () => {
     expect(asked).toContain(`▸ ${escaped(d1.result.digest)}`);
   });
 
-  it('keeps a Korean request over 2,000 characters whole, with its middle and last limits and an earlier correction, or leaves it to the engine', () => {
+  it('keeps a Korean request over 2,000 characters whole, with its middle and last limits and an earlier correction, or its start and last limit when it does not fit (#361)', () => {
     const long = `로더를 리팩터링해 주세요. ${'배경 설명 문장입니다. '.repeat(300)}중간 제한: src/legacy 폴더는 절대 수정하지 마세요. ${'추가 맥락입니다. '.repeat(300)}마지막 제한: 커밋은 하지 말고 diff만 보여 주세요.`;
     expect(long.length).toBeGreaterThan(2000);
     const rows = [user('parseRow를 parseRecord로 바꿔 주세요.'), ...work(10), user('정정: parseRecord가 아니라 parseEntry입니다.'), ...work(10), user(long), ...work(40), say('ok')];
@@ -502,7 +514,42 @@ describe('buildDigest', () => {
     const asked = requestsOf(d.result.digest);
     expect(asked).toContain(`▸ ${long}`);
     expect(asked).toContain('▸ 정정: parseRecord가 아니라 parseEntry입니다.');
-    expect(buildDigest(rows, { budgetChars: 8000 })).toEqual({ ok: false, reason: 'mandatory_overflow' });
+    const small = buildDigest(rows, { budgetChars: 8000 });
+    if (!small.ok) throw new Error(small.reason);
+    const kept = requestsOf(small.result.digest);
+    expect(kept).toContain('▸ 로더를 리팩터링해 주세요.');
+    expect(kept).toContain('마지막 제한: 커밋은 하지 말고 diff만 보여 주세요.');
+    expect(kept).not.toContain('중간 제한');
+    expect(kept).toContain('[jev-gate compact: these earlier user-role messages');
+  });
+
+  it('#361: over the room, keeps the newest user-role messages whole, cuts older ones to start and end, leaves the oldest out and says so, through repeated compactions', () => {
+    const big = (k: number) => `START_${k} ${'host notice text. '.repeat(400)}END_${k}`;
+    let rows: Row[] = [];
+    for (let k = 0; k < 12; k++) rows.push(user(big(k)), ...work(3));
+    rows.push(user('NEWEST_NEEDLE: keep src/legacy untouched.'), ...work(30), say('ok'));
+    let d = buildDigest(rows, { budgetChars: 40000 });
+    if (!d.ok) throw new Error(d.reason);
+    let asked = requestsOf(d.result.digest);
+    expect(asked).toContain('▸ NEWEST_NEEDLE: keep src/legacy untouched.');
+    expect(asked).toContain(`▸ ${big(11)}`);
+    expect(asked).toMatch(/START_\d+ host notice text\. [^\n]* \[…\] [^\n]*END_\d+/);
+    expect(asked).not.toContain('START_0 ');
+    const note = /\[jev-gate compact: these earlier user-role messages, failed calls and summary did not all fit; (\d+) older ones are cut to their start and end around "\[…\]" and (\d+) older ones are left out, newest kept whole first\]/.exec(asked);
+    expect(note).not.toBeNull();
+    expect(Number(note![1]) + Number(note![2])).toBeGreaterThan(0);
+    expect(asked.indexOf(note![0])).toBeLessThan(asked.indexOf('NEWEST_NEEDLE'));
+    // Chained, the digest keeps applying instead of the carried text growing until the engine takes over.
+    for (let r = 0; r < 4; r++) {
+      rows = [...(assemble(rows, d.result) as Row[]), user(`ROUND_${r} ${big(100 + r)}`), ...work(40), say('ok')];
+      d = buildDigest(rows, { budgetChars: 40000 });
+      if (!d.ok) throw new Error(d.reason);
+    }
+    asked = requestsOf(d.result.digest);
+    expect(asked).toContain(`▸ ROUND_3 ${big(103)}`);
+    expect(d.result.digestChars).toBeLessThanOrEqual(40000);
+    // The note is not counted as a person's request whole forever: it is cut and dropped like any older message.
+    expect((asked.match(/\[jev-gate compact: these earlier/g) ?? []).length).toBeLessThanOrEqual(5);
   });
 
   it('keeps every failed, interrupted and repeated call whole beside a later long success, through repeated compactions', () => {

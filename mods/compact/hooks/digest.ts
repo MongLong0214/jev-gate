@@ -63,6 +63,16 @@ const DIGEST_FLOOR = 0.3;
 const MINIMAL_TAIL_BUDGETS = 2;
 /** A compaction whose digest and tail would not come to at most this share of what it replaces is left to the engine. */
 const RELIEF = 0.5;
+/**
+ * #361: when the mandatory text would not fit beside the tail, it gets this share of the digest's room, newest first,
+ * rather than the compaction going to the engine: whole while it fits, else its start and end, else left out and
+ * counted. Over 121 auto compactions (2026-10-16 to 10-23), 28 fell back that way at 40,000; two thirds of their
+ * user-role text was the host's (task notifications, skill bodies), which a hook cannot tell from a person's.
+ */
+const MANDATORY_SHARE = 0.7;
+const OLD_HEAD_CHARS = 520;
+const OLD_TAIL_CHARS = 260;
+const NOTE_RESERVE = 200;
 const NARRATION_CHARS = 400;
 const INPUT_CHARS = 240;
 const RESULT_CHARS = 1200;
@@ -375,35 +385,62 @@ export const buildDigest = (messages: readonly DigestMessage[], options: DigestO
     left -= t.length + overhead;
     return t;
   };
-  /** Mandatory text is taken whole; what it leaves may go below zero, and then the compaction is the engine's. */
-  const keep = (text: string, overhead: number): string => {
-    const t = escapeLines(text);
-    left -= t.length + overhead;
-    return t;
-  };
-
   // The previous summary, every user-role message and every failed call are taken whole, before anything is chosen to
   // fit: a limit or a correction can sit anywhere in them, and a cut one reads as the whole. When they do not fit
-  // beside the tail, the engine compacts rather than the budget growing or the text being cut.
+  // beside the tail (#361), they share MANDATORY_SHARE of the room newest first, the rest whole while it fits, then cut
+  // to their start and end, then left out, and a note says so; only when not even the newest fits cut does the engine
+  // compact.
   const summaryAt = openingSummary(head);
   const prior: Carried = summaryAt >= 0 ? carried(head[summaryAt]!.text) : { summary: '', requests: [], failures: [], steps: [] };
-  const summary = prior.summary ? keep(prior.summary, 0) : '';
-  const requests: Piece[] = [
-    ...prior.requests.map((text, k) => ({ at: k - prior.requests.length, sub: 0, text })),
+  const overhead = REQUEST_PREFIX.length + 1;
+  const mandatory = [
+    ...prior.requests.map((text, k) => ({ kind: 'request' as const, at: k - prior.requests.length, sub: 0, text })),
     ...head.flatMap((m, i) => {
       const text = i !== summaryAt ? requestText(m) : '';
-      return text ? [{ at: i, sub: 0, text }] : [];
+      return text ? [{ kind: 'request' as const, at: i, sub: 0, text }] : [];
     }),
-  ].map((p) => ({ ...p, text: keep(p.text, REQUEST_PREFIX.length + 1) }));
-  const failures: Piece[] = [
-    ...prior.failures.map((text, k) => ({ at: k - prior.failures.length, sub: 0, text })),
+    ...prior.failures.map((text, k) => ({ kind: 'failure' as const, at: k - prior.failures.length, sub: 0, text })),
     ...head.flatMap((m, i) =>
       m.role === 'assistant'
-        ? m.toolUses.flatMap((u, j) => (failed(u) ? [{ at: i, sub: j, text: `[${inputText(u)}] ${u.outcome ?? (u.isError === true ? 'error' : 'interrupted')}${u.text !== undefined ? `\n${u.text}` : ''}` }] : []))
+        ? m.toolUses.flatMap((u, j) => (failed(u) ? [{ kind: 'failure' as const, at: i, sub: j, text: `[${inputText(u)}] ${u.outcome ?? (u.isError === true ? 'error' : 'interrupted')}${u.text !== undefined ? `\n${u.text}` : ''}` }] : []))
         : [],
     ),
-  ].map((p) => ({ ...p, text: keep(p.text, REQUEST_PREFIX.length + 1) }));
-  if (left < 0) return { ok: false, reason: 'mandatory_overflow' };
+  ].map((p) => ({ ...p, text: escapeLines(p.text) }));
+  const priorSummary = prior.summary ? escapeLines(prior.summary) : '';
+  const whole = priorSummary.length + mandatory.reduce((n, p) => n + p.text.length + overhead, 0);
+  let summary = priorSummary;
+  let kept = mandatory;
+  let note = '';
+  if (whole <= left) left -= whole;
+  else {
+    const cap = Math.floor(left * MANDATORY_SHARE) - NOTE_RESERVE;
+    const ends = (t: string): string => (t.length <= OLD_HEAD_CHARS + OLD_TAIL_CHARS + CUT.length + 1 ? t : `${t.slice(0, OLD_HEAD_CHARS)}${CUT} ${t.slice(-OLD_TAIL_CHARS)}`);
+    let used = 0;
+    let cut = 0;
+    let out = 0;
+    const fit = (t: string, extra: number): string | null => {
+      for (const c of [t, ends(t)]) {
+        if (used + c.length + extra <= cap) {
+          used += c.length + extra;
+          if (c !== t) cut++;
+          return c;
+        }
+      }
+      out++;
+      return null;
+    };
+    // Newest first; the previous summary stands for the oldest part of the conversation.
+    const newest = [...mandatory].sort((a, b) => b.at - a.at || b.sub - a.sub);
+    const fitted = new Map(newest.map((p) => [p, fit(p.text, overhead)] as const));
+    if (newest.length && fitted.get(newest[0]!) === null) return { ok: false, reason: 'mandatory_overflow' };
+    summary = priorSummary ? (fit(priorSummary, 0) ?? '') : '';
+    if (!newest.length && !summary) return { ok: false, reason: 'mandatory_overflow' };
+    kept = mandatory.flatMap((p) => (fitted.get(p) != null ? [{ ...p, text: fitted.get(p)! }] : []));
+    note = `[jev-gate compact: these earlier user-role messages, failed calls and summary did not all fit; ${cut} older ones are cut to their start and end around "[…]" and ${out} older ones are left out, newest kept whole first]`;
+    left -= used + note.length + overhead;
+  }
+  const requests: Piece[] = [...(note ? [{ at: -1e9, sub: 0, text: note }] : []), ...kept.filter((p) => p.kind === 'request')];
+  const failures: Piece[] = kept.filter((p) => p.kind === 'failure');
 
   // Selected optional dependencies use the same budget first. The remaining inputs/narration and result excerpts
   // follow recency, then carried steps; every rendered piece retains its original chronological provenance.

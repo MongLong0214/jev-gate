@@ -181,7 +181,8 @@ describe('register', () => {
     const pending = { role: 'assistant', text: 'Starting the build.', toolUses: [{ tool: 'Bash', input: { command: 'make' }, tool_use_id: 'pa' }] };
     const ghost = { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'gone', text: 'z', isError: false }] };
     const fallbacks: Array<[string, number, unknown[]]> = [
-      ['mandatory_overflow', 40000, [turn('a'.repeat(45000)), say('b'.repeat(90000)), turn('continue'), say('done')]],
+      // #361: the newest user-role message does not fit even cut to its start and end beside a large last answer.
+      ['mandatory_overflow', 8000, [turn('a'.repeat(45000)), say('x'), turn('b'.repeat(45000)), say('c'.repeat(7000))]],
       ['tail_too_large', 20000, [turn('Read the log.'), ...work(40), ...call('Reading the log.', 'x'.repeat(50000), 'big')]],
       ['opaque_result', 30000, [turn('Look at the page.'), ...work(30), ...call('Taking a screenshot.', '', 'shot')]],
       ['no_relief', 20000, [turn('Read the log.'), say('Reading.'), turn('ok'), ...call('Reading the log.', 'x'.repeat(30000), 'log')]],

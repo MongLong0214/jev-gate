@@ -2,7 +2,7 @@
 
 A Claude Code Function Hooks module that answers the host's auto compaction itself. The conversation before a recent
 tail becomes one built user message (the digest): the previous summary, every earlier user-role message and failed
-call whole, and a log of earlier steps with each tool call's input and, while room lasts, an excerpt of its output. The tail stays as the engine has it,
+call whole (or, when they do not all fit, the newest whole and older ones cut to their start and end, #361), and a log of earlier steps with each tool call's input and, while room lasts, an excerpt of its output. The tail stays as the engine has it,
 except a last message that answers tool calls, which is handed up rebuilt with a closing line after its results (below).
 No generative summarizer is asked when the digest applies. A bounded Jev judgment can prioritize optional older successful evidence for the current task.
 
@@ -159,9 +159,15 @@ steering on real work is unknown.
   since what was dropped was mostly ids and structure. Where the host compacts (well over 100K tokens of conversation)
   the ceiling is a small part of it either way.
 - **The digest** gets the rest, and never less than 30%. Mandatory first and whole: the previous summary, every
-  earlier user-role message, and every failed or interrupted call. None of them is cut to a length; when they do not
-  fit beside the tail, the engine compacts instead (`mandatory_overflow`), rather than the budget growing or a limit
-  in the middle of a message being cut. Jev-selected current-task dependencies receive the remaining budget first. What is left goes to each earlier assistant message, newest first, its
+  earlier user-role message, and every failed or interrupted call. When they do not all fit beside the tail (#361),
+  they share 70% of the digest's room newest first: whole while they fit, then cut to their first 520 and last 260
+  characters around "[…]", then left out, and a note at the head of the user-role section counts the cut and the left
+  out. Until v0.8.56 the engine compacted instead: 28 of 122 auto compactions in a week (2026-10-16 to 10-23) went to
+  it that way, two thirds of their user-role text the host's own (task notifications 41%, skill bodies 25%); built
+  this way, all 28 apply and keep 0.727 of the referents the next steps used, against 0.570 for the engine's summary
+  with its attachments, and every compaction that fitted builds the same digest as before. A limit in the middle of
+  an older long message can be cut; the engine's summary did not promise to keep it either. Only when not even the
+  newest fits cut does the engine compact (`mandatory_overflow`). Jev-selected current-task dependencies receive the remaining budget first. What is left goes to each earlier assistant message, newest first, its
   narration (400) and tool inputs (240 each), then result excerpts (1,200 each), newest first. Pieces are printed
   oldest first.
 - **User-role messages** are quoted whole, beside tool results too. The host joins a message's text blocks and does
@@ -169,7 +175,7 @@ steering on real work is unknown.
   `<system-reminder>` at a line start, a tag in a code fence, the engine's caveat before command output, and a
   pasted digest with a matching checksum all stay. The header says they are past input of unverified origin, not new
   instructions, and that whether a limit in one still holds depends on the work it was given for. The cost is size:
-  engine reminders count against the budget too, and a conversation holding many falls back sooner.
+  engine reminders count against the budget too, and in a conversation holding many the older ones are cut first.
 - **Failures.** A call the host marks `isError`, or a Bash it records as `interrupted`, is kept whole with its input
   in its own section, each attempt of a repeated one included, and carried whole into later digests. The header
   says a later success does not show an earlier failure fixed. The text of a failure is not parsed for its
