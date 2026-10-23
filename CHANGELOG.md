@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.60 — 2026-10-23 — Diagnose the installed Codex hook bootstrap correctly
+
+- Compare installed Codex hook commands against the actual command captured when the package is built, instead of the obsolete direct-file invocation. Check PreCompact and PostCompact as well as the other nine events, including exact native timeouts. Changed commands, matchers, duplicate/missing handlers and invalid timeouts still fail (#373).
+- This repairs a Doctor package false failure; it does not reclassify missing runtime routing records or incomplete usage, and it does not change hook execution, Router, Compact, Claude behavior or native settings.
+
 ## v0.8.59 — 2026-10-23 — Preserve Codex prefixes and account for Compact reuse costs
 
 - Append routed execution guidance after the original input, preserving native instructions, tools and every original history item. The hint stays request-local; it is not persisted history or proof of a cache hit (#362).
