@@ -17,6 +17,11 @@ import { doctorChecks, finishDoctor, renderDoctor, readableFile, storageIssue, d
 import { compatibilityChecks } from '../doctor-models.js';
 import { codexModelInventory, codexCompatibility } from './doctor-models.js';
 import { checkRelease, unknownRelease, packageVersion } from '../release-info.js';
+import packagedHooks from '../../plugins/codex/hooks/hooks.json' with { type: 'json' };
+
+// Captured in the bundle after build-codex writes the bootstrap command. Compare
+// with the installed declaration without executing it or trusting any Node code.
+const hookCommand = packagedHooks.hooks.SessionStart[0]!.hooks[0]!.command;
 
 export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: string, options: { checkUpdate?: boolean } = {}): Promise<{ ok: boolean; lines: string[]; report: DoctorReport }> => {
   const overrideKey = apiKeyOverride(env);
@@ -41,10 +46,11 @@ export const codexDoctor = async (root: string, env: NodeJS.ProcessEnv, cwd: str
     check(obj(manifest) && manifest['name'] === 'jev-gate' && !!packageVersion(root, 'codex') && manifest['hooks'] === './hooks/hooks.json' && manifest['mcpServers'] === './.mcp.json', 'Codex plugin manifest: name, version and native discovery paths');
     const hooks: unknown = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8'));
     const table = obj(hooks) && obj(hooks['hooks']) ? hooks['hooks'] : {};
-    for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt']) {
+    for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt', 'PreCompact', 'PostCompact']) {
       const groups = Array.isArray(table[event]) ? table[event] : [];
       const handlers = groups.flatMap((group: unknown) => obj(group) && Array.isArray(group['hooks']) ? group['hooks'] : []);
-      check(groups.length === 1 && obj(groups[0]) && !('matcher' in groups[0]) && handlers.length === 1 && obj(handlers[0]) && handlers[0]['type'] === 'command' && handlers[0]['command'] === 'node "${PLUGIN_ROOT}/dist/hook.mjs"' && typeof handlers[0]['timeout'] === 'number' && handlers[0]['timeout'] > 0 && handlers[0]['timeout'] <= 5, `Codex ${event}: one unfiltered native hook with bounded timeout`);
+      const timeout = event === 'SessionEnd' || event === 'Interrupt' ? 3 : 5;
+      check(groups.length === 1 && obj(groups[0]) && !('matcher' in groups[0]) && handlers.length === 1 && obj(handlers[0]) && handlers[0]['type'] === 'command' && handlers[0]['command'] === hookCommand && handlers[0]['timeout'] === timeout, `Codex ${event}: one unfiltered native hook with bounded timeout`);
     }
     const mcp: unknown = JSON.parse(readFileSync(join(root, '.mcp.json'), 'utf8'));
     const servers = obj(mcp) && obj(mcp['mcpServers']) ? mcp['mcpServers'] : {};

@@ -113,6 +113,31 @@ describe('Doctor native model and effort compatibility', () => {
   });
 });
 describe('Doctor reports', () => {
+  it('accepts every packaged Codex bootstrap hook without executing the command (#373)', async () => {
+    const fake = fixture('codex', [codexModel()]);
+    const report = (await codexDoctor(join(__dirname, '../plugins/codex'), fake.env, fake.dir)).report;
+    const hooks = report.checks.filter(c => c.message.includes(': one unfiltered native hook'));
+    expect(hooks).toHaveLength(11);
+    expect(hooks.filter(c => c.level !== 'ok')).toEqual([]);
+    expect(readFileSync(fake.log, 'utf8')).not.toContain('turn/start');
+  });
+  it.each(['command', 'matcher', 'duplicate-group', 'duplicate-handler', 'missing-event', 'type', 'timeout', 'terminal-timeout'])('rejects a changed Codex hook declaration: %s', async invalid => {
+    const fake = fixture('codex', [codexModel()]), root = join(fake.dir, 'plugin');
+    cpSync(join(__dirname, '../plugins/codex'), root, { recursive: true });
+    const file = join(root, 'hooks/hooks.json'), manifest = JSON.parse(readFileSync(file, 'utf8'));
+    const event = invalid === 'terminal-timeout' ? 'SessionEnd' : 'PostCompact';
+    const groups = manifest.hooks[event], handler = groups[0].hooks[0];
+    if (invalid === 'command') handler.command += ' --unexpected';
+    else if (invalid === 'matcher') groups[0].matcher = 'Agent';
+    else if (invalid === 'duplicate-group') groups.push(structuredClone(groups[0]));
+    else if (invalid === 'duplicate-handler') groups[0].hooks.push(structuredClone(handler));
+    else if (invalid === 'missing-event') delete manifest.hooks[event];
+    else if (invalid === 'type') handler.type = 'prompt';
+    else handler.timeout = invalid === 'terminal-timeout' ? 5 : 6;
+    writeFileSync(file, JSON.stringify(manifest));
+    const report = (await codexDoctor(root, fake.env, fake.dir)).report;
+    expect(report.checks.find(c => c.message.startsWith(`Codex ${event}:`))?.level).toBe('fail');
+  });
   it.each(['claude-haiku-4-5', 'unavailable-legacy-fast'])('checks the active Claude Gate mapping %s and Router pins', async model => {
     const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
     const rows = ['haiku', 'sonnet', 'opus', 'fable'].map(value => ({ value, resolvedModel: value === 'fable' ? 'claude-fable-5-1' : `claude-${value}-5-5`, supportedEffortLevels: efforts }));
