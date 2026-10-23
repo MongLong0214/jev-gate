@@ -744,10 +744,11 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
       const p=await page(width);await settle(p);
       expect(await p.locator('#j-p50').textContent()).toBe('90ms');expect(await p.locator('#j-p95').textContent()).toBe('300ms');
       expect(await p.locator('#j-cost').textContent()).toBe('≈ $0.00240');expect(await p.locator('#j-cost').getAttribute('title')).toContain('응답 2회는 제외');expect(await p.locator('#j-cost').getAttribute('title')).toContain('실제 차감 크레딧은 API가 알려주지 않습니다');
-      expect(await p.locator('#credit').textContent()).toBe('크레딧 소진');
+      expect(await p.locator('#credit').textContent()).toBe('크레딧 소진');expect(await p.locator('#j-last').textContent()).toBe('90ms');
       expect(await problems(p)).toEqual([]);await p.locator('.jv').screenshot({path:join(output,`jev-panel-${width}.png`)});await p.close();
     }
-    push([run('j','claude',[call('u','router',70,{},{model:null,costUsd:null})])]);const p=await page();await settle(p);expect(await p.locator('#j-cost').textContent()).toBe('–');await p.close();
+    const u=call('u','router',70,{at:ago(1000)},{model:null,costUsd:null});push([run('j','claude',[u])]);const p=await page();await settle(p);expect(await p.locator('#j-cost').textContent()).toBe('–');expect(await p.locator('#j-pk').evaluate(e=>e.style.animationName)).toBe('');
+    push([run('j','claude',[u,call('v','router',240)])]);await p.waitForFunction(()=>document.getElementById('j-last')?.textContent==='240ms');expect(await p.locator('#j-pk').evaluate(e=>[e.style.animationName,e.style.animationDuration])).toEqual(['rtA','240ms']);await p.close();
   });
 
   it('renders empty and long mixed-host data in 28 viewport/theme/language states without overflow, overlap, character wrapping or accent bars',async()=>{

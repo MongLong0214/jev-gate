@@ -71,7 +71,7 @@ try {
     });
     if (errors.length || geometry.overflow || new Set(geometry.nodes.map(n => n.y)).size !== 1) throw Error('Preview did not render a five-stage row');
     const png = await page.screenshot({ fullPage: true, animations: 'disabled' });
-    const accent = theme === 'dark' ? '#ff6b88' : '#bd254e', bg = theme === 'dark' ? '#0c0c0f' : '#f6f3f4', faint = theme === 'dark' ? '#918e9b' : '#6c5f70';
+    const accent = theme === 'dark' ? '#4b8df8' : '#2563eb', bg = theme === 'dark' ? '#08090a' : '#f7f8f8', faint = theme === 'dark' ? '#80858d' : '#61656c';
     const halos = geometry.nodes.map((n, i) => `<circle class="halo" cx="${n.dx}" cy="${n.dy}" r="5" style="animation-delay:-${i * .25}s"/>`).join('');
     const router = geometry.nodes[3], distance = geometry.rail - router.y;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="${geometry.height + 24}" viewBox="0 0 1280 ${geometry.height + 24}" role="img" aria-labelledby="title desc">

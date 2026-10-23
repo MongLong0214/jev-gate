@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.61 — 2026-10-23 — Refresh the dashboard look and replay the last Jev round trip
+
+- Move the dashboard to a neutral dark/light palette with a blue accent so selection no longer competes with error red; tighten card radius and prefer locally installed Geist/Inter before the system font (no font is downloaded). The favicon and README previews follow the new accent.
+- Show the last recorded Jev round trip in the call log header and replay it on a Gate⇄Jev track at exactly its recorded duration when a new call arrives. It uses transforms only, pauses with the page, and is off under reduced motion; narrow layouts keep the number in the call rows.
+- Fix two layout defects visible in the previous release: stage-card values and confidence no longer break mid-word at 1280 px in English, and a long decision-basis note no longer overlaps its heading.
+- Display only. Gate, Router, Compact, Codex and recording behavior are unchanged.
+
 ## v0.8.60 — 2026-10-23 — Diagnose the installed Codex hook bootstrap correctly
 
 - Compare installed Codex hook commands against the actual command captured when the package is built, instead of the obsolete direct-file invocation. Check PreCompact and PostCompact as well as the other nine events, including exact native timeouts. Changed commands, matchers, duplicate/missing handlers and invalid timeouts still fail (#373).
