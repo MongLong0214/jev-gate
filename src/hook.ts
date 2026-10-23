@@ -15,7 +15,10 @@ import {
   decideAdmission,
   decideAdmissionAtomic,
   delegationModel,
+  delegationSaving,
   explicitlyForbidsDelegation,
+  handoffBreakEven,
+  handoffModel,
   type AdmissionDecision,
   type AdmissionEstimate,
   type AdmissionState,
@@ -41,10 +44,11 @@ import {
 } from './brief.js';
 import { DEFAULT_CONFIG, effectiveDepthFloor, hookDefaultMode, loadConfig, NATIVE_HOOK_TIMEOUT_MS, type Env } from './config.js';
 import { readHostCompactWindow } from './host-window.js';
-import { readSessionDepth, type DepthReading } from './depth.js';
+import { readSessionDepth, readTurnProgress, type DepthReading } from './depth.js';
 import { looksSecret } from './outbound-text.js';
 import {
   renderDispatchDeny,
+  renderHandoff,
   renderSingleGuidance,
   renderWorkerDelivery,
   renderSingleRouteNote,
@@ -319,7 +323,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   };
   const apiKey = deps.env['TYPESAFE_API_KEY'];
 
-  const emitContext = (event: 'UserPromptSubmit' | 'PostToolUse', text: string, code: ErrorCode | null, notice: string | null = null): HookResult => {
+  const emitContext = (event: 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse', text: string, code: ErrorCode | null, notice: string | null = null): HookResult => {
     const stdout = renderAdditionalContext(event, text, notice);
     if (stdout === null) return skip('output_too_large');
     return { kind: event === 'UserPromptSubmit' ? 'guidance' : 'context', code, stdout };
@@ -1211,10 +1215,39 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     );
   };
 
+  /**
+   * #356: a root turn of the current direct generation that has already made enough requests for the cost model to
+   * price the same amount again cheaper in a worker is offered a handoff once. Nothing is blocked or rewritten: the tool
+   * call runs, and the root decides. Turns already delegating, under a Gate job, or whose request forbids delegation
+   * are left alone, and so is any turn the transcript cannot be read back to.
+   */
+  const offerHandoff = (): HookResult => {
+    const sessionId = input.session_id;
+    const promptId = input.prompt_id;
+    if (mode !== 'auto' || deps.host || !sessionId || !promptId) return skip('not_agent_tool');
+    const state = readJob(deps.env, sessionId);
+    const gen = state.ok ? state.value?.current ?? null : null;
+    if (!gen || gen.prompt_id !== promptId || gen.shape !== 'direct' || gen.outcome !== null || gen.handoff_offered || gen.background_job || gen.root_fallback || Object.keys(gen.active).length > 0) return skip('not_agent_tool');
+    const turn = readTurnProgress(input.transcript_path, promptId);
+    if (!turn.ok || turn.delegated || turn.prompt === null || explicitlyForbidsDelegation(turn.prompt)) return skip('not_agent_tool');
+    const model = handoffModel(config);
+    const breakEven = handoffBreakEven(turn.depth, model);
+    if (breakEven === null || turn.requests < breakEven || dispatchBlocker(deps.env) !== null) return skip('not_agent_tool');
+    let claimed = false;
+    updateJob(deps.env, sessionId, (prev) => {
+      if (!prev || !sameGeneration(prev.current, gen) || prev.current.handoff_offered) return null;
+      claimed = true;
+      return { ...prev, current: { ...prev.current, handoff_offered: true } };
+    });
+    if (!claimed) return skip('not_agent_tool');
+    trace?.write('handoff', { ...base, requests: turn.requests, context_tokens: turn.depth, break_even: breakEven, saving_tokens: Math.round(delegationSaving(turn.requests, turn.depth, model)), read: { bytes: turn.bytesRead, duration_ms: turn.durationMs } });
+    return emitContext('PreToolUse', renderHandoff(turn.requests, turn.depth, breakEven), null);
+  };
+
   const handlePreToolUse = async (): Promise<HookResult> => {
     if (caller.agent_id) return skip('child_caller');
-    // #289: the root tool guard was removed, so a root call to any other tool is not this hook's to judge.
-    if (input.tool_name !== 'Agent') return skip('not_agent_tool');
+    // #289: the root tool guard was removed; a root call to any other tool is only ever offered the handoff (#356).
+    if (input.tool_name !== 'Agent') return offerHandoff();
     const sessionId = input.session_id;
     if (!sessionId) return skip('missing_ids');
     const state = readJob(deps.env, sessionId);

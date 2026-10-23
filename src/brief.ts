@@ -124,7 +124,7 @@ export const renderPreToolUseOutput = (out: PreToolUseOutput): string | null => 
  * `systemMessage` (#114) rides along only when the hook has something the user, not the model, must see: why Gate A
  * was not asked. The host shows it once and never feeds it into model context.
  */
-export const renderAdditionalContext = (event: 'UserPromptSubmit' | 'PostToolUse', additionalContext: string, systemMessage: string | null = null): string | null => {
+export const renderAdditionalContext = (event: 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse', additionalContext: string, systemMessage: string | null = null): string | null => {
   const text = JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext }, ...(systemMessage === null ? {} : { systemMessage }) });
   return Buffer.byteLength(text, 'utf8') > MAX_OUTPUT_BYTES ? null : text;
 };

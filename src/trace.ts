@@ -43,6 +43,8 @@ export type TracePhase =
   | 'background_policy_delivery'
   | 'background_conversation'
   | 'dispatch_denied'
+  /** #356: a root turn was offered the observed-progress handoff. */
+  | 'handoff'
   | 'worktree_start'
   | 'worktree_result'
   /** A23: the plan-interpretation pair, joined by a shared `request_id` like every other gate call. */
