@@ -9,7 +9,9 @@ const command = `node --input-type=module -e '${bootstrap.outputFiles[0].text.tr
 const hooksPath = join(root, 'plugins/codex/hooks/hooks.json');
 const hooks = JSON.parse(readFileSync(hooksPath, 'utf8'));
 for (const groups of Object.values(hooks.hooks)) for (const group of groups) for (const hook of group.hooks) hook.command = command;
-writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + '\n');
+const hooksText = JSON.stringify(hooks, null, 2) + '\n';
+// Tests build in parallel with tests that read this file; rewriting identical bytes truncates it under their read.
+if (readFileSync(hooksPath, 'utf8') !== hooksText) writeFileSync(hooksPath, hooksText);
 await build({
   entryPoints: {
     hook: join(root, 'src/codex/hook.ts'),

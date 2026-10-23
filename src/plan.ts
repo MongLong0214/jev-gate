@@ -52,7 +52,7 @@ export const REQUEST_OMITTED =
 
 /** A19: the request is the whole task of a single-executor dispatch. */
 export const REQUEST_ONLY_NOTE =
-  "The block above is the user's own request for this job, carried verbatim. It is the task. Implement what it asks, run the checks it implies, and report separately anything you could not do. Give each check's check_id as the exact command you ran: the hook compares every reported pass with that command's last run in your own transcript. If you change files, report at least one check you ran; a change with no passing check is not accepted.";
+  "The block above is the user's own request for this job, carried verbatim. It is the task. Implement what it asks, run the checks it implies, and report separately anything you could not do. Give each check's check_id as the exact command you ran, copied character for character from its Bash call, never a short name or description: the hook compares every reported pass with that command's last run in your own transcript. If you change files, report at least one check you ran; a change with no passing check is not accepted.";
 
 export const composeSingleWorkerPrompt = (coordinatorBrief: string, request: string | 'omitted' | null, required = false, sameAdmittedSource = false): string =>
   [coordinatorBrief, ...(request === null ? [] : ['', REQUEST_HEADER, sameAdmittedSource && request === coordinatorBrief ? 'The coordinator brief above is the admitted user request, carried verbatim.' : request === 'omitted' && !required ? REQUEST_OMITTED : request, REQUEST_ONLY_NOTE])].join('\n');

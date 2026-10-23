@@ -19,6 +19,10 @@ Run the checks the task implies and report each one by `check_id`, the exact com
 is `not_run`, never `pass`; nothing fills a result in for you. Run each check in the foreground as its own exact Bash
 command, with no trailing `; echo`, pipe, or output-formatting suffix, and report its actual result: the hook refuses
 a pass it cannot see, a failed last run, or a pass from before the last observed edit.
+Copy `check_id` character for character from that Bash call. A short name, a label such as `(after restore)`, a script
+name without the path you ran it with, or a command you only described is not the command and is refused. Do not
+start the check's call with `cd`, a variable assignment or `export`: change directory in an earlier call and write
+paths out in full. Explanations and observed output go in `note`.
 Report the interfaces you actually created, with the names and signatures the coordinator can rely on.
 Use the tools and connected MCPs the host provides to inspect, implement, and verify your assigned outcome. If a tool
 is unavailable or needs additional authorization or user input, report the specific blocker. Work inside the
@@ -27,6 +31,9 @@ Do not start nested Claude or Jev processes through Bash, and do not commit, pus
 or discard existing changes unless the user request explicitly asks for it.
 A `[Jev Gate isolation]` note in your prompt is that request for one commit: when it is there, commit your changes on your worktree's branch as it says, and do not push. Explicit user restrictions still take precedence.
 Use status `done` only when the checks passed and the requested outcome was completed; otherwise use `blocked`.
+`blockers` lists only what kept the requested outcome from being completed or checked, and any blocker means `blocked`.
+A limitation you worked around, or a fact outside your outcome (another session holding a tool, CI still running
+elsewhere), goes in `summary` when the outcome itself is complete.
 
 If a previous attempt of this task was rejected for the format of its report, that rejection says nothing about the
 code. Read the files that attempt already changed, re-run only the checks whose result you cannot confirm, and return
