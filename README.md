@@ -35,7 +35,7 @@
 <p align="center">
   <a href="#read-the-live-dashboard"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
-    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate dashboard with sample data: header KPIs, the five-feature execution circuit with a shared Jev rail, the execution list, the Jev call log and decision basis, and one execution's detail">
+    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate dashboard with sample data: header metrics, live Jev calls with the latest round trip, feature status, the Jev call log, the decision basis and the execution list">
   </picture></a>
 </p>
 
@@ -153,15 +153,15 @@ Every PR runs the `models` CI job against the official Claude model/effort docum
 
 The plugin opens **one shared local browser dashboard** automatically. Starting another Claude or Codex session reuses it instead of opening duplicate tabs. Select **Claude + Codex**, **Claude Code**, or **Codex** to inspect each host.
 
-A five-node circuit (Gate A, Gate B, workers, Router, Compact; available for both hosts) hangs off a Jev rail. Values and call-log rows update as records arrive, independently of motion. Each Jev request sends a glowing signal to the rail and its result returns to the node, with brief wire, rail and card flashes. Bursts run concurrently, capped at 24 particles without delaying values; idle is calm. The rail ticks through the latest call, latency, calls per minute and rolling p50 of the last 16 measured calls. Each node's fixed-height lines and inspector show the same last-24-hour activity verdict and counts as doctor, including path/tier changes, worker verdicts, Compact restores and budget, and estimated Router net using observed cache TTLs, prefix growth and recorded Jev cost. Router also distinguishes the latest root model/effort from child calls, and selected settings from observed responses. Missing measurements stay unknown.
+The top row shows running executions per host, today's Jev calls and calls per minute, the Jev response-time median and p95, a list-price cost estimate with input tokens, and executions that need review. **Jev calls** plots one dot per recorded call (height = response time) over 60 seconds, 5 or 15 minutes, with the median line and the last hour below. Beside it, the latest round trip replays Gate → Jev → Gate at its recorded duration, with the share answered within one second and each feature's calls, median and share. **Feature status** lists Gate A, Gate B, workers, Router and Compact (available for both hosts) with each one's latest decision, the same last-24-hour fired, applied and regression counts as doctor (full check in the row's tooltip) and an hourly trend. Missing measurements stay unknown.
 
-The node strips cover 60 seconds and **Jev traffic** covers two minutes. Trace watchers read changed filenames incrementally, with polling as a fallback; SSE patches carry changed steps. Pause and disconnected streams freeze the view. Reduced motion disables particles and flashes while values continue updating. All layouts fit without horizontal page scrolling.
+Values and rows update as records arrive, independently of motion. A new call flashes its feature, ripples its dot and replays its round trip; at most six round trips run at once without delaying values, and idle is calm. Trace watchers read changed filenames incrementally, with polling as a fallback; SSE patches carry changed steps. Pause and disconnected streams freeze the view. Reduced motion disables flashes and round trips while values continue updating. Layouts fit 320 to 1920 px without horizontal page scrolling.
 
 1. Start a task in your normal coding session.
-2. Read the **Execution circuit** at the top. Select a node to see its latest decision, confidence and Jev response time in **Stage details**; it also filters the execution list to that feature, and selecting it again shows all.
-3. Choose an execution to open its **Execution detail**: every stage with its time, duration and result, expandable to the recorded question, answer, confidence, tokens, estimated cost, selected model and observed response.
-4. Read the Jev call log and Jev response panel for the latest calls, latency median and p95, today's call count and a list-price cost estimate. Billed credit is not returned by the Jev API, so the cost is an estimate only. **Pause** on the call log holds its rows while new calls are counted.
-5. Use the host switch, the execution filters (All, Running, Needs review, Past errors, Unobserved) and search to narrow records. Korean/English and light/dark controls are available.
+2. Read **Feature status**. Select a feature to show only its calls in the **Jev call log**; selecting it again shows all.
+3. Read the call log: the latest eight calls with time, feature, decision, response time and tokens. A request still awaiting its response counts up in place. Select a row to keep its **Decision basis** (the recorded questions, answers and confidence against the threshold, and the same feature's recent response times); select it again to follow the newest call.
+4. Choose an execution to open its trace: every stage on a timeline with its duration and result, and the selected stage's recorded facts, model selection and observed response, and raw event. Billed credit is not returned by the Jev API, so cost is an estimate only.
+5. Use the host switch and the execution filters (All, Needs review, Running) to narrow records. **Pause** holds the view while new calls are counted; resuming shows the latest state without replaying held calls. Korean/English and light/dark controls are available.
 
 | Record | Meaning |
 | --- | --- |
@@ -174,11 +174,11 @@ The node strips cover 60 seconds and **Jev traffic** covers two minutes. Trace w
 | Past error | A failure followed by a success of the same operation, or caused by the request's own arguments; it stays in the history and is never shown as resolved |
 | No execution record | No matching event is available for this feature and range |
 
-Without a contract decision the worker card reads **No verdict**, including plain native Agent results. A refused worker contract is an error labelled **Contract not met**, with a closed reason and the check ids (`#n`) it concerns, never the raw reply. A later host end appears as its own **Host ended** row and does not mark the run done.
+Without a contract decision the worker stage reads **No verdict**, including plain native Agent results. A refused worker contract is an error labelled **Contract not met**, with a closed reason and the check ids (`#n`) it concerns, never the raw reply. A later host end appears as its own **Host ended** row and does not mark the run done.
 
-**Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. The model card follows the selected timeline stage and names its record/time. A selection or submitted request alone cannot prove which model answered. Missing response effort stays unknown. Codex Compact separately records Jev selection, actual submitted requests and observed responses; omitted characters are not a measured total-token saving. Older records without request purpose remain unconfirmed.
+**Router · Request preparation** means pre-request checks finished. It is neither a new Jev judgment nor a completed model response. The dashboard distinguishes **selected model/effort**, **host dispatch or API request**, and **observed response**. A selection or submitted request alone cannot prove which model answered. Missing response effort stays unknown. Codex Compact separately records Jev selection, actual submitted requests and observed responses; omitted characters are not a measured total-token saving. Older records without request purpose remain unconfirmed.
 
-Circuit lines show possible paths. Flashes and rail lights mark recorded events; the ambient sweep and flowing wires carry none. Response charts use measured Jev latency; motion is not a speed claim. Pause freezes the view; workers keep running. Reconnecting means the browser's event stream will retry. The latest 200 executions are listed; filters recompute displayed measurements and exclude earlier steps outside the range.
+Flashes, ripples and round trips mark recorded calls; the blinking live edge carries none. Response charts use measured Jev latency; motion is not a speed claim. Pause freezes the view; workers keep running. Reconnecting means the browser's event stream will retry. The latest 200 executions are listed; filters recompute displayed measurements and exclude earlier steps outside the range.
 
 Dashboard and recording controls are independent and default to on. Both hosts use the same preferences. Turning recording off leaves Jev features running. Turning automatic dashboard opening off stops the managed server; a manually started view remains available.
 

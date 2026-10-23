@@ -35,8 +35,9 @@ export const pruneViewers = (viewers: Map<string, number>, now: number): void =>
   }
 };
 /** Time between rebuild starts while records keep arriving: ten times the last rebuild keeps the activity thread busy at
- * most a tenth of the time, and a record still shows within two seconds plus one rebuild. Rebuilds stay shared. */
-export const rebuildWait = (lastMs: number): number => Math.min(2000, Math.max(16, lastMs * 10));
+ * most a tenth of the time, and a record still shows within two seconds plus one rebuild. Rebuilds stay shared. A rebuild
+ * of a long history takes milliseconds, so the quarter-second floor is what bounds a busy session to four frames a second. */
+export const rebuildWait = (lastMs: number): number => Math.min(2000, Math.max(250, lastMs * 10));
 
 export interface DashboardSources {
   host?: Host;

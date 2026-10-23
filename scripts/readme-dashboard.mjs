@@ -58,31 +58,29 @@ try {
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    await page.waitForSelector('#pipeline .node');
+    await page.waitForSelector('#stages button.st');
     await page.locator('#language').click();
     if (theme === 'light') await page.locator('#theme').click();
-    await page.locator('#pipeline [data-feature=router]').click();
-    await page.locator('#pipeline [data-feature=router]').click(); // Retain all runs while inspecting Router.
     await page.waitForTimeout(350);
     const geometry = await page.evaluate(() => {
-      const nodes = [...document.querySelectorAll('#pipeline .node')].map(n => { const b = n.getBoundingClientRect(), d = n.querySelector('.t i').getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.bottom, dx: d.x + d.width / 2, dy: d.y + d.height / 2 }; });
-      const rail = document.querySelector('#pipeline .ln').getBoundingClientRect();
-      return { nodes, rail: rail.y + 1, height: document.documentElement.scrollHeight, overflow: document.documentElement.scrollWidth > innerWidth };
+      const box = e => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; };
+      const dots = [...document.querySelectorAll('#dots .dot')].map(box).sort((a, b) => b.x - a.x);
+      return { stages: document.querySelectorAll('#stages button.st:not([hidden])').length, dot: dots[0], wire: box(document.getElementById('j-wire')), height: document.documentElement.scrollHeight, overflow: document.documentElement.scrollWidth > innerWidth };
     });
-    if (errors.length || geometry.overflow || new Set(geometry.nodes.map(n => n.y)).size !== 1) throw Error('Preview did not render a five-stage row');
+    if (errors.length || geometry.overflow || geometry.stages !== 5 || !geometry.dot) throw Error('Preview did not render five stages and the call scatter');
     const png = await page.screenshot({ fullPage: true, animations: 'disabled' });
     const accent = theme === 'dark' ? '#4b8df8' : '#2563eb', bg = theme === 'dark' ? '#08090a' : '#f7f8f8', faint = theme === 'dark' ? '#80858d' : '#61656c';
-    const halos = geometry.nodes.map((n, i) => `<circle class="halo" cx="${n.dx}" cy="${n.dy}" r="5" style="animation-delay:-${i * .25}s"/>`).join('');
-    const router = geometry.nodes[3], distance = geometry.rail - router.y;
+    // The screenshot is still, so the newest call's ripple and its Gate → Jev round trip are drawn over it.
+    const { dot, wire } = geometry, distance = wire.w - 8;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="${geometry.height + 24}" viewBox="0 0 1280 ${geometry.height + 24}" role="img" aria-labelledby="title desc">
-<title id="title">Jev Gate dashboard</title><desc id="desc">Synthetic sample rendered from the current dashboard: Gate A, Gate B, Worker, Router and Compact, live Jev responses, execution records and stage details. No production data.</desc>
-<style>.halo{fill:none;stroke:${accent};transform-box:fill-box;transform-origin:center;animation:halo 1.4s ease-out infinite}@keyframes halo{from{transform:scale(.5);opacity:.9}to{transform:scale(1.6);opacity:0}}.trip{fill:${accent};animation:trip 2.4s ease-in-out infinite}@keyframes trip{0%,15%{transform:translateY(0);opacity:0}20%{opacity:1}45%,55%{transform:translateY(${distance}px);opacity:1}80%{transform:translateY(0);opacity:1}85%,100%{opacity:0}}@media(prefers-reduced-motion:reduce){.halo,.trip{animation:none;display:none}}</style>
+<title id="title">Jev Gate dashboard</title><desc id="desc">Synthetic sample rendered from the current dashboard: header metrics, live Jev calls with the latest round trip, Gate A, Gate B, Worker, Router and Compact status, the call log, the decision basis and the execution list. No production data.</desc>
+<style>.halo{fill:none;stroke:${accent};transform-box:fill-box;transform-origin:center;animation:halo 1.4s ease-out infinite}@keyframes halo{from{transform:scale(.5);opacity:.9}to{transform:scale(1.8);opacity:0}}.trip{fill:${accent};animation:trip 2.4s ease-in-out infinite}@keyframes trip{0%,10%{transform:translateX(0);opacity:0}15%{opacity:1}45%,55%{transform:translateX(${distance}px);opacity:1}85%{transform:translateX(0);opacity:1}90%,100%{opacity:0}}@media(prefers-reduced-motion:reduce){.halo,.trip{animation:none;display:none}}</style>
 <rect width="100%" height="100%" fill="${bg}"/><image width="1280" height="${geometry.height}" href="data:image/png;base64,${png.toString('base64')}"/>
-${halos}<circle class="trip" cx="${router.x}" cy="${router.y}" r="3"/>
+<circle class="halo" cx="${dot.x + dot.w / 2}" cy="${dot.y + dot.h / 2}" r="7"/><circle class="trip" cx="${wire.x + 4}" cy="${wire.y + wire.h / 2}" r="4"/>
 <text x="1256" y="${geometry.height + 16}" text-anchor="end" fill="${faint}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12">Sample data</text></svg>\n`;
     const path = join(root, 'assets/readme', theme === 'dark' ? 'dashboard-dark.svg' : 'dashboard.svg');
     writeFileSync(path, svg);
-    console.log(`Rendered ${theme} preview: ${geometry.nodes.length} stages, 1280 × ${geometry.height + 24}`);
+    console.log(`Rendered ${theme} preview: ${geometry.stages} stages, 1280 × ${geometry.height + 24}`);
     await page.close();
   }
 } finally {

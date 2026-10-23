@@ -225,8 +225,8 @@ describe('dashboard snapshot latency (#215)', () => {
 describe('dashboard rebuild pacing', () => {
   const record = (dir: string, name: string): void => writeFileSync(join(dir, name), JSON.stringify({ phase: 'stop', session_id: 's', written_at: new Date().toISOString(), outcome: 'completed' }));
 
-  it('keeps rebuilds to a tenth of the activity thread and never paces a record more than two seconds', () => {
-    expect([0, 1, 30, 100, 400, 9000].map(rebuildWait)).toEqual([16, 16, 300, 1000, 2000, 2000]);
+  it('keeps rebuilds to a tenth of the activity thread and four a second, and never paces a record more than two seconds', () => {
+    expect([0, 1, 30, 100, 400, 9000].map(rebuildWait)).toEqual([250, 250, 300, 1000, 2000, 2000]);
   });
 
   it('starts the first load at once, then keeps each pause and still shows a new record within seconds', async () => {
@@ -322,7 +322,8 @@ describe('event driven dashboard (#327)', () => {
     const stream = await viewer(server.url);
     try {
       await vi.waitFor(() => expect(stream.states.length).toBeGreaterThan(0));
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // A startup notification can still schedule one rebuild, a pause after the first.
+      await new Promise(resolve => setTimeout(resolve, rebuildWait(0) + 100));
       const before = { loads: gate.started, rebuilds: loads.count, reads: settingsReads.count };
       await vi.waitFor(() => expect(stream.events).toContain('heartbeat'), { timeout: 6000 });
       expect({ loads: gate.started, rebuilds: loads.count, reads: settingsReads.count }).toEqual(before);
@@ -374,6 +375,7 @@ describe('event driven dashboard (#327)', () => {
     const server = await startDashboard({ traceDir: trace, env }, 0), stream = await viewer(server.url);
     try {
       await vi.waitFor(() => expect(stream.states.at(-1)?.['traceFiles']).toBe(1));
+      await new Promise(resolve => setTimeout(resolve, rebuildWait(0) + 100));
       watchEvents.dropped = true; record(trace, 'b.json'); setRecording(env, false);
       await new Promise(resolve => setTimeout(resolve, 100));
       expect(stream.states.at(-1)?.['traceFiles']).toBe(1);
