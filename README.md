@@ -34,8 +34,10 @@
 
 <p align="center">
   <a href="#read-the-live-dashboard"><picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.svg">
-    <img src="./assets/readme/dashboard.svg" width="100%" alt="Jev Gate dashboard with sample data: header metrics, live Jev calls with the latest round trip, feature status, the Jev call log, the decision basis and the execution list">
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-still-dark.webp">
+    <source media="(prefers-reduced-motion: reduce)" srcset="./assets/readme/dashboard-still.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/readme/dashboard-dark.webp">
+    <img src="./assets/readme/dashboard.webp" width="100%" alt="Jev Gate dashboard with sample data: header metrics, live Jev calls with the latest round trip, feature status, the Jev call log, the decision basis and the execution list">
   </picture></a>
 </p>
 
