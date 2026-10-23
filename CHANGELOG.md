@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.57 — 2026-10-23 — Compact keeps older user-role text cut instead of handing the compaction to the engine
+
+- When the previous summary, earlier user-role messages and failed calls did not all fit beside the tail, Compact handed the whole compaction to the engine (`mandatory_overflow`), 28 of 122 auto compactions in a week. They now share 70% of the digest's room newest first: whole while they fit, then cut to their first 520 and last 260 characters around "[…]", then left out, counted on one line. On those 28, the digest keeps 0.727 of the referents the next steps used against 0.570 for the engine's summary with its attachments; every compaction that fitted builds the same digest as before (#361).
+
 ## v0.8.56 — 2026-10-23 — Label an unasked child's first step correctly
 
 - Router recorded the first step of a child whose spawn it did not ask Jev about (a skipped spawn, or a named Fable child) as `answer_invalid`, shown on the dashboard as an invalid assessment. The kept effort was right; it is now recorded as `not_asked` (#359).
