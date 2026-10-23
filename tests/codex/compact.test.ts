@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { compactCandidates, compactScope, newCompactState, prepareCodexCompact } from '../../src/codex/compact.js';
 import type { Obj } from '../../src/codex/source.js';
+import { requestShape } from '../../src/codex/cache-reuse.js';
 
 const fixture = (): Obj => ({ model: 'native-model', reasoning: { effort: 'xhigh' }, instructions: 'Keep user constraints.', extra: { owner: true }, input: [
   { type: 'reasoning', encrypted_content: 'opaque-do-not-touch', summary: [] },
@@ -25,6 +26,47 @@ const answer = (body: string, options: { invalid?: boolean; confidence?: number;
 const argsFor = (request = fixture()) => ({ request, task: 'Implement the new parser; keep its public contract.', recentRequests: [], state: newCompactState('task'), session: 's', prompt: 'p', config: { enabled: true, timeoutMs: 200 }, jevModel: 'systemone', env: { TYPESAFE_API_KEY: 'local-fake' }, path: 'inference' as const, signal: new AbortController().signal, current: () => true });
 
 describe('Codex Jev Compact wire selector (#317)', () => {
+  it('freezes the applied boundary when more results age, while a new task can restore every original fact', async () => {
+    const args = { ...argsFor(), billing: 'chatgpt' as const };
+    const fetchImpl = vi.fn(async (_url, init) => answer(String(init?.body)));
+    const first = await prepareCodexCompact({ ...args, fetchImpl });
+    expect(first.receipt.applied).toBe(true);
+    const next: Obj = { ...args.request, input: [...args.request.input as Obj[],
+      { type: 'custom_tool_call', call_id: 'new', name: 'exec', input: 'Next read.' },
+      { type: 'custom_tool_call_output', call_id: 'new', output: 'Recent facts remain.' },
+    ] };
+    const second = await prepareCodexCompact({ ...args, request: next, fetchImpl });
+    expect((second.request.input as Obj[]).slice(0, -2)).toEqual(first.request.input);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const changedTask = await prepareCodexCompact({ ...args, request: next, state: newCompactState('new task'), task: 'Recover every fact from all old outputs.',
+      fetchImpl: async (_url, init) => answer(String(init?.body), { keep: true }) });
+    expect(changedTask.request).toBe(next);
+  });
+
+  it('protects a complete large parallel batch, including results outside the last six', () => {
+    const source = fixture(), items = source.input as Obj[];
+    const calls = items.filter(v => v.type === 'custom_tool_call');
+    const results = items.filter(v => v.type === 'custom_tool_call_output');
+    expect(compactCandidates([...items.slice(0, 4), ...calls, ...results])).toEqual([]);
+    // A pending call protects the window starting at that call, even before its result exists.
+    expect(compactCandidates([...items.slice(0, 4), { type: 'custom_tool_call', call_id: 'pending', name: 'exec', input: 'Still running.' }, ...items.slice(4)])).toEqual([]);
+    const mismatched = structuredClone(source.input) as Obj[];
+    for (const item of mismatched) if (item.type === 'custom_tool_call') { item.type = 'function_call'; item.arguments = item.input; }
+    expect(compactCandidates(mismatched)).toEqual([]);
+  });
+
+  it('holds both exact and semantic edits that would rebuild a long matching suffix without calling Jev', async () => {
+    const source = fixture(); source.model = 'gpt-6.1-sol';
+    // The suffix belongs to the protected recent window and is deliberately much larger than all old optional text.
+    const outputs = (source.input as Obj[]).filter(v => v.type === 'custom_tool_call_output');
+    outputs.at(-1)!.output = 'retained unique later evidence '.repeat(27000);
+    const fetchImpl = vi.fn(), before = structuredClone(source);
+    const result = await prepareCodexCompact({ ...argsFor(source), billing: 'chatgpt', previous: requestShape(source)!, fetchImpl });
+    expect(result.request).toBe(source); expect(source).toEqual(before);
+    expect(result.receipt).toMatchObject({ applied: false, cache_effect: { allow: false, reason: 'prefix_reprocessing_risk' } });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('offers complete Unicode scalars when an emoji straddles the preserved head boundary', () => {
     const request = fixture(), output = (request.input as Obj[]).find(i => i.type === 'custom_tool_call_output')!;
     (output.output as Obj[])[0]!.text = 'h'.repeat(255) + '😀' + 'Completed unrelated setup details.\n'.repeat(200);

@@ -5,18 +5,35 @@ import type { Env } from '../config.js';
 import type { TraceWriter } from '../trace.js';
 import { obj, type Obj } from './source.js';
 import type { CodexBilling } from './route-cost.js';
+import { compactBenefit, requestShape, type RequestShape } from './cache-reuse.js';
 
 export interface CodexCompactConfig { enabled: boolean; timeoutMs: number }
 export interface CompactState {
-  key: string; decisions: Map<string, boolean>; selections: Map<string, string>; calls: number; pending?: Promise<void>;
+  key: string; decisions: Map<string, boolean>; selections: Map<string, string>; calls: number; pending?: Promise<void>; cutoff?: number;
 }
 interface Part { item: number; block: number | null; start: number; end: number }
 interface Candidate { id: string; tool: string; input: string; inputExcerpt: boolean; text: string; parts: Part[] }
-export interface CompactReceipt { request_id: string; prompt_id: string; path: 'inference' | 'native'; applied: boolean; removed_chars: number; selection_ids: string[]; exact_references?: number; exact_repetitions?: number }
+export interface CompactReceipt { request_id: string; prompt_id: string; path: 'inference' | 'native'; applied: boolean; removed_chars: number; selection_ids: string[]; exact_references?: number; exact_repetitions?: number; cache_effect?: ReturnType<typeof compactBenefit> }
 const hash = (v: string): string => createHash('sha256').update(v).digest('hex');
 const labels = ['keep', 'remove', 'unclear'] as const;
 const protectedText = /(?:Process exited with code [1-9]|"(?:exit_code|exitCode)"\s*:\s*(?:-[1-9]|[1-9])|\b(?:Traceback|Exception:|Error:|FAIL(?:ED)?\b|blockers|required_checks|is_error|interrupted|Script running with cell ID))/i;
 const marker = (n: number): string => `\n[Jev Compact: ${n} characters of older tool output omitted; call and recent context retained.]\n`;
+
+/** Keep at least six recent results and every call/result of their parallel batch.
+ * An unresolved call also protects the remaining window. No new batch-size guess. */
+const oldToolCutoff = (input: unknown[]): number => {
+  const calls = new Map<string, number>(); const results: number[] = [];
+  input.forEach((value, at) => {
+    const x = obj(value), id = x?.['call_id']; if (typeof id !== 'string') return;
+    if (['function_call', 'custom_tool_call'].includes(String(x?.['type']))) calls.set(id, Math.min(calls.get(id) ?? at, at));
+    if (['function_call_output', 'custom_tool_call_output'].includes(String(x?.['type']))) results.push(at);
+  });
+  let cutoff = results[Math.max(0, results.length - 6)] ?? 0;
+  const completed = new Set(results.map(at => String(obj(input[at])?.['call_id'])));
+  for (const at of results.slice(-6)) cutoff = Math.min(cutoff, calls.get(String(obj(input[at])?.['call_id'])) ?? 0);
+  for (const [id, at] of calls) if (!completed.has(id)) cutoff = Math.min(cutoff, at);
+  return cutoff;
+};
 
 /** Linear-time whole-text repetition detection; the unit and count reconstruct every code unit.
  * Keep short, whitespace-only, weak reductions and large buffers native. */
@@ -40,23 +57,22 @@ const exactRepetition = (text: string): string => {
 /** Reference only byte-identical complete plaintext results. The exact original (or its lossless
  * repetition representation) remains in this request. No disk cache, cross-request reference,
  * inferred equivalence or paid judgment is involved. */
-const exactReferences = (request: Obj): { request: Obj; anchors: Set<number>; removed: number; references: number; repetitions: number } => {
+const exactReferences = (request: Obj, boundary?: number): { request: Obj; anchors: Set<number>; removed: number; references: number; repetitions: number } => {
   const unchanged = { request, anchors: new Set<number>(), removed: 0, references: 0, repetitions: 0 };
   if (!Array.isArray(request['input'])) return unchanged;
   const input = request['input'];
   const calls = new Map<string, { name: string; text: string; type: string; at: number; count: number }>();
   const counts = new Map<string, number>();
-  const results: number[] = [];
   input.forEach((v, at) => {
     const x = obj(v); if (!x || typeof x['call_id'] !== 'string') return;
     if (['function_call', 'custom_tool_call'].includes(String(x['type']))) {
       const text = x['type'] === 'function_call' ? x['arguments'] : x['input'];
       if (typeof x['name'] === 'string' && typeof text === 'string') calls.set(x['call_id'], { name: x['name'], text, type: String(x['type']), at, count: (calls.get(x['call_id'])?.count ?? 0) + 1 });
     } else if (['function_call_output', 'custom_tool_call_output'].includes(String(x['type']))) {
-      results.push(at); counts.set(x['call_id'], (counts.get(x['call_id']) ?? 0) + 1);
+      counts.set(x['call_id'], (counts.get(x['call_id']) ?? 0) + 1);
     }
   });
-  const cutoff = results[Math.max(0, results.length - 6)] ?? 0;
+  const cutoff = Math.min(oldToolCutoff(input), boundary ?? Infinity);
   const retained = new Map<string, { item: number; call: string; encoded: string }>();
   let next: unknown[] | undefined;
   const anchors = new Set<number>(), eligible = new Set<number>(); let removed = 0, references = 0, examined = 0;
@@ -101,25 +117,24 @@ const exactReferences = (request: Obj): { request: Obj; anchors: Set<number>; re
 };
 
 /** Only old plaintext interiors are optional. Opaque items, call/result topology, media and recent results are never rewritten. */
-export const compactCandidates = (input: unknown): Candidate[] => {
+export const compactCandidates = (input: unknown, boundary?: number): Candidate[] => {
   if (!Array.isArray(input)) return [];
-  const calls = new Map<string, { name: string; input: string; count: number; at: number }>();
+  const calls = new Map<string, { name: string; input: string; type: string; count: number; at: number }>();
   input.forEach((v, at) => {
     const x = obj(v);
     if (!x || !['function_call', 'custom_tool_call'].includes(String(x['type'])) || typeof x['call_id'] !== 'string' || typeof x['name'] !== 'string') return;
     const text = x['type'] === 'function_call' ? x['arguments'] : x['input'];
     if (typeof text !== 'string') return;
-    calls.set(x['call_id'], { name: x['name'], input: text, count: (calls.get(x['call_id'])?.count ?? 0) + 1, at });
+    calls.set(x['call_id'], { name: x['name'], input: text, type: String(x['type']), count: (calls.get(x['call_id'])?.count ?? 0) + 1, at });
   });
-  const results = input.flatMap((v, at) => ['function_call_output', 'custom_tool_call_output'].includes(String(obj(v)?.['type'])) ? [at] : []);
-  const cutoff = results[Math.max(0, results.length - 6)] ?? 0;
+  const cutoff = Math.min(oldToolCutoff(input), boundary ?? Infinity);
   const resultCounts = new Map<string, number>();
   for (const v of input) { const x = obj(v); if (x && ['function_call_output', 'custom_tool_call_output'].includes(String(x['type'])) && typeof x['call_id'] === 'string') resultCounts.set(x['call_id'], (resultCounts.get(x['call_id']) ?? 0) + 1); }
   const groups = new Map<string, Candidate>();
   input.slice(0, cutoff).forEach((v, item) => {
     const x = obj(v); if (!x || !['function_call_output', 'custom_tool_call_output'].includes(String(x['type'])) || typeof x['call_id'] !== 'string') return;
     const call = calls.get(x['call_id']);
-    if (!call || call.count !== 1 || call.at >= item || resultCounts.get(x['call_id']) !== 1 || x['is_error'] === true || x['interrupted'] === true || looksSecret(call.input)) return;
+    if (!call || call.count !== 1 || call.at >= item || x['type'] !== `${call.type}_output` || resultCounts.get(x['call_id']) !== 1 || x['is_error'] === true || x['interrupted'] === true || looksSecret(call.input)) return;
     const texts = typeof x['output'] === 'string' ? [{ text: x['output'], block: null }] : Array.isArray(x['output']) ? x['output'].flatMap((b, block) => {
       const part = obj(b); return part?.['type'] === 'input_text' && typeof part['text'] === 'string' ? [{ text: part['text'], block }] : [];
     }) : [];
@@ -141,7 +156,8 @@ export const compactCandidates = (input: unknown): Candidate[] => {
       }
     }
   });
-  return [...groups.values()].sort((a, b) => b.text.length * b.parts.length - a.text.length * a.parts.length);
+  // Prefer edits later in the history; an early small edit can rebuild a long suffix.
+  return [...groups.values()].sort((a, b) => Math.min(...b.parts.map(p => p.item)) - Math.min(...a.parts.map(p => p.item)) || b.text.length * b.parts.length - a.text.length * a.parts.length);
 };
 
 export const newCompactState = (key: string): CompactState => ({ key, decisions: new Map(), selections: new Map(), calls: 0 });
@@ -149,17 +165,37 @@ export const compactScope = (request: Obj, task: string, prompt: string): string
   Array.isArray(request['input']) ? request['input'].filter(v => ['user', 'developer', 'system'].includes(String(obj(v)?.['role']))) : null,
   request['instructions'], request['previous_response_id']]));
 
+const replaceParts = (request: Obj, candidates: Candidate[], remove: (id: string) => boolean): { request: Obj; removed: number } => {
+  const replacements = new Map<string, Part[]>();
+  for (const c of candidates) if (remove(c.id)) for (const p of c.parts) {
+    const key = `${p.item}:${p.block}`; const parts = replacements.get(key) ?? []; parts.push(p); replacements.set(key, parts);
+  }
+  if (!replacements.size) return { request, removed: 0 };
+  const input = [...request['input'] as unknown[]]; let removed = 0;
+  for (const parts of replacements.values()) {
+    const first = parts[0]!, item = obj(input[first.item])!, output = item['output'];
+    let value = first.block === null ? String(output) : String(obj((output as unknown[])[first.block])!['text']);
+    const merged: Array<{ start: number; end: number }> = [];
+    for (const p of parts.sort((a, b) => a.start - b.start)) { const last = merged.at(-1); if (last && last.end === p.start) last.end = p.end; else merged.push({ start: p.start, end: p.end }); }
+    for (const p of merged.reverse()) { const replacement = marker(p.end - p.start); if (replacement.length >= p.end - p.start) continue; removed += p.end - p.start - replacement.length; value = value.slice(0, p.start) + replacement + value.slice(p.end); }
+    if (first.block === null) input[first.item] = { ...item, output: value };
+    else { const blocks = [...output as unknown[]]; blocks[first.block] = { ...obj(blocks[first.block])!, text: value }; input[first.item] = { ...item, output: blocks }; }
+  }
+  return { request: { ...request, input }, removed };
+};
+
 export const prepareCodexCompact = async (args: {
   request: Obj; task: string; recentRequests: readonly string[]; state: CompactState;
   session: string; prompt: string; config: CodexCompactConfig; jevModel: string; env: Env;
   path: 'inference' | 'native'; signal: AbortSignal; current: () => boolean;
   billing?: CodexBilling;
+  previous?: RequestShape;
   trace?: TraceWriter; fetchImpl?: typeof fetch;
 }): Promise<{ request: Obj; receipt: CompactReceipt }> => {
   const { request: original, state } = args;
   const receipt: CompactReceipt = { request_id: randomUUID(), prompt_id: args.prompt, path: args.path, applied: false, removed_chars: 0, selection_ids: [] };
   const write = (stage: string, data: Obj): void => { try { args.trace?.write('codex_compact', { host: 'codex', session_id: args.session, ...receipt, stage, ...data }); } catch { /* Observation never blocks native execution. */ } };
-  const skip = (reason: string) => { if (args.path === 'native' || reason === 'assessment_not_amortized') write('prepared', { reason, sent: false }); return { request: original, receipt }; };
+  const skip = (reason: string) => { if (args.path === 'native' || reason === 'assessment_not_amortized' || receipt.cache_effect) write('prepared', { reason, sent: false }); return { request: original, receipt }; };
   if (args.env['JEV_CODEX_ENABLED'] === '0' || !args.config.enabled) return skip('disabled');
   if (args.signal.aborted || !args.current()) return skip('stale');
   if (original['previous_response_id'] || !Array.isArray(original['input'])) return skip('incremental_context');
@@ -167,12 +203,20 @@ export const prepareCodexCompact = async (args: {
   if (!args.env['TYPESAFE_API_KEY']) return skip('no_key');
   if (state.pending) await state.pending;
   if (args.signal.aborted || !args.current()) return skip('stale');
-  const exact = exactReferences(original);
+  const cutoff = Math.min(oldToolCutoff(original['input']), state.cutoff ?? Infinity);
+  const exact = exactReferences(original, cutoff);
   const request = exact.request;
   // An original referenced by another result must not be semantically omitted afterwards.
-  const candidates = compactCandidates(request['input']).map(c => ({ ...c, parts: c.parts.filter(p => !exact.anchors.has(p.item)) })).filter(c => c.parts.length);
+  const candidates = compactCandidates(request['input'], cutoff).map(c => ({ ...c, parts: c.parts.filter(p => !exact.anchors.has(p.item)) })).filter(c => c.parts.length);
   if (!candidates.length && !exact.removed) return skip('no_candidates');
   const unseen = candidates.filter(c => !state.decisions.has(c.id));
+  const originalShape = requestShape(original);
+  const benefit = (offered: Candidate[]) => {
+    if (!args.previous) return compactBenefit(originalShape, originalShape, undefined, args.billing ?? 'unknown');
+    const ids = new Set(offered.map(c => c.id));
+    const proposed = replaceParts(request, candidates, id => ids.has(id) || state.decisions.get(id) === true);
+    return compactBenefit(originalShape, requestShape(proposed.request), args.previous, args.billing ?? 'unknown');
+  };
   let preserveReason = 'preserved';
   let assessmentFailed = false;
   // Bound work per task/context and amortize choices across identical repeated native inputs.
@@ -198,15 +242,19 @@ export const prepareCodexCompact = async (args: {
     // bounded assessment budget; never call its potential removal an allowance saving.
     // API/custom traffic retains the conservative combined-token preflight.
     const separateAllowance = args.billing === 'chatgpt';
-    let bestCount = separateAllowance ? chosen.length : 0, bestGain = 0, possibleReduction = 0;
-    for (const [i, c] of (separateAllowance ? [] : chosen).entries()) {
+    let bestCount = 0, bestGain = 0, possibleReduction = 0;
+    for (const [i, c] of chosen.entries()) {
       possibleReduction += Math.max(0, estimateTokens(c.text) - estimateTokens(marker(c.text.length))) * c.parts.length;
       const offered = chosen.slice(0, i + 1);
       const answerTemplate = { model: args.jevModel, answers: Object.fromEntries(offered.map(v => [v.id, { type: 'choice', choice: 'remove', confidence: .99, probabilities: { keep: .005, remove: .99, unclear: .005 } }])) };
       const assessmentCost = estimateTokens(JSON.stringify(makeRequest(offered))) + estimateTokens(JSON.stringify(answerTemplate));
-      if (possibleReduction - assessmentCost > bestGain) { bestCount = i + 1; bestGain = possibleReduction - assessmentCost; }
+      const gain = separateAllowance ? possibleReduction : possibleReduction - assessmentCost;
+      const cache = benefit(offered);
+      if (gain > bestGain && cache.allow) { bestCount = i + 1; bestGain = gain; }
+      else if (!cache.allow) receipt.cache_effect = cache;
     }
-    if (chosen.length && !bestCount) preserveReason = 'assessment_not_amortized';
+    if (chosen.length && !bestCount) preserveReason = receipt.cache_effect?.reason ?? 'assessment_not_amortized';
+    if (bestCount) delete receipt.cache_effect;
     chosen.splice(bestCount);
     if (chosen.length) {
       state.calls++;
@@ -236,28 +284,22 @@ export const prepareCodexCompact = async (args: {
   }
   if (args.signal.aborted || !args.current()) return skip('stale');
   if (assessmentFailed) return skip('assessment_failed');
-  const replacements = new Map<string, Part[]>();
-  for (const c of candidates) if (state.decisions.get(c.id)) for (const p of c.parts) {
-    const selection = state.selections.get(c.id); if (selection && !receipt.selection_ids.includes(selection)) receipt.selection_ids.push(selection);
-    const key = `${p.item}:${p.block}`; const parts = replacements.get(key) ?? []; parts.push(p); replacements.set(key, parts);
+  const selected = candidates.filter(c => state.decisions.get(c.id));
+  const replaced = replaceParts(request, selected, () => true);
+  if (!replaced.removed && !exact.removed) return skip(preserveReason);
+  receipt.cache_effect = compactBenefit(originalShape, requestShape(replaced.request), args.previous, args.billing ?? 'unknown');
+  if (!receipt.cache_effect.allow) return skip(receipt.cache_effect.reason);
+  for (const c of selected) {
+    const selection = state.selections.get(c.id);
+    if (selection && !receipt.selection_ids.includes(selection)) receipt.selection_ids.push(selection);
   }
-  if (!replacements.size && !exact.removed) return skip(preserveReason);
-  receipt.removed_chars = exact.removed;
+  receipt.removed_chars = exact.removed + replaced.removed;
   if (exact.references) receipt.exact_references = exact.references;
   if (exact.repetitions) receipt.exact_repetitions = exact.repetitions;
-  const input = [...request['input'] as unknown[]];
-  for (const parts of replacements.values()) {
-    const first = parts[0]!; const item = obj(input[first.item])!;
-    const output = item['output'];
-    let value = first.block === null ? String(output) : String(obj((output as unknown[])[first.block])!['text']);
-    // Merge adjacent ranges into one explicit omission, preserving every unselected character.
-    const merged: Array<{ start: number; end: number }> = [];
-    for (const p of parts.sort((a, b) => a.start - b.start)) { const last = merged.at(-1); if (last && last.end === p.start) last.end = p.end; else merged.push({ start: p.start, end: p.end }); }
-    for (const p of merged.reverse()) { const replacement = marker(p.end - p.start); if (replacement.length >= p.end - p.start) continue; receipt.removed_chars += p.end - p.start - replacement.length; value = value.slice(0, p.start) + replacement + value.slice(p.end); }
-    if (first.block === null) input[first.item] = { ...item, output: value };
-    else { const blocks = [...output as unknown[]]; blocks[first.block] = { ...obj(blocks[first.block])!, text: value }; input[first.item] = { ...item, output: blocks }; }
-  }
   receipt.applied = receipt.removed_chars > 0;
-  write('prepared', { reason: replacements.size ? 'selected_old_tool_text' : exact.references ? 'exact_duplicate_reference' : 'exact_repetition', estimated_removed_tokens: null, total_token_saving: 'unmeasured' });
-  return { request: receipt.applied ? { ...request, input } : request, receipt };
+  // Do not progressively move the six-result boundary through an already edited prefix.
+  // A new task/compaction gets a new scope and can restore facts from the native original.
+  if (receipt.applied) state.cutoff ??= cutoff;
+  write('prepared', { reason: selected.length ? 'selected_old_tool_text' : exact.references ? 'exact_duplicate_reference' : 'exact_repetition', estimated_removed_tokens: null, total_token_saving: 'unmeasured' });
+  return { request: replaced.request, receipt };
 };

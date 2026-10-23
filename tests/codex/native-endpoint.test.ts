@@ -36,10 +36,12 @@ it('forwards execution guidance only for a changed full-context pair and preserv
     expect(router).toHaveBeenCalledTimes(4);
     expect(submitted.mock.calls[0]?.[3]).toEqual({ ...original, model: 'selected' });
     const lite = forwarded[0]!; expect(lite['model']).toBe('selected');
-    expect((lite['input'] as Obj[]).slice(1)).toEqual(original['input']);
-    expect((lite['input'] as Obj[])[0]).toMatchObject({ role: 'developer', content: [{ text: expect.stringContaining('required verification remain authoritative') }] });
+    expect((lite['input'] as Obj[]).slice(0, -1)).toEqual(original['input']);
+    expect((lite['input'] as Obj[]).at(-1)).toMatchObject({ role: 'developer', content: [{ text: expect.stringContaining('required verification remain authoritative') }] });
     expect({ ...lite, input: original['input'] }).toEqual({ ...original, model: 'selected' });
-    expect(forwarded[1]).toEqual({ ...cases[1], model: 'selected', instructions: expect.stringContaining('Native full instructions.\n\nJev routed execution:') });
+    expect(forwarded[1]).toEqual({ ...cases[1], model: 'selected', input: lite['input'] });
+    expect(submitted.mock.calls[0]?.[4]).toMatchObject({ native: original, guidance: true });
+    expect(lite).not.toHaveProperty('prompt_cache_options');
     expect(forwarded.slice(2)).toEqual([{ ...cases[2], model: 'selected' }, cases[3], original, original]);
   } finally { await session.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
 });

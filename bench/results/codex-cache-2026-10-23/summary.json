@@ -1,0 +1,1372 @@
+{
+  "schema": 1,
+  "manifest_sha256": "17eee1622300167e1c33397adb98f29249498f787524a0d7bf065f60137c44e9",
+  "bundle_sha256": "329fa37524f5a104e4a847b9d47bb96b65a8b628503dadce38666ee6ecfc4793",
+  "checker_sha256": "458e2c2959479f4ee5173ec7b9b314f1a20dcebe09107d458695f55e620f8977",
+  "source_base": "2865af4f085719a635786bbc8b05693cfb32db95",
+  "native_version": "codex-cli 0.163.0",
+  "baseline": {
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh"
+  },
+  "repetitions": 1,
+  "candidate_scope": "Measured frozen bundle includes prefix, Compact coordination and auxiliary-identity fixes. Final account-change and nonstandard-tier safeguards were added after this bundle; no account or nonstandard-tier changes occurred in these cells.",
+  "rates": {
+    "source": "https://learn.chatgpt.com/docs/pricing#token-rates",
+    "verified_at": "2026-10-23",
+    "unit": "standard_credits_per_million_tokens",
+    "input_cached_output": {
+      "gpt-6.1-sol": [
+        50,
+        2.5,
+        250
+      ],
+      "gpt-6-luna": [
+        2.5,
+        0.25,
+        12.5
+      ],
+      "gpt-5.6-luna": [
+        5,
+        0.5,
+        30
+      ]
+    },
+    "included_allowance": "unknown"
+  },
+  "plan": {
+    "cells": 12,
+    "turns": 36,
+    "started_cells": 12,
+    "completed_equal_quality_cells": 11,
+    "started_turns": 35,
+    "completed_turns": 34,
+    "timed_out_cells": 1,
+    "unstarted_turns": 1,
+    "missing_normal_responses": 1,
+    "normal_requests": 163,
+    "normal_responses": 162,
+    "native_compact_requests": 4,
+    "jev_router_calls": 83,
+    "jev_compact_selection_calls": 0,
+    "compact_applied_requests": 0
+  },
+  "cells": [
+    {
+      "index": 0,
+      "case": "graph",
+      "arm": "off",
+      "kind": "representative_coding",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 13,
+      "normal_responses": 13,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 0,
+      "native_compact_results": 0,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {},
+      "ordinary_observed": {
+        "input": 29440,
+        "read": 233856,
+        "write": 0,
+        "output": 12886,
+        "raw": 276182,
+        "credit_estimate": 5.27814,
+        "usage_complete_records": 13,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 0,
+        "read": 0,
+        "write": 0,
+        "output": 0,
+        "raw": 0,
+        "credit_estimate": 0,
+        "usage_complete_records": 0,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 29440,
+        "read": 233856,
+        "write": 0,
+        "output": 12886,
+        "raw": 276182,
+        "credit_estimate": 5.27814,
+        "usage_complete_records": 13,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 13
+      },
+      "submitted_efforts": {
+        "xhigh": 13
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {},
+      "command_count": 22,
+      "command_exit_counts": {
+        "0": 21,
+        "1": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 299831,
+      "wall_ms": 303004
+    },
+    {
+      "index": 1,
+      "case": "graph",
+      "arm": "router",
+      "kind": "representative_coding",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 15,
+      "normal_responses": 15,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 0,
+      "native_compact_results": 0,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {},
+      "ordinary_observed": {
+        "input": 83709,
+        "read": 195328,
+        "write": 0,
+        "output": 7668,
+        "raw": 286705,
+        "credit_estimate": 0.3539545,
+        "usage_complete_records": 15,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 0,
+        "read": 0,
+        "write": 0,
+        "output": 0,
+        "raw": 0,
+        "credit_estimate": 0,
+        "usage_complete_records": 0,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 83709,
+        "read": 195328,
+        "write": 0,
+        "output": 7668,
+        "raw": 286705,
+        "credit_estimate": 0.3539545,
+        "usage_complete_records": 15,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 15
+      },
+      "submitted_efforts": {
+        "high": 15
+      },
+      "jev_router": {
+        "calls": 15,
+        "input": 58598,
+        "output": 2809,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {},
+      "command_count": 9,
+      "command_exit_counts": {
+        "0": 7,
+        "1": 1,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 98721,
+      "wall_ms": 102633
+    },
+    {
+      "index": 2,
+      "case": "graph",
+      "arm": "compact",
+      "kind": "representative_coding",
+      "completed_equal_quality": false,
+      "started_turns": 2,
+      "completed_turns": 1,
+      "turn_statuses": [
+        "completed",
+        "timeout"
+      ],
+      "checker_passes": [
+        true,
+        true
+      ],
+      "error": "native_turn_not_completed",
+      "normal_requests": 8,
+      "normal_responses": 7,
+      "missing_responses": 1,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 0,
+      "native_compact_results": 0,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {},
+      "ordinary_observed": {
+        "input": 12788,
+        "read": 91392,
+        "write": 0,
+        "output": 7451,
+        "raw": 111631,
+        "credit_estimate": 2.73063,
+        "usage_complete_records": 7,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 0,
+        "read": 0,
+        "write": 0,
+        "output": 0,
+        "raw": 0,
+        "credit_estimate": 0,
+        "usage_complete_records": 0,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 12788,
+        "read": 91392,
+        "write": 0,
+        "output": 7451,
+        "raw": 111631,
+        "credit_estimate": 2.73063,
+        "usage_complete_records": 7,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": false,
+      "actual_response_models": {
+        "gpt-6.1-sol": 7
+      },
+      "submitted_efforts": {
+        "xhigh": 8
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {},
+      "command_count": 6,
+      "command_exit_counts": {
+        "0": 5,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "unverified",
+      "known_descendants": null,
+      "turn_duration_ms": 267469,
+      "wall_ms": 270657
+    },
+    {
+      "index": 3,
+      "case": "graph",
+      "arm": "both",
+      "kind": "representative_coding",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 15,
+      "normal_responses": 15,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 0,
+      "native_compact_results": 0,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {},
+      "ordinary_observed": {
+        "input": 78877,
+        "read": 183936,
+        "write": 0,
+        "output": 7260,
+        "raw": 270073,
+        "credit_estimate": 0.3339265,
+        "usage_complete_records": 15,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 0,
+        "read": 0,
+        "write": 0,
+        "output": 0,
+        "raw": 0,
+        "credit_estimate": 0,
+        "usage_complete_records": 0,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 78877,
+        "read": 183936,
+        "write": 0,
+        "output": 7260,
+        "raw": 270073,
+        "credit_estimate": 0.3339265,
+        "usage_complete_records": 15,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 15
+      },
+      "submitted_efforts": {
+        "high": 15
+      },
+      "jev_router": {
+        "calls": 15,
+        "input": 58329,
+        "output": 2805,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {},
+      "command_count": 8,
+      "command_exit_counts": {
+        "0": 7,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 98157,
+      "wall_ms": 101666
+    },
+    {
+      "index": 4,
+      "case": "ranges",
+      "arm": "router",
+      "kind": "representative_coding",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 11,
+      "normal_responses": 11,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 0,
+      "native_compact_results": 0,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {},
+      "ordinary_observed": {
+        "input": 35764,
+        "read": 148736,
+        "write": 0,
+        "output": 5305,
+        "raw": 189805,
+        "credit_estimate": 0.1929065,
+        "usage_complete_records": 11,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 0,
+        "read": 0,
+        "write": 0,
+        "output": 0,
+        "raw": 0,
+        "credit_estimate": 0,
+        "usage_complete_records": 0,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 35764,
+        "read": 148736,
+        "write": 0,
+        "output": 5305,
+        "raw": 189805,
+        "credit_estimate": 0.1929065,
+        "usage_complete_records": 11,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 11
+      },
+      "submitted_efforts": {
+        "high": 11
+      },
+      "jev_router": {
+        "calls": 11,
+        "input": 41720,
+        "output": 2059,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {},
+      "command_count": 8,
+      "command_exit_counts": {
+        "0": 5,
+        "1": 2,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 68764,
+      "wall_ms": 72334
+    },
+    {
+      "index": 5,
+      "case": "ranges",
+      "arm": "compact",
+      "kind": "representative_coding",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 13,
+      "normal_responses": 13,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 0,
+      "native_compact_results": 0,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {},
+      "ordinary_observed": {
+        "input": 21542,
+        "read": 206848,
+        "write": 0,
+        "output": 8216,
+        "raw": 236606,
+        "credit_estimate": 3.64822,
+        "usage_complete_records": 13,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 0,
+        "read": 0,
+        "write": 0,
+        "output": 0,
+        "raw": 0,
+        "credit_estimate": 0,
+        "usage_complete_records": 0,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 21542,
+        "read": 206848,
+        "write": 0,
+        "output": 8216,
+        "raw": 236606,
+        "credit_estimate": 3.64822,
+        "usage_complete_records": 13,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 13
+      },
+      "submitted_efforts": {
+        "xhigh": 13
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {},
+      "command_count": 15,
+      "command_exit_counts": {
+        "0": 13,
+        "1": 1,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 235602,
+      "wall_ms": 239240
+    },
+    {
+      "index": 6,
+      "case": "ranges",
+      "arm": "both",
+      "kind": "representative_coding",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 10,
+      "normal_responses": 10,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 0,
+      "native_compact_results": 0,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {},
+      "ordinary_observed": {
+        "input": 37882,
+        "read": 122240,
+        "write": 0,
+        "output": 4287,
+        "raw": 164409,
+        "credit_estimate": 0.1788525,
+        "usage_complete_records": 10,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 0,
+        "read": 0,
+        "write": 0,
+        "output": 0,
+        "raw": 0,
+        "credit_estimate": 0,
+        "usage_complete_records": 0,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 37882,
+        "read": 122240,
+        "write": 0,
+        "output": 4287,
+        "raw": 164409,
+        "credit_estimate": 0.1788525,
+        "usage_complete_records": 10,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 10
+      },
+      "submitted_efforts": {
+        "high": 10
+      },
+      "jev_router": {
+        "calls": 10,
+        "input": 37571,
+        "output": 1870,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {},
+      "command_count": 9,
+      "command_exit_counts": {
+        "0": 7,
+        "1": 1,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 61321,
+      "wall_ms": 64617
+    },
+    {
+      "index": 7,
+      "case": "ranges",
+      "arm": "off",
+      "kind": "representative_coding",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 13,
+      "normal_responses": 13,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 0,
+      "native_compact_results": 0,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {},
+      "ordinary_observed": {
+        "input": 27756,
+        "read": 198912,
+        "write": 0,
+        "output": 7850,
+        "raw": 234518,
+        "credit_estimate": 3.84758,
+        "usage_complete_records": 13,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 0,
+        "read": 0,
+        "write": 0,
+        "output": 0,
+        "raw": 0,
+        "credit_estimate": 0,
+        "usage_complete_records": 0,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 27756,
+        "read": 198912,
+        "write": 0,
+        "output": 7850,
+        "raw": 234518,
+        "credit_estimate": 3.84758,
+        "usage_complete_records": 13,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 13
+      },
+      "submitted_efforts": {
+        "xhigh": 13
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {},
+      "command_count": 17,
+      "command_exit_counts": {
+        "0": 15,
+        "1": 1,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 203490,
+      "wall_ms": 208679
+    },
+    {
+      "index": 8,
+      "case": "context",
+      "arm": "compact",
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 17,
+      "normal_responses": 17,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 52389,
+        "read": 435712,
+        "write": 0,
+        "output": 8260,
+        "raw": 496361,
+        "credit_estimate": 5.7737300000000005,
+        "usage_complete_records": 17,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 36982,
+        "read": 3968,
+        "write": 0,
+        "output": 702,
+        "raw": 41652,
+        "credit_estimate": 2.03452,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 89371,
+        "read": 439680,
+        "write": 0,
+        "output": 8962,
+        "raw": 538013,
+        "credit_estimate": 7.80825,
+        "usage_complete_records": 18,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 17
+      },
+      "submitted_efforts": {
+        "xhigh": 17
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "prefix_reprocessing_risk": 4,
+        "preserved": 1
+      },
+      "command_count": 28,
+      "command_exit_counts": {
+        "0": 26,
+        "1": 1,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 286984,
+      "wall_ms": 314786
+    },
+    {
+      "index": 9,
+      "case": "context",
+      "arm": "both",
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 16,
+      "normal_responses": 16,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 206205,
+        "read": 287488,
+        "write": 0,
+        "output": 6036,
+        "raw": 499729,
+        "credit_estimate": 0.6628345,
+        "usage_complete_records": 16,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 40296,
+        "read": 0,
+        "write": 0,
+        "output": 579,
+        "raw": 40875,
+        "credit_estimate": 2.15955,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 246501,
+        "read": 287488,
+        "write": 0,
+        "output": 6615,
+        "raw": 540604,
+        "credit_estimate": 2.8223845,
+        "usage_complete_records": 17,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 16
+      },
+      "submitted_efforts": {
+        "high": 9,
+        "medium": 7
+      },
+      "jev_router": {
+        "calls": 16,
+        "input": 63371,
+        "output": 3006,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "preserved": 1,
+        "prefix_reprocessing_risk": 4
+      },
+      "command_count": 24,
+      "command_exit_counts": {
+        "0": 20,
+        "1": 3,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 78834,
+      "wall_ms": 99746
+    },
+    {
+      "index": 10,
+      "case": "context",
+      "arm": "off",
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 16,
+      "normal_responses": 16,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 58766,
+        "read": 406528,
+        "write": 0,
+        "output": 7049,
+        "raw": 472343,
+        "credit_estimate": 5.71687,
+        "usage_complete_records": 16,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 35416,
+        "read": 3968,
+        "write": 0,
+        "output": 806,
+        "raw": 40190,
+        "credit_estimate": 1.98222,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 94182,
+        "read": 410496,
+        "write": 0,
+        "output": 7855,
+        "raw": 512533,
+        "credit_estimate": 7.69909,
+        "usage_complete_records": 17,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 16
+      },
+      "submitted_efforts": {
+        "xhigh": 16
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 29,
+      "command_exit_counts": {
+        "0": 26,
+        "1": 2,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 213204,
+      "wall_ms": 239892
+    },
+    {
+      "index": 11,
+      "case": "context",
+      "arm": "router",
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 16,
+      "normal_responses": 16,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 265861,
+        "read": 234368,
+        "write": 0,
+        "output": 5232,
+        "raw": 505461,
+        "credit_estimate": 0.7886445,
+        "usage_complete_records": 16,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 35709,
+        "read": 3968,
+        "write": 0,
+        "output": 647,
+        "raw": 40324,
+        "credit_estimate": 1.95712,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 301570,
+        "read": 238336,
+        "write": 0,
+        "output": 5879,
+        "raw": 545785,
+        "credit_estimate": 2.7457645,
+        "usage_complete_records": 17,
+        "usage_unknown_records": 0,
+        "credit_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 16
+      },
+      "submitted_efforts": {
+        "high": 14,
+        "medium": 2
+      },
+      "jev_router": {
+        "calls": 16,
+        "input": 63322,
+        "output": 3000,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 28,
+      "command_exit_counts": {
+        "0": 25,
+        "1": 2,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 76200,
+      "wall_ms": 109413
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "graph",
+      "arm": "router",
+      "eligible": true,
+      "raw_change_percent": 3.810168656900159,
+      "credit_estimate_change_percent": -93.29395393074076,
+      "request_change": 2
+    },
+    {
+      "case": "graph",
+      "arm": "compact",
+      "eligible": false,
+      "raw_change_percent": null,
+      "credit_estimate_change_percent": null,
+      "request_change": null
+    },
+    {
+      "case": "graph",
+      "arm": "both",
+      "eligible": true,
+      "raw_change_percent": -2.2119471942414815,
+      "credit_estimate_change_percent": -93.67340578309783,
+      "request_change": 2
+    },
+    {
+      "case": "ranges",
+      "arm": "router",
+      "eligible": true,
+      "raw_change_percent": -19.06591391705541,
+      "credit_estimate_change_percent": -94.98629008363699,
+      "request_change": -2
+    },
+    {
+      "case": "ranges",
+      "arm": "compact",
+      "eligible": true,
+      "raw_change_percent": 0.8903367758551495,
+      "credit_estimate_change_percent": -5.181438722521692,
+      "request_change": 0
+    },
+    {
+      "case": "ranges",
+      "arm": "both",
+      "eligible": true,
+      "raw_change_percent": -29.89493343794506,
+      "credit_estimate_change_percent": -95.35155864205552,
+      "request_change": -3
+    },
+    {
+      "case": "context",
+      "arm": "compact",
+      "eligible": true,
+      "raw_change_percent": 4.971387208238309,
+      "credit_estimate_change_percent": 1.4178298993777316,
+      "request_change": 1
+    },
+    {
+      "case": "context",
+      "arm": "both",
+      "eligible": true,
+      "raw_change_percent": 5.476915632749502,
+      "credit_estimate_change_percent": -63.34132345510963,
+      "request_change": 0
+    },
+    {
+      "case": "context",
+      "arm": "router",
+      "eligible": true,
+      "raw_change_percent": 6.487777372383818,
+      "credit_estimate_change_percent": -64.33650600265746,
+      "request_change": 0
+    }
+  ],
+  "groups": [
+    {
+      "group": "representative_coding",
+      "arm": "router",
+      "eligible": true,
+      "off_raw": 510700,
+      "on_raw": 476510,
+      "raw_change_percent": -6.6947327197963595,
+      "off_credit_estimate": 9.12572,
+      "on_credit_estimate": 0.546861,
+      "credit_estimate_change_percent": -94.00747557453
+    },
+    {
+      "group": "representative_coding",
+      "arm": "compact",
+      "eligible": false,
+      "off_raw": 510700,
+      "on_raw": null,
+      "raw_change_percent": null,
+      "off_credit_estimate": 9.12572,
+      "on_credit_estimate": null,
+      "credit_estimate_change_percent": null
+    },
+    {
+      "group": "representative_coding",
+      "arm": "both",
+      "eligible": true,
+      "off_raw": 510700,
+      "on_raw": 434482,
+      "raw_change_percent": -14.924221656549829,
+      "off_credit_estimate": 9.12572,
+      "on_credit_estimate": 0.512779,
+      "credit_estimate_change_percent": -94.3809474759252
+    },
+    {
+      "group": "synthetic_context_stress",
+      "arm": "router",
+      "eligible": true,
+      "off_raw": 512533,
+      "on_raw": 545785,
+      "raw_change_percent": 6.487777372383818,
+      "off_credit_estimate": 7.69909,
+      "on_credit_estimate": 2.7457645,
+      "credit_estimate_change_percent": -64.33650600265746
+    },
+    {
+      "group": "synthetic_context_stress",
+      "arm": "compact",
+      "eligible": true,
+      "off_raw": 512533,
+      "on_raw": 538013,
+      "raw_change_percent": 4.971387208238309,
+      "off_credit_estimate": 7.69909,
+      "on_credit_estimate": 7.80825,
+      "credit_estimate_change_percent": 1.4178298993777316
+    },
+    {
+      "group": "synthetic_context_stress",
+      "arm": "both",
+      "eligible": true,
+      "off_raw": 512533,
+      "on_raw": 540604,
+      "raw_change_percent": 5.476915632749502,
+      "off_credit_estimate": 7.69909,
+      "on_credit_estimate": 2.8223845,
+      "credit_estimate_change_percent": -63.34132345510963
+    },
+    {
+      "group": "all_planned_cases",
+      "arm": "router",
+      "eligible": true,
+      "off_raw": 1023233,
+      "on_raw": 1022295,
+      "raw_change_percent": -0.09167022564753324,
+      "off_credit_estimate": 16.82481,
+      "on_credit_estimate": 3.2926254999999998,
+      "credit_estimate_change_percent": -80.42993947628531
+    },
+    {
+      "group": "all_planned_cases",
+      "arm": "compact",
+      "eligible": false,
+      "off_raw": 1023233,
+      "on_raw": null,
+      "raw_change_percent": null,
+      "off_credit_estimate": 16.82481,
+      "on_credit_estimate": null,
+      "credit_estimate_change_percent": null
+    },
+    {
+      "group": "all_planned_cases",
+      "arm": "both",
+      "eligible": true,
+      "off_raw": 1023233,
+      "on_raw": 975086,
+      "raw_change_percent": -4.705379908583874,
+      "off_credit_estimate": 16.82481,
+      "on_credit_estimate": 3.3351635,
+      "credit_estimate_change_percent": -80.17711046959816
+    }
+  ],
+  "invalidated_protocol": {
+    "manifest_sha256": "8aff3ac0e2ca176e24ea0ece037ab33d9f0da59c4568eea1cba60b4819ae7231",
+    "reason": "Native startup memory requests contaminated the OFF cell and were misattributed to root affinity. Owned run stopped. Same fixture/checker/order frozen for all replacement cells; auxiliary handling fixed and native memory disabled only in diagnostic children. No efficacy comparison uses these rows.",
+    "planned_cells": 12,
+    "completed_cells": 1,
+    "interrupted_cells": 1,
+    "unexecuted_cells": 10,
+    "recorded_normal_requests": 24,
+    "recorded_responses": 23,
+    "observed_subtotal": {
+      "input": 707815,
+      "read": 376832,
+      "write": 0,
+      "output": 23901,
+      "raw": 1108548,
+      "credit_estimate": 8.906378,
+      "usage_complete_records": 23,
+      "usage_unknown_records": 0,
+      "credit_unknown_records": 0
+    },
+    "whole_consumption": "unknown",
+    "all_original_rows_preserved": true
+  },
+  "limits": [
+    "One repetition per condition; no confidence interval or p95 claim.",
+    "Independent new native threads/workspaces; shared backend cache warmth unknown; fixed rotating order.",
+    "Native plugins/hooks and memories disabled only in child CLI; isolated lifecycle registration, not installed automatic-plugin proof.",
+    "Raw = uncached input + cached input + cache write + output. Reasoning is already in output. Jev is separate.",
+    "A timed-out partial cell is not an equal-quality saving; missing response/descendant coverage remains unknown.",
+    "Native compaction and subsequent inference are included. No retries of failed cells, warm-up requests or allowance polling.",
+    "All Compact changes were held or ineligible, so no measured Compact transformation benefit or combined causal interaction is established.",
+    "Published credit estimates are not actual included-plan allowance deductions.",
+    "Earlier development 20.90%, synthetic Compact 43.81%, and paper 27.7% are separate results."
+  ]
+}

@@ -29,13 +29,14 @@ import { normalizeUsage, usageCost, ModelCache } from '../cost.js';
 import { providerPrice, providerContextLimit } from '../provider-prices.js';
 import { workerStepContext, rootStepContext, requestStepKey } from './worker-step.js';
 import { requestedUpdateEffort } from './effort-update.js';
+import { cacheDiagnostics, requestChange, requestShape, type RequestShape } from './cache-reuse.js';
 import { compactScope, newCompactState, prepareCodexCompact, type CompactReceipt, type CompactState } from './compact.js';
 import { observedDelegationPrices } from '../delegation-prices.js';
 import { normalizeCatalog, codexTargetAllowed, generalCodexModel } from './catalog.js';
 import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.ts';
 import type { RoutingCache } from '../../mods/router/hooks/context.ts';
 
-export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null; defaultCachePolicy: boolean; billing: CodexBilling }
+export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null; defaultCachePolicy: boolean; billing: CodexBilling; cacheInput?: RequestShape }
 interface WorkerDispatch {
   parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
   worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
@@ -76,6 +77,7 @@ interface Session {
   rootNativeChanged?: boolean;
   settingsEpoch?: number;
   compact?: CompactState;
+  cacheInput?: { shape: RequestShape; epoch: string; billing: CodexBilling };
 }
 const contextOf = (result: { stdout: string | null }): string => {
   if (!result.stdout) return '';
@@ -210,7 +212,7 @@ export class CodexPolicy {
       this.sessions.set(id, session);
     }
     if (!session?.external) return this.nativeHook(input, signal);
-    if (event === 'PostCompact') { delete session.compact; session.epoch = randomUUID(); session.modelCache?.clear(); delete session.cache; }
+    if (event === 'PostCompact') { delete session.compact; delete session.cacheInput; session.epoch = randomUUID(); session.modelCache?.clear(); delete session.cache; }
     if (event === 'UserPromptSubmit' && typeof input['prompt'] === 'string') {
       if (session.wirePending) session.complete = false;
       session.items = session.items.map(({ clientId: _previousPrompt, ...item }) => item);
@@ -233,16 +235,17 @@ export class CodexPolicy {
   }
 
   /** Select optional tool text from the actual wire only; no transcript or history file is edited. */
-  async compactRequest(id: string, request: Obj, signal: AbortSignal, path: 'inference' | 'native', billing: CodexBilling = 'unknown'): Promise<{ request: Obj; receipt?: CompactReceipt }> {
+  async compactRequest(id: string, request: Obj, signal: AbortSignal, path: 'inference' | 'native', billing: CodexBilling = 'unknown', nativeRequest: Obj = request): Promise<{ request: Obj; receipt?: CompactReceipt }> {
     const session = this.sessions.get(id);
     if (!session?.prompt || !session.task || !this.hooked.has(id) || requestedUpdateEffort(request).present) return { request };
     const prompt = session.prompt; const controller = session.controller;
     const config = runtimeCodexPolicy(this.env, this.catalog);
-    const key = compactScope(request, session.task, prompt) + JSON.stringify([config.compact, billing]);
+    const key = compactScope(nativeRequest, session.task, prompt) + JSON.stringify([config.compact, billing]);
     const state = session.compact?.key === key ? session.compact : newCompactState(key);
     session.compact = state;
     try { return await prepareCodexCompact({ request, task: session.task, recentRequests: session.recentRequests ?? [], state,
       session: id, prompt, config: config.compact, jevModel: config.gate.jevModel, env: this.env, path, billing,
+      ...(session.cacheInput?.epoch === session.epoch && session.cacheInput.billing === billing ? { previous: session.cacheInput.shape } : {}),
       signal: controller ? AbortSignal.any([signal, controller.signal]) : signal,
       current: () => this.sessions.get(id) === session && session.prompt === prompt && session.compact === state && JSON.stringify(runtimeCodexPolicy(this.env, this.catalog).compact) === JSON.stringify(config.compact),
       ...(this.trace ? { trace: this.trace } : {}), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
@@ -487,13 +490,14 @@ export class CodexPolicy {
         while (this.workerStarts.size > 16) this.workerStarts.delete(this.workerStarts.keys().next().value!);
       }
       if (session && binding.prompt === session.prompt && binding.epoch === session.epoch && session.lastSubmitted?.requestId === binding.requestId && model === binding.model) {
+        if (binding.cacheInput && response['status'] === 'completed' && usage.coverage === 'complete') session.cacheInput = { shape: binding.cacheInput, epoch: binding.epoch, billing: binding.billing };
         session.cache = { model, input: usage.input, read: usage.read, write: usage.write, ageMs: 0, at: Date.now(), source: 'provider_response_usage' };
         (session.modelCache ??= new ModelCache()).observe({ model, epoch: session.epoch, at: Date.now(), input: usage.input, ttlIsMinimum: true, ttlMs: binding.billing === 'api' && binding.defaultCachePolicy && usage.write !== null && usage.write > 0 ? 1_800_000 : null, read: usage.read, write: usage.write, output: usage.output });
       }
       this.trace?.write('codex_router_response', { host: 'codex', session_id: id, prompt_id: binding.prompt, request_id: binding.requestId, stage: 'response',
         scope: binding.scope, agent_id: binding.scope === 'child' ? id : null, parent_session_id: binding.parent, index: binding.index,
         selected_model: binding.model, selected_effort: binding.effort, submitted_effort: binding.effort, observed_model: model, observed_effort: typeof effort === 'string' ? effort : 'unknown',
-        response_id: typeof response['id'] === 'string' ? response['id'] : null, usage, cost: usageCost(usage, price), provider_reported_cost: typeof response['cost_usd'] === 'number' && Number.isFinite(response['cost_usd']) && response['cost_usd'] >= 0 ? response['cost_usd'] : null, billing: binding.billing, subscription_cost: 'unknown', service_tier: response['service_tier'] ?? null, effective_effort: 'unknown',
+        response_id: typeof response['id'] === 'string' ? response['id'] : null, cache_diagnostics: cacheDiagnostics(response['prompt_cache_diagnostics']), usage, cost: usageCost(usage, price), provider_reported_cost: typeof response['cost_usd'] === 'number' && Number.isFinite(response['cost_usd']) && response['cost_usd'] >= 0 ? response['cost_usd'] : null, billing: binding.billing, subscription_cost: 'unknown', service_tier: response['service_tier'] ?? null, effective_effort: 'unknown',
         reason: model === null ? 'response_unconfirmed' : model !== binding.model ? 'mismatch' : 'response_model_confirmed' });
     }
     if (session?.external && binding && binding.prompt === session.prompt && binding.epoch === session.epoch && session.lastSubmitted?.requestId === binding.requestId) {
@@ -629,7 +633,15 @@ export class CodexPolicy {
     this.rpc.forward(message);
   }
   private notification(message: Obj): void {
-    if (['account/updated', 'account/login/completed'].includes(String(message['method']))) { this.catalogReady = this.loadCatalog(); }
+    if (['account/updated', 'account/login/completed'].includes(String(message['method']))) {
+      for (const session of this.sessions.values()) {
+        session.epoch = randomUUID(); delete session.cacheInput; delete session.compact;
+        session.modelCache?.clear(); delete session.cache; delete session.route;
+        session.stepRoutes?.forEach(step => { step.patch = {}; });
+        session.rootNativeChanged = true;
+      }
+      this.catalogReady = this.loadCatalog();
+    }
     const p = obj(message['params']) ?? {}; const session = this.sessions.get(String(p['threadId']));
     if (!session) return;
     if (message['method'] === 'thread/settings/updated') {
@@ -658,7 +670,7 @@ export class CodexPolicy {
       const ix = session.items.findIndex(i => i['id'] === item['id']);
       if (ix < 0) session.items.push(item); else session.items[ix] = item;
       if (Buffer.byteLength(JSON.stringify(session.items)) > 8 * 1024 * 1024) { session.complete = false; session.items = session.items.slice(-100); }
-      if (item['type'] === 'contextCompaction') { session.complete = false; session.epoch = String(item['id']); session.tokens = null; session.modelCache?.clear(); delete session.cache; session.stepRoutes?.forEach(v => { v.patch = {}; }); }
+      if (item['type'] === 'contextCompaction') { session.complete = false; session.epoch = String(item['id']); delete session.cacheInput; delete session.compact; session.tokens = null; session.modelCache?.clear(); delete session.cache; session.stepRoutes?.forEach(v => { v.patch = {}; }); }
     }
     if (message['method'] === 'turn/completed') {
       const turn = obj(p['turn']) ?? {};
@@ -1066,6 +1078,11 @@ export class CodexPolicy {
     if (typeof metadata === 'string') {
       try {
         const parsed = obj(JSON.parse(metadata));
+        // Native memory extraction deliberately omits thread identity and shares
+        // session affinity with its startup caller. Prewarm and future internal
+        // operations likewise belong to Codex, not the root routing/cache state.
+        const kind = parsed?.['request_kind'];
+        if (kind !== undefined && kind !== 'turn' && kind !== 'compaction' || parsed?.['thread_source'] === 'memory_consolidation') return null;
         const id = parsed?.['thread_id'] ?? parsed?.['session_id'];
         if (typeof id === 'string' && this.sessions.has(id)) return id;
         // A native spawn_agent child carries the root's session-id; it never binds to root state.
@@ -1074,7 +1091,7 @@ export class CodexPolicy {
     }
     return typeof affinity === 'string' && this.sessions.has(affinity) ? affinity : null;
   }
-  observeRequest(sessionId: string, request: Obj, billing: CodexBilling = 'unknown', routedInput?: Obj): CodexSubmission | undefined {
+  observeRequest(sessionId: string, request: Obj, billing: CodexBilling = 'unknown', routedInput?: Obj, transformation?: { native: Obj; guidance: boolean; compact?: CompactReceipt }): CodexSubmission | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     // Compact may rewrite the submitted history after Router selected this inference.
@@ -1088,11 +1105,16 @@ export class CodexPolicy {
     if (typeof effort === 'string') session.requestEffort = effort; else delete session.requestEffort;
     const submitted = { prompt: session.prompt, model: String(request['model']), effort: typeof effort === 'string' ? effort : null, requestId: randomUUID(), epoch: session.epoch, index: step?.index ?? null, scope: session.role ? 'child' as const : 'root' as const, parent: session.parent ?? null,
       defaultCachePolicy: request['prompt_cache_options'] === undefined && request['prompt_cache_retention'] === undefined, billing };
-    session.lastSubmitted = submitted;
+    const shape = requestShape(request);
+    const binding: CodexSubmission = { ...submitted, ...(shape ? { cacheInput: shape } : {}) };
+    session.lastSubmitted = binding;
     this.trace?.write('codex_model_request', { host: 'codex', session_id: session.id, prompt_id: session.prompt, request_id: submitted.requestId,
       requested_update_effort: requestedUpdateEffort(request).effort, effective_effort: 'unknown', effort_cache: 'native_configuration_update_unverified',
+      context_epoch: submitted.epoch,
+      ...(transformation ? { input_change: { ...requestChange(transformation.native, request), execution_guidance_added: transformation.guidance,
+        compact_applied: transformation.compact?.applied ?? false, compact_receipt_id: transformation.compact?.request_id ?? null } } : {}),
       submitted_model: submitted.model, submitted_effort: submitted.effort, scope: session.role ? 'child' : 'root', agent_id: session.role ? session.id : null, parent_session_id: session.parent ?? null, index: submitted.index });
-    if (!route || !Object.keys(route).length) return submitted;
+    if (!route || !Object.keys(route).length) return binding;
     const selectedModel = route.model ?? baseline.model;
     const selectedEffort = route.effortEdit?.kind === 'omit' ? null : route.effort ?? baseline.effort;
     // Ultra is a native host selection, resolved by the model to an inference effort.
@@ -1106,7 +1128,7 @@ export class CodexPolicy {
       selected_model: selectedModel, selected_effort: selectedEffort, effort_resolution: nativeUltra ? 'native_ultra' : 'direct',
       request_kind: session.requestKind ?? 'unknown',
       reason: 'request_applied', applied: request['model'] === selectedModel && (route.effortEdit?.kind === 'omit' ? effort === undefined : !route.effort || effort === selectedEffort || nativeUltra) });
-    return submitted;
+    return binding;
   }
   close(): void { for (const s of this.sessions.values()) { s.controller?.abort(); s.done?.({localClose:true}); } }
 }

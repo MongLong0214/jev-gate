@@ -126,6 +126,8 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       let modified = false;
       let compact: CompactReceipt | undefined;
       let routedInput: Obj | undefined;
+      let nativeInput: Obj | undefined;
+      let guidance = false;
       const nativeCompact = req.method === 'POST' && (route === '/responses/compact' || route === '/responses' && compactionRequest(req.headers['x-codex-turn-metadata']));
       if (req.method === 'POST' && (route === '/responses' || route === '/responses/compact')) {
         // Hook trust is the root's; a native child request is checked against the root it was sent for.
@@ -133,13 +135,15 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         if ((!trusted || !policy?.hooksReady(trusted)) && !options.connection) { res.writeHead(412); res.end('Trust the installed Jev Gate hooks in Codex /hooks before starting a managed session.'); return; }
         if (sessionId && policy) {
           let parsed = obj(JSON.parse(decoded.toString('utf8'))) ?? {};
+          nativeInput = parsed;
           const cancelled = new AbortController(); res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
           if (route === '/responses' && !nativeCompact) {
             const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator'], codexBilling(configured, account));
             routedInput = selected.request;
             parsed = routedExecution(parsed, selected.request);
+            guidance = parsed !== selected.request;
           }
-          const prepared = await policy.compactRequest(sessionId, parsed, cancelled.signal, nativeCompact ? 'native' : 'inference', codexBilling(configured, account));
+          const prepared = await policy.compactRequest(sessionId, parsed, cancelled.signal, nativeCompact ? 'native' : 'inference', codexBilling(configured, account), nativeInput);
           compact = prepared.receipt;
           if (prepared.request !== parsed || !nativeCompact) { payload = Buffer.from(JSON.stringify(prepared.request)); modified = true; }
         }
@@ -163,7 +167,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         if (requestFailed) return; requestFailed = true;
         if (sessionId) {
           policy?.observeRequestFailure(sessionId, submitted);
-          if (compact && (nativeCompact || compact.applied) && !compactTerminal) { compactTerminal = true; policy?.recordCompact(sessionId, compact, 'result', { outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); }
+          if (compact && (nativeCompact || compact.applied) && !compactTerminal) { compactTerminal = true; policy?.recordCompact(sessionId, compact, 'result', { model_request_id: submitted?.requestId ?? null, outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); }
         }
       };
       const fail = (): void => {
@@ -182,7 +186,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           const observed = (value: Obj, failed = false) => {
             if (compactTerminal) return; compactTerminal = true;
             const r = obj(value['response']) ?? value;
-            policy?.recordCompact(sessionId, receipt, 'result', { status: response.statusCode, outcome: failed || r['status'] === 'failed' || r['status'] === 'incomplete' || r['error'] ? 'failed' : 'completed', usage: normalizeUsage('codex', obj(r['usage']) ?? {}), model: typeof r['model'] === 'string' ? r['model'] : null, total_token_saving: 'unmeasured' });
+            policy?.recordCompact(sessionId, receipt, 'result', { model_request_id: submitted?.requestId ?? null, status: response.statusCode, outcome: failed || r['status'] === 'failed' || r['status'] === 'incomplete' || r['error'] ? 'failed' : 'completed', usage: normalizeUsage('codex', obj(r['usage']) ?? {}), model: typeof r['model'] === 'string' ? r['model'] : null, total_token_saving: 'unmeasured' });
           };
           // Native /responses streams can omit Content-Type. Use the endpoint's contract,
           // just as ordinary response accounting does, rather than parsing SSE as JSON.
@@ -206,9 +210,9 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       upstream.on('error', fail);
       res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
       if (!nativeCompact && req.method === 'POST' && route === '/responses' && sessionId && policy) {
-        try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}, codexBilling(configured, account), routedInput); } catch { /* Observation does not block sending. */ }
+        try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}, codexBilling(configured, account), routedInput, nativeInput ? { native: nativeInput, guidance, ...(compact ? { compact } : {}) } : undefined); } catch { /* Observation does not block sending. */ }
       }
-      if (sessionId && compact && (nativeCompact || compact.applied)) { const receipt = compact; upstream.once('finish', () => policy?.recordCompact(sessionId, receipt, 'submitted', { sent: true })); }
+      if (sessionId && compact && (nativeCompact || compact.applied)) { const receipt = compact; upstream.once('finish', () => policy?.recordCompact(sessionId, receipt, 'submitted', { model_request_id: submitted?.requestId ?? null, sent: true })); }
       upstream.end(payload);
     } catch { if (!res.headersSent) { res.writeHead(502); res.end(); } else res.destroy(); }
   });

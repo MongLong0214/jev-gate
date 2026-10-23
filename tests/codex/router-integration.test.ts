@@ -380,6 +380,50 @@ describe('original Codex root execution boundaries', () => {
     expect(records).toContainEqual(expect.objectContaining({ request_id: null, prompt_id: null, scope: 'unknown', reason: 'request_identity_unknown', usage: expect.objectContaining({ read: 80 }) }));
     f.rpc.close();
   });
+  it('keeps only the latest complete matching request shape, records safe diagnostics, and resets at native compaction', async () => {
+    const f = await fixture(true, 'fixture-B', 'max');
+    try {
+      const first = f.policy.observeRequest('root', f.request, 'chatgpt', undefined, { native: f.request, guidance: false })!;
+      const next = f.policy.observeRequest('root', { ...f.request, input: [...f.request.input, { role: 'user', content: 'private-input-canary' }] }, 'chatgpt')!;
+      const response = { id: 'cache-fixture', model: 'fixture-A', status: 'completed', output: [], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 }, output_tokens: 5 },
+        prompt_cache_diagnostics: { type: 'cache_miss', reason: 'input_changed', cache_missed_tokens: 80, raw_prompt: 'private-input-canary' } };
+      f.policy.observeUsage('root', response, first);
+      const session = f.policy.sessions.get('root')!;
+      expect(session.cacheInput).toBeUndefined(); // Late response cannot replace the current binding.
+      f.policy.observeUsage('root', { ...response, status: 'incomplete' }, next);
+      expect(session.cacheInput).toBeUndefined();
+      f.policy.observeUsage('root', { ...response, usage: {} }, next);
+      expect(session.cacheInput).toBeUndefined();
+      f.policy.observeUsage('root', response, next);
+      expect(session.cacheInput?.shape).toEqual(next.cacheInput);
+      expect(JSON.stringify(session.cacheInput)).not.toContain('private-input-canary');
+      const rows = readdirSync(join(dir, 'trace')).map(file => JSON.parse(readFileSync(join(dir, 'trace', file), 'utf8')));
+      expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_router_response', request_id: next.requestId, usage: expect.objectContaining({ read: 0, output: 5 }), cache_diagnostics: { type: 'cache_miss', reason: 'input_changed', cache_missed_tokens: 80 } }));
+      expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_model_request', request_id: first.requestId, context_epoch: first.epoch, input_change: expect.objectContaining({ first_changed_item: null, compact_applied: false, execution_guidance_added: false }) }));
+      expect(JSON.stringify(rows)).not.toContain('private-input-canary');
+      session.compact = { key: 'old', calls: 0, decisions: new Map(), selections: new Map(), cutoff: 2 };
+      await f.policy.externalHook({ hook_event_name: 'PostCompact', session_id: 'root' });
+      expect(session.cacheInput).toBeUndefined(); expect(session.compact).toBeUndefined();
+      expect(session.epoch).not.toBe(first.epoch);
+    } finally { f.rpc.close(); }
+  });
+  it.each(['account/updated', 'account/login/completed'])('retires old comparison context and late responses on %s', async method => {
+    const f = await fixture(true, 'fixture-B', 'max');
+    try {
+      vi.spyOn(f.rpc, 'request').mockResolvedValue({ data: catalog, nextCursor: null });
+      const submitted = f.policy.observeRequest('root', f.request, 'chatgpt')!;
+      const response = { model: 'fixture-A', status: 'completed', usage: { input_tokens: 100, output_tokens: 5, input_tokens_details: { cached_tokens: 80, cache_write_tokens: 0 } } };
+      f.policy.observeUsage('root', response, submitted);
+      const session = f.policy.sessions.get('root')!;
+      expect(session.cacheInput).toBeDefined();
+      session.compact = { key: 'old-account', calls: 0, decisions: new Map(), selections: new Map() };
+      f.rpc.onNotification({ method, params: {} });
+      expect(session.epoch).not.toBe(submitted.epoch);
+      expect(session.cacheInput).toBeUndefined(); expect(session.compact).toBeUndefined(); expect(session.cache).toBeUndefined();
+      f.policy.observeUsage('root', response, submitted);
+      expect(session.cacheInput).toBeUndefined(); expect(session.route).toBeUndefined();
+    } finally { f.rpc.close(); }
+  });
   it('routes each owned worker NEXT step once after a closed native tool pair, retaining the original contract', async () => {
     const f = await fixture(false, 'gpt-6.1-sol', 'low');
     f.policy.catalog = [
