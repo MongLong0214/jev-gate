@@ -12,6 +12,16 @@ const base = { written_at: at, session_id: 's1', prompt_id: 'p1', mode: 'auto', 
 const row = (component: ModRecord['component'], rec: Record<string, unknown>, time = at): ModRecord => ({ at: time, component, rec });
 
 describe('operations display model', () => {
+  it.each(['timeout', 'http_error', 'invalid_reply', 'state_missing', 'unreachable', 'aborted'])('keeps a Codex hook %s visible without inventing worker or Bash failure (#382)', connection_failure => {
+    const view = buildOperations([{ ...base, host: 'codex', phase: 'failure', event: 'PostToolUse', tool_name: 'Bash', connection_failure, error_first_line: `connection_${connection_failure}` }], [], new Date(later), { trace: true, host: 'codex' });
+    expect(view.features.find(f => f.id === 'workers')).toMatchObject({ count: 0, lastAt: null, state: 'waiting' });
+    expect(view.feed[0]).toMatchObject({ feature: 'connection', lifecycle: true, state: 'error', lane: 'host', cause: `connection_${connection_failure}`, title: 'Codex 훅 · 연결 실패' });
+    expect(view.feed[0]?.model).toBeUndefined();
+    expect(view.feed[0]?.summary).toContain('PostToolUse');
+    expect(view.feed[0]?.summary).toContain('Bash');
+    expect(view.feed[0]?.details.join(' ')).toContain('도구 실행 실패나 워커 실패를 뜻하지 않음');
+    expect(view.attention).toBe(1);
+  });
   it.each(['jv_live_' + '0123456789abcdef'.repeat(4), 'sk-canary', 'ghp_' + 'a1'.repeat(20), 'AKIAIOSFODNN7EXAMPLE'])('H1: applies the shared credential screen to Codex operation identities: %s', secret => {
     expect(codexSpanKey({ session_id: 'session', agent_id: secret }, 'SubagentStop')).toBeNull();
   });

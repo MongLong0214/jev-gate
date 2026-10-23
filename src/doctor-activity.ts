@@ -11,7 +11,7 @@ import { readTraceRecords, type TraceRead } from './explain.js';
 import type { Host } from './host-support.js';
 import { LIVENESS_WINDOW, type LivenessState } from './liveness.js';
 import { providerPrice } from './provider-prices.js';
-import { codexFailureReason, verdictReason } from './worker-record.js';
+import { codexConnectionFailure, codexFailureReason, verdictReason } from './worker-record.js';
 import { routerDecisionKey } from './operations.js';
 import { estimateJevCostUsd } from './bench/usage.js';
 import { OWNED_AGENT_NAMES } from './types.js';
@@ -394,7 +394,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     stale ? 'No Codex root routing was recorded: sessions started before the current connection keep the old provider; restart them (exit and resume), then rerun doctor.' : 'No Codex root routing was recorded; start a fresh Codex session so the installed plugin reconnects, then rerun doctor.');
 
   const failures = phase('failure');
-  say(failures.length ? 'warn' : 'ok', `failures: ${failures.length} failure records${failures.length ? ` (${tally(failures.map(r => (codexFailureReason(r) ? String(r['failure_category']) : null) ?? verdictReason('', r['verdict_reason'])?.[0] ?? 'uncategorized'))})` : ''}`,
+  say(failures.length ? 'warn' : 'ok', `failures: ${failures.length} failure records${failures.length ? ` (${tally(failures.map(r => codexConnectionFailure(r)?.[0] ?? (codexFailureReason(r) ? String(r['failure_category']) : null) ?? verdictReason('', r['verdict_reason'])?.[0] ?? 'uncategorized'))})` : ''}`,
     'Open the failures in the dashboard; each names the stage that failed.');
 
   return out;

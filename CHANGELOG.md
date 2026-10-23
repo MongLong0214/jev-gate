@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.63 — 2026-10-23 — Preserve Codex contracts and distinguish hook connection failures
+
+- Routed Codex execution establishes the original public signatures, input types and invariants before editing. Missing or buried requirements are recovered through native tools; a smoke test or tests matching an invented interface do not establish contract compliance. The native input, tools, permissions and opaque history remain unchanged. This addresses the contract drift observed in #381 without disabling Luna or changing Claude routing.
+- Codex hook transport failures are separate lifecycle incidents, with their recorded connection reason, event and tool. They remain visible for review without counting as worker calls or replacing the latest worker status. Doctor uses the same closed reason codes; these records do not prove a native tool failure, worker failure or hook exit code (#382).
+- The dashboard decision basis reserves a stable multiline reason area and gives the full human reason in its title instead of an internal `ok` code. No ellipsis hides model/effort reasons (#383).
+- The frozen, repeated OAuth contract diagnostic retains every OFF/before/after cell and its quality and consumption, including failures; see `bench/results/codex-router-contract-2026-10-23`. This known regression fixture is not a representative savings benchmark.
+- Claude policies and native compaction settings are unchanged. Published, installed and measured behavior remain separate verification results; no universal token or subscription allowance saving is claimed.
+
 ## v0.8.62 — 2026-10-23 — Worker reports that acceptance can read, and a live README dashboard
 
 - Worker instructions (`agents/worker*.md`) and the Gate worker prompt now require each `check_id` copied character for character from its Bash call, with no `cd`, assignment or `export` prefix, and explanations in `note`. Over the previous 24 h no Gate worker result was accepted: two reported passes were unobserved because workers reported shortened names (`node m1.mjs fail`) instead of the command they ran.

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { codexFailureReason, verdictReason } from './worker-record.js';
+import { codexConnectionFailure, codexFailureReason, verdictReason } from './worker-record.js';
 import { allocatedTraceRecords } from './explain.js';
 import { codexOperations, codexRow, codexRunKey, codexSpanKey, firstRow } from './codex-operations.js';
 import { failed, operationState } from './operation-state.js';
@@ -17,7 +17,7 @@ export type StepLane = 'jev' | 'policy' | 'host' | 'local';
 export interface OperationStep {
   id: string;
   at: string;
-  feature: FeatureId;
+  feature: FeatureId | 'connection';
   /** Lifecycle and preparation-only records do not establish a Jev decision or host response. */
   lifecycle?: boolean;
   /** Exact native child identity, when the lifecycle record supplies it. */
@@ -281,6 +281,15 @@ const ROUTER_EVENT: Record<string, string> = {
 const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>, live: Liveness): OperationStep | null => {
   const phase = token(r['phase']);
   if (!phase) return null;
+  const connection = phase === 'failure' ? codexConnectionFailure(r) : null;
+  if (connection) {
+    const at = iso(r['written_at']); if (!at) return null;
+    const event = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionEnd', 'Interrupt', 'PreCompact', 'PostCompact'].includes(String(r['event'])) ? String(r['event']) : '훅 종류 미확인';
+    return { id: id(token(r['invocation_id']) ?? `connection:${at}:${event}:${connection[0]}`), at, feature: 'connection', lifecycle: true, state: 'error', lane: 'host', issue: 'host', cause: connection[0],
+      ...(token(r['session_id']) ? { sessionId: token(r['session_id'])! } : {}),
+      title: 'Codex 훅 · 연결 실패', summary: text(event, token(r['tool_name']), connection[1]),
+      details: [connection[0], '훅과 로컬 Jev 연결 사이의 오류 · 도구 실행 실패나 워커 실패를 뜻하지 않음', 'HTTP 상태·내부 원인·프로세스 종료 코드는 이 기록만으로 확인 불가'] };
+  }
   // #289: a legacy planner dispatch is not worker execution, and its feature is gone like the plan and guard records.
   const feature = phase === 'dispatch' && r['role'] === 'planner' ? null : traceFeature(phase);
   if (!feature) return null;
@@ -978,7 +987,7 @@ const summarize = (group: Group, part: Part, records: Node[], mods: Node[]): Bui
     for (let k = 0; k < s.details.length; k++) s.details[k] = intern(s.details[k]!);
     if (!REGULAR.test(s.at)) b.regular = false;
     if (s.at > b.maxAt) b.maxAt = s.at;
-    if (!s.lifecycle) { const f = b.features.get(s.feature); if (!f) b.features.set(s.feature, { count: 1, maxAt: s.at }); else { f.count++; if (s.at > f.maxAt) f.maxAt = s.at; } }
+    if (!s.lifecycle && s.feature !== 'connection') { const f = b.features.get(s.feature); if (!f) b.features.set(s.feature, { count: 1, maxAt: s.at }); else { f.count++; if (s.at > f.maxAt) f.maxAt = s.at; } }
     const ref = { e, i, s };
     if (timed(s)) b.durations.push(s.durationMs!);
     if (s.lane === 'jev' && s.state !== 'active') { const key = `${e.run.host}:${s.feature}`, best = b.latest.get(key); if (!best || newestRef(ref, best) < 0) b.latest.set(key, ref); }

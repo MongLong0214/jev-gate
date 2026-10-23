@@ -538,6 +538,11 @@ describe('activity: codex_connection', () => {
 });
 
 describe('activity: failures', () => {
+  it.each(['timeout', 'http_error', 'invalid_reply'])('names Codex hook connection_%s without counting a worker failure (#382)', connection_failure => {
+    const checks = run([], { traces: { codex: { records: [rec('failure', { host: 'codex', event: 'PreToolUse', tool_name: 'Bash', connection_failure })], unreadable: 0 } } });
+    expect(check(checks, 'failures').message).toContain(`connection_${connection_failure} 1`);
+    expect(check(checks, 'worker').metrics).toMatchObject({ fired: 0, failed: 0 });
+  });
   it('warns on failure records by category', () => {
     expect(check(run([rec('failure', { failure_category: 'preflight_conflict' })]), 'failures')).toMatchObject({ level: 'warn', message: 'failures: 1 failure records (preflight_conflict 1)' });
   });
