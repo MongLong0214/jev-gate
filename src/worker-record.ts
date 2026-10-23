@@ -10,6 +10,13 @@ const CODEX_FAILURE: Record<string, string> = {
   native_failed_turn: 'Codex 워커 턴 실패', interrupted: '워커 중단', termination_unconfirmed: '워커 종료 미확인 · 예약 유지',
 };
 export const codexFailureReason = (r: Rec): string | null => Object.hasOwn(CODEX_FAILURE, String(r['failure_category'])) ? CODEX_FAILURE[String(r['failure_category'])]! : null;
+/** Hook transport failure is not a worker or native tool result. Never render raw error prose. */
+export const codexConnectionFailure = (r: Rec): [string, string] | null => {
+  if (r['host'] !== 'codex' || r['connection_failure'] === undefined) return null;
+  const labels: Record<string, string> = { state_missing: '연결 정보 없음', unreachable: '로컬 연결 불가', http_error: 'HTTP 응답 오류', timeout: '연결 시간 초과', aborted: '연결 중단', invalid_reply: '연결 응답 형식 오류' };
+  const code = Object.hasOwn(labels, String(r['connection_failure'])) ? String(r['connection_failure']) : 'unknown';
+  return [`connection_${code}`, labels[code] ?? '연결 오류 종류 미확인'];
+};
 const WORKER_REASON: Record<string, string> = {
   invalid_reply: '워커 응답 형식 오류',
   superseded: '새 작업으로 교체됨',

@@ -391,7 +391,7 @@ it('shows a Jev response\'s questions once, in the decision basis panel, with si
   const slots = () => [...p.get('basis-q').querySelectorAll('li')];
   expect(slots()).toHaveLength(6); expect(slots().filter(l => l.textContent)).toHaveLength(2);
   expect(p.get('basis-q').querySelectorAll('b')).toHaveLength(1); expect(slots()[0]!.textContent).toContain('모델'); expect(slots()[0]!.textContent).toContain('0.70');
-  expect(p.get('basis-code').title).toBe('model_selected'); expect(text(p, 'basis-code')).not.toContain('model_selected');
+  expect(p.get('basis-code').title).toBe(text(p, 'basis-code')); expect(text(p, 'basis-code')).not.toContain('model_selected');
   expect(p.get('basis-trace').getAttribute('href')).toBe('#run=decision');
   p.click('#rc button[data-call=many]'); expect(slots()).toHaveLength(6); expect(slots()[5]!.textContent).toBe('외 9개'); expect(slots()[4]!.textContent).toContain('q4');
   p.click('#language'); expect(slots()[5]!.textContent).toBe('+9 more');

@@ -19,6 +19,9 @@ describe('Codex routed execution guidance', () => {
     for (let i = 0; i < (original.input as Obj[]).length; i++) expect(input[i]).toBe((original.input as Obj[])[i]);
     expect(JSON.stringify(input.at(-1))).toContain('required verification remain authoritative');
     expect(JSON.stringify(input.at(-1))).toContain('Keep dependent operations sequential');
+    expect(JSON.stringify(input.at(-1))).toContain('original public signatures, input types');
+    expect(JSON.stringify(input.at(-1))).toContain('recover the original source with native tools before implementing');
+    expect(JSON.stringify(input.at(-1))).toContain('passing a smoke test or tests written around your implementation is not proof');
   });
 
   it('keeps a stable instruction across tool rounds and never adds the guidance twice', () => {

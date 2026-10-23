@@ -1,0 +1,1257 @@
+{
+  "schema": 1,
+  "product_candidate": "0.8.63",
+  "source_base": "34c9a5b58e42b09dae9abaa422954eb309654867",
+  "native_version": "codex-cli 0.163.0",
+  "manifest_sha256": "fb757c02f492de8399821c91b876099b0dbf9cb63e2a385207974d340ba508c0",
+  "manifest_file_sha256": "5f32f8e7b8aace8d280a3b5b06a5e096878849c9bef4c48922e5838016a96cf0",
+  "candidate_bundle_sha256": "9c18f8ad3f73af2846839846247d83a70d5794512b76de1bb72fbe2d4ee7070f",
+  "candidate_diff_sha256": "13a5ba7ea5869a50dbb6561a550620064ebae90841b2ed12c3fc5ddc9c746302",
+  "baseline_bundle_sha256": "0a3a4cf2962a9d2d3c59316c54df556866ce947516ad3831b5e32000d1d65e90",
+  "checker_sha256": "458e2c2959479f4ee5173ec7b9b314f1a20dcebe09107d458695f55e620f8977",
+  "baseline": {
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh"
+  },
+  "repetitions": 3,
+  "scope": "Issue381 known regression, not held-out. Frozen original fixture, prompts and checker. OFF/before/after three repetitions, rotated fixed order, no cell retries, native compact before third turn, distinct persistent threads/cache keys. Only routed execution guidance changes in candidate. Shared backend warmth unknown. All planned rows, quality failures, timeout and consumption retained. Native and Jev usage separate; no quota or cost equivalence. No proof of installed automatic lifecycle.",
+  "integrity": {
+    "manifest_verified": true,
+    "fixture_files_verified": true,
+    "checker_verified": true,
+    "plan_order_verified": true
+  },
+  "plan": {
+    "cells": 9,
+    "turns": 27,
+    "started_cells": 9,
+    "completed_equal_quality_cells": 8,
+    "started_turns": 27,
+    "completed_turns": 27,
+    "missing_normal_responses": 0,
+    "normal_requests": 150,
+    "normal_responses": 150,
+    "native_compact_requests": 9,
+    "native_compact_results": 9,
+    "jev_router_calls": 102,
+    "jev_compact_selection_calls": 0,
+    "compact_applied_requests": 0
+  },
+  "cells": [
+    {
+      "index": 0,
+      "case": "context",
+      "arm": "off",
+      "repetition": 1,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 16,
+      "normal_responses": 16,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 54413,
+        "read": 389632,
+        "write": 0,
+        "output": 6923,
+        "raw": 450968,
+        "reasoning_subset": 1950,
+        "usage_complete_records": 16,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 36028,
+        "read": 3968,
+        "write": 0,
+        "output": 869,
+        "raw": 40865,
+        "reasoning_subset": 279,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 90441,
+        "read": 393600,
+        "write": 0,
+        "output": 7792,
+        "raw": 491833,
+        "reasoning_subset": 2229,
+        "usage_complete_records": 17,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 16
+      },
+      "submitted_efforts": {
+        "xhigh": 16
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 29,
+      "command_exit_counts": {
+        "0": 27,
+        "1": 1,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 491833,
+        "inputTokens": 484041,
+        "cachedInputTokens": 393600,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 7792,
+        "reasoningOutputTokens": 2229
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 230253,
+      "wall_ms": 261081,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 0,
+      "native_counter_matches": true,
+      "router_outcomes": {},
+      "failed_checks": []
+    },
+    {
+      "index": 1,
+      "case": "context",
+      "arm": "before",
+      "repetition": 1,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": false,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        false
+      ],
+      "error": null,
+      "normal_requests": 11,
+      "normal_responses": 11,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 214029,
+        "read": 142336,
+        "write": 0,
+        "output": 3312,
+        "raw": 359677,
+        "reasoning_subset": 872,
+        "usage_complete_records": 11,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 32754,
+        "read": 3968,
+        "write": 0,
+        "output": 597,
+        "raw": 37319,
+        "reasoning_subset": 153,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 246783,
+        "read": 146304,
+        "write": 0,
+        "output": 3909,
+        "raw": 396996,
+        "reasoning_subset": 1025,
+        "usage_complete_records": 12,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 11
+      },
+      "submitted_efforts": {
+        "medium": 3,
+        "high": 8
+      },
+      "jev_router": {
+        "calls": 12,
+        "input": 42657,
+        "output": 2065,
+        "unknown_usage_calls": 1
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 19,
+      "command_exit_counts": {
+        "0": 17,
+        "128": 2
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 396996,
+        "inputTokens": 393087,
+        "cachedInputTokens": 146304,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 3909,
+        "reasoningOutputTokens": 1025
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 55531,
+      "wall_ms": 75652,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 44722,
+      "native_counter_matches": true,
+      "router_outcomes": {
+        "selected": 11,
+        "aborted": 1
+      },
+      "failed_checks": [
+        "original-context-facts"
+      ]
+    },
+    {
+      "index": 2,
+      "case": "context",
+      "arm": "after",
+      "repetition": 1,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 19,
+      "normal_responses": 19,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 261309,
+        "read": 330752,
+        "write": 0,
+        "output": 8606,
+        "raw": 600667,
+        "reasoning_subset": 3775,
+        "usage_complete_records": 19,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 40230,
+        "read": 3968,
+        "write": 0,
+        "output": 821,
+        "raw": 45019,
+        "reasoning_subset": 344,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 301539,
+        "read": 334720,
+        "write": 0,
+        "output": 9427,
+        "raw": 645686,
+        "reasoning_subset": 4119,
+        "usage_complete_records": 20,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 19
+      },
+      "submitted_efforts": {
+        "high": 18,
+        "medium": 1
+      },
+      "jev_router": {
+        "calls": 19,
+        "input": 76022,
+        "output": 3561,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 37,
+      "command_exit_counts": {
+        "0": 34,
+        "1": 2,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 645686,
+        "inputTokens": 636259,
+        "cachedInputTokens": 334720,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 9427,
+        "reasoningOutputTokens": 4119
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 109130,
+      "wall_ms": 141429,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 79583,
+      "native_counter_matches": true,
+      "router_outcomes": {
+        "selected": 19
+      },
+      "failed_checks": []
+    },
+    {
+      "index": 3,
+      "case": "context",
+      "arm": "before",
+      "repetition": 2,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 14,
+      "normal_responses": 14,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 237069,
+        "read": 170112,
+        "write": 0,
+        "output": 5364,
+        "raw": 412545,
+        "reasoning_subset": 1726,
+        "usage_complete_records": 14,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 34261,
+        "read": 3968,
+        "write": 0,
+        "output": 837,
+        "raw": 39066,
+        "reasoning_subset": 370,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 271330,
+        "read": 174080,
+        "write": 0,
+        "output": 6201,
+        "raw": 451611,
+        "reasoning_subset": 2096,
+        "usage_complete_records": 15,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 14
+      },
+      "submitted_efforts": {
+        "high": 12,
+        "medium": 2
+      },
+      "jev_router": {
+        "calls": 14,
+        "input": 54665,
+        "output": 2626,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 22,
+      "command_exit_counts": {
+        "0": 20,
+        "1": 1,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 451611,
+        "inputTokens": 445410,
+        "cachedInputTokens": 174080,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 6201,
+        "reasoningOutputTokens": 2096
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 73423,
+      "wall_ms": 101564,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 57291,
+      "native_counter_matches": true,
+      "router_outcomes": {
+        "selected": 14
+      },
+      "failed_checks": []
+    },
+    {
+      "index": 4,
+      "case": "context",
+      "arm": "after",
+      "repetition": 2,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 21,
+      "normal_responses": 21,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 303104,
+        "read": 334464,
+        "write": 0,
+        "output": 6661,
+        "raw": 644229,
+        "reasoning_subset": 2183,
+        "usage_complete_records": 21,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 37038,
+        "read": 3968,
+        "write": 0,
+        "output": 664,
+        "raw": 41670,
+        "reasoning_subset": 298,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 340142,
+        "read": 338432,
+        "write": 0,
+        "output": 7325,
+        "raw": 685899,
+        "reasoning_subset": 2481,
+        "usage_complete_records": 22,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 3,
+        "gpt-6-luna": 18
+      },
+      "submitted_efforts": {
+        "high": 11,
+        "medium": 7,
+        "xhigh": 3
+      },
+      "jev_router": {
+        "calls": 21,
+        "input": 72075,
+        "output": 3382,
+        "unknown_usage_calls": 3
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 27,
+      "command_exit_counts": {
+        "0": 25,
+        "1": 1,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 685899,
+        "inputTokens": 678574,
+        "cachedInputTokens": 338432,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 7325,
+        "reasoningOutputTokens": 2481
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 130642,
+      "wall_ms": 154918,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 75457,
+      "native_counter_matches": true,
+      "router_outcomes": {
+        "selected": 18,
+        "timeout": 2,
+        "http_529": 1
+      },
+      "failed_checks": []
+    },
+    {
+      "index": 5,
+      "case": "context",
+      "arm": "off",
+      "repetition": 2,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 17,
+      "normal_responses": 17,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 57937,
+        "read": 426752,
+        "write": 0,
+        "output": 7476,
+        "raw": 492165,
+        "reasoning_subset": 1876,
+        "usage_complete_records": 17,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 36851,
+        "read": 3968,
+        "write": 0,
+        "output": 708,
+        "raw": 41527,
+        "reasoning_subset": 253,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 94788,
+        "read": 430720,
+        "write": 0,
+        "output": 8184,
+        "raw": 533692,
+        "reasoning_subset": 2129,
+        "usage_complete_records": 18,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 17
+      },
+      "submitted_efforts": {
+        "xhigh": 17
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 29,
+      "command_exit_counts": {
+        "0": 28,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 533692,
+        "inputTokens": 525508,
+        "cachedInputTokens": 430720,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 8184,
+        "reasoningOutputTokens": 2129
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 263665,
+      "wall_ms": 292234,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 0,
+      "native_counter_matches": true,
+      "router_outcomes": {},
+      "failed_checks": []
+    },
+    {
+      "index": 6,
+      "case": "context",
+      "arm": "after",
+      "repetition": 3,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 18,
+      "normal_responses": 18,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 273838,
+        "read": 264064,
+        "write": 0,
+        "output": 7908,
+        "raw": 545810,
+        "reasoning_subset": 4048,
+        "usage_complete_records": 18,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 42514,
+        "read": 0,
+        "write": 0,
+        "output": 916,
+        "raw": 43430,
+        "reasoning_subset": 399,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 316352,
+        "read": 264064,
+        "write": 0,
+        "output": 8824,
+        "raw": 589240,
+        "reasoning_subset": 4447,
+        "usage_complete_records": 19,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 17,
+        "gpt-6.1-sol": 1
+      },
+      "submitted_efforts": {
+        "high": 16,
+        "medium": 1,
+        "xhigh": 1
+      },
+      "jev_router": {
+        "calls": 18,
+        "input": 71406,
+        "output": 3375,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 33,
+      "command_exit_counts": {
+        "0": 32,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 589240,
+        "inputTokens": 580416,
+        "cachedInputTokens": 264064,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 8824,
+        "reasoningOutputTokens": 4447
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 109642,
+      "wall_ms": 140698,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 74781,
+      "native_counter_matches": true,
+      "router_outcomes": {
+        "selected": 18
+      },
+      "failed_checks": []
+    },
+    {
+      "index": 7,
+      "case": "context",
+      "arm": "off",
+      "repetition": 3,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 16,
+      "normal_responses": 16,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 78289,
+        "read": 366592,
+        "write": 0,
+        "output": 8111,
+        "raw": 452992,
+        "reasoning_subset": 2769,
+        "usage_complete_records": 16,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 36810,
+        "read": 3968,
+        "write": 0,
+        "output": 801,
+        "raw": 41579,
+        "reasoning_subset": 312,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 115099,
+        "read": 370560,
+        "write": 0,
+        "output": 8912,
+        "raw": 494571,
+        "reasoning_subset": 3081,
+        "usage_complete_records": 17,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6.1-sol": 16
+      },
+      "submitted_efforts": {
+        "xhigh": 16
+      },
+      "jev_router": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 31,
+      "command_exit_counts": {
+        "0": 29,
+        "1": 1,
+        "128": 1
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 494571,
+        "inputTokens": 485659,
+        "cachedInputTokens": 370560,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 8912,
+        "reasoningOutputTokens": 3081
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 235734,
+      "wall_ms": 263238,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 0,
+      "native_counter_matches": true,
+      "router_outcomes": {},
+      "failed_checks": []
+    },
+    {
+      "index": 8,
+      "case": "context",
+      "arm": "before",
+      "repetition": 3,
+      "kind": "synthetic_context_stress",
+      "completed_equal_quality": true,
+      "started_turns": 3,
+      "completed_turns": 3,
+      "turn_statuses": [
+        "completed",
+        "completed",
+        "completed"
+      ],
+      "checker_passes": [
+        true,
+        true,
+        true
+      ],
+      "error": null,
+      "normal_requests": 18,
+      "normal_responses": 18,
+      "missing_responses": 0,
+      "orphan_responses": 0,
+      "duplicate_requests": 0,
+      "duplicate_responses": 0,
+      "native_compact_requests": 1,
+      "native_compact_results": 1,
+      "native_compact_missing_results": 0,
+      "native_compact_orphan_results": 0,
+      "native_compact_outcomes": {
+        "completed": 1
+      },
+      "ordinary_observed": {
+        "input": 295469,
+        "read": 209280,
+        "write": 0,
+        "output": 7402,
+        "raw": 512151,
+        "reasoning_subset": 2954,
+        "usage_complete_records": 18,
+        "usage_unknown_records": 0
+      },
+      "native_compact_observed": {
+        "input": 36731,
+        "read": 3968,
+        "write": 0,
+        "output": 650,
+        "raw": 41349,
+        "reasoning_subset": 245,
+        "usage_complete_records": 1,
+        "usage_unknown_records": 0
+      },
+      "whole_observed": {
+        "input": 332200,
+        "read": 213248,
+        "write": 0,
+        "output": 8052,
+        "raw": 553500,
+        "reasoning_subset": 3199,
+        "usage_complete_records": 19,
+        "usage_unknown_records": 0
+      },
+      "whole_consumption_complete": true,
+      "actual_response_models": {
+        "gpt-6-luna": 17,
+        "gpt-6.1-sol": 1
+      },
+      "submitted_efforts": {
+        "high": 15,
+        "medium": 2,
+        "xhigh": 1
+      },
+      "jev_router": {
+        "calls": 18,
+        "input": 71328,
+        "output": 3379,
+        "unknown_usage_calls": 0
+      },
+      "jev_compact_selection_calls": 0,
+      "compact_applied_requests": 0,
+      "compact_prepared_reasons": {
+        "disabled": 1
+      },
+      "command_count": 22,
+      "command_exit_counts": {
+        "0": 20,
+        "1": 1,
+        "129": 1
+      },
+      "native_error_events": 0,
+      "native_error_retries": [],
+      "protected_fixture_files": [
+        {
+          "file": "contract.md",
+          "unchanged": true
+        },
+        {
+          "file": "smoke.cjs",
+          "unchanged": true
+        }
+      ],
+      "oauth_auth_type": "chatgpt",
+      "native_reported_final_total": {
+        "totalTokens": 553500,
+        "inputTokens": 545448,
+        "cachedInputTokens": 213248,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 8052,
+        "reasoningOutputTokens": 3199
+      },
+      "descendant_coverage": "complete_archived_and_unarchived",
+      "known_descendants": 0,
+      "turn_duration_ms": 99482,
+      "wall_ms": 136105,
+      "jev_compact": {
+        "calls": 0,
+        "input": 0,
+        "output": 0,
+        "unknown_usage_calls": 0
+      },
+      "jev_total_observed_raw": 74707,
+      "native_counter_matches": true,
+      "router_outcomes": {
+        "selected": 18
+      },
+      "failed_checks": []
+    }
+  ],
+  "comparisons": [
+    {
+      "repetition": 1,
+      "arm": "before",
+      "eligible": false,
+      "off_raw": 491833,
+      "on_observed_raw": 396996,
+      "raw_change_percent": null
+    },
+    {
+      "repetition": 1,
+      "arm": "after",
+      "eligible": true,
+      "off_raw": 491833,
+      "on_observed_raw": 645686,
+      "raw_change_percent": 31.281552884820663
+    },
+    {
+      "repetition": 2,
+      "arm": "before",
+      "eligible": true,
+      "off_raw": 533692,
+      "on_observed_raw": 451611,
+      "raw_change_percent": -15.379844554537069
+    },
+    {
+      "repetition": 2,
+      "arm": "after",
+      "eligible": true,
+      "off_raw": 533692,
+      "on_observed_raw": 685899,
+      "raw_change_percent": 28.51963304677605
+    },
+    {
+      "repetition": 3,
+      "arm": "after",
+      "eligible": true,
+      "off_raw": 494571,
+      "on_observed_raw": 589240,
+      "raw_change_percent": 19.141639926319986
+    },
+    {
+      "repetition": 3,
+      "arm": "before",
+      "eligible": true,
+      "off_raw": 494571,
+      "on_observed_raw": 553500,
+      "raw_change_percent": 11.915174969822328
+    }
+  ],
+  "groups": [
+    {
+      "arm": "before",
+      "eligible": false,
+      "quality_pass_cells": 2,
+      "planned_cells": 3,
+      "off_observed_raw": 1520096,
+      "on_observed_raw": 1402107,
+      "raw_change_percent": null
+    },
+    {
+      "arm": "after",
+      "eligible": true,
+      "quality_pass_cells": 3,
+      "planned_cells": 3,
+      "off_observed_raw": 1520096,
+      "on_observed_raw": 1920825,
+      "raw_change_percent": 26.36208502620887
+    }
+  ],
+  "limits": [
+    "Known regression fixture, not held-out; three repetitions do not establish general reliability or a causal effect size.",
+    "Frozen original requirements, prompts and checker; rotated OFF/before/after order, no cell retries or replacements.",
+    "Synthetic context stress; not representative coding or a measured included-plan allowance deduction.",
+    "Native OAuth ChatGPT auth; actual adapter with isolated manual lifecycle and disabled child plugin/hooks/memory. Installed automatic plugin verified separately.",
+    "Independent persistent threads/workspaces/cache keys; shared backend warmth unknown.",
+    "Raw includes uncached input, cached input, cache write and output; reasoning is a subset of output. Native compaction is included; Jev usage is separate.",
+    "Failures and their consumption are retained; equal-quality percentages are omitted for failed pairs.",
+    "Compact was disabled; no Jev Compact transformation or causal Compact benefit is claimed.",
+    "Transport preserved original native inputs; the original drift is observed model behavior, not evidence that the gateway lost the contract.",
+    "No quota polling, price weighting, API key inference or forced model selection."
+  ]
+}

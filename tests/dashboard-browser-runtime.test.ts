@@ -578,6 +578,43 @@ describe.skipIf(process.env['JEV_DASHBOARD_BROWSER_E2E'] !== '1')('dashboard Chr
     await p.close();
   });
 
+  it('reads full decision reasons in both languages without clipping, misleading titles or update shifts (#383)', async () => {
+    for (const width of [1920,1440,1280,390]) {
+      const result = (modelReason: string, effortReason: string) => run('reason','codex',[call('reason-call','router',92,{routing:{scope:'root',baseline:'gpt-6.1-sol',modelReason,effortReason}},{code:'ok',choice:'gpt-6-luna · high'})]);
+      push([result('same_value','selected')]); const p=await page(width,900);
+      await p.locator('#basis').scrollIntoViewIfNeeded();
+      for (const lang of ['ko','en']) {
+        if (await p.locator('html').getAttribute('lang') !== lang) await p.locator('#language').click(); await settle(p);
+        const before=await p.locator('#basis').boundingBox();
+        await p.evaluate(observeShifts); await wait(600);
+        for (const reasons of [['same_value','selected'],['superseded_baseline','cost_unknown_hold'],['definition_unverified','confidence_below_threshold']]) {
+          push([result(reasons[0]!,reasons[1]!)]);
+          await p.waitForFunction(()=>document.getElementById('basis-code')?.getAttribute('title')===document.getElementById('basis-code')?.textContent&&document.getElementById('basis-code')?.getAttribute('title')!=='ok'); await settle(p);
+          const code=p.locator('#basis-code');
+          expect(await code.getAttribute('title')).toBe(await code.textContent());
+          expect(await code.evaluate(e=>({x:e.scrollWidth-e.clientWidth,y:e.scrollHeight-e.clientHeight}))).toEqual({x:0,y:0});
+          expect(await p.locator('#basis').boundingBox()).toEqual(before);
+          expect(await problems(p)).toEqual([]);
+        }
+        expect(await shifts(p)).toEqual([]);
+        await p.locator('#basis-trace').focus(); expect(await p.locator('#basis-trace').evaluate(e=>e===document.activeElement)).toBe(true);
+      }
+      await p.screenshot({path:join(output,`basis-reasons-${width}.png`),fullPage:true}); await p.close();
+    }
+  },30_000);
+
+  it('shows a Bash hook connection incident without replacing worker status (#382)', async () => {
+    const ops=buildOperations([{host:'codex',session_id:'hook-incident',phase:'failure',event:'PostToolUse',tool_name:'Bash',connection_failure:'timeout',written_at:ago(1000)}],[],new Date(),{trace:true,host:'codex'});
+    push(ops.runs);const p=await page();await p.locator('[data-host=codex]').click();
+    expect(await stage(p,'workers').textContent()).not.toContain('연결');
+    expect(await stage(p,'workers').textContent()).not.toContain('호스트 호출 실패');
+    await go(p,ops.runs[0]!.id);
+    expect(await p.locator('#sd-body').textContent()).toContain('PostToolUse · Bash · 연결 시간 초과');
+    expect(await p.locator('#sd-body').textContent()).toContain('도구 실행 실패나 워커 실패를 뜻하지 않음');
+    expect(await p.locator('#sd-body').textContent()).not.toContain('요청 모델 미기록');
+    await p.screenshot({path:join(output,'codex-hook-connection.png'),fullPage:true});await p.close();
+  });
+
   it('keeps header and stage geometry stable when the periodic version status changes',async()=>{
     for(const width of [1440,768,390,320]){
       const history=[run('version','claude',[call('version-call','router',60)])];push(history);const p=await page(width);await settle(p);
