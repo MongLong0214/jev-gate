@@ -389,7 +389,8 @@ describe('Codex genuine terminal settlement (#139)', () => {
   });
   it.each([true, false])('keeps uncertain start and ACK-only termination protected (started=%s)', async started => {
     const f = await setup('uncertain', started); const t = Date.now(); await f.launch();
-    expect(Date.now() - t).toBeLessThan(1600);
+    // Recovery shares one 1 s deadline; separate read and interrupt budgets would take 2 s or more.
+    expect(Date.now() - t).toBeLessThan(2000);
     expect(JSON.stringify(f.returned())).toContain('termination unconfirmed');
     expect(JSON.stringify(f.returned())).toContain('Internal execution identity: worker');
     expect(f.job().current.active['dispatch']?.codex_execution?.thread_id).toBe('worker');

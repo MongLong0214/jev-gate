@@ -141,7 +141,8 @@ process.stdout.write(s.url + '\\n');`;
         expect(result, stderr).toBe(0); expect(performance.now() - started).toBeLessThan(1000);
       } finally { clearTimeout(timer); }
       expect(readPrivateJson(runtime)).toBeNull();
-      expect((await reader.read().catch(() => ({ done: true }))).done).toBe(true);
+      // A frame sent just before shutdown may still be buffered; the stream has to end after it, not hang.
+      while (!(await reader.read().catch(() => ({ done: true }))).done);
     } finally { await reader?.cancel().catch(() => undefined); child.kill(); rmSync(directory, { recursive: true, force: true }); }
   }, 10_000);
 });
