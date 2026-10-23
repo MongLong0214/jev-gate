@@ -1109,10 +1109,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         if (edit.kind === 'set' && !factsOf(e.model)?.unconditionalEffort.includes(edit.value as SymbolicEffort) || edit.kind === 'omit' && (factsOf(e.model)?.unconditionalEffort.length !== 0 || factsOf(e.model)?.conditionalEffort.length !== 0)) { c.stopped = true; return null; }
         c.effort = edit.kind === 'set' && isSymbolicEffort(edit.value) ? edit.value : null;
       }
-      const efforts = c.allocation ? null : offerableEfforts(c.baseline);
+      // A spawn left unasked (skipped, or named on the call) has no answer for its child's first step: not asked, not invalid.
+      const asked = !!c.allocation || !!c.answers.effort;
+      const efforts = c.allocation || !asked ? null : offerableEfforts(c.baseline);
       const decision = efforts ? choosePatch(c.answers, c.baseline, { tiers: null, efforts }, policy('spawn', undefined)) : null;
       if (!c.allocation) c.effort = decision?.patch.effort ?? null;
-      log(engine, { event: 'child', agent_id: id, from: { model: e.model, effort: e.effort ?? null }, patch: c.effort, reason: pairReason ?? (decision ? decision.effort : 'effort_unknown') });
+      log(engine, { event: 'child', agent_id: id, from: { model: e.model, effort: e.effort ?? null }, patch: c.effort, reason: pairReason ?? (decision ? decision.effort : asked ? 'effort_unknown' : 'not_asked') });
       if (c.effort === null && c.allocation?.kind !== 'omit') {
         if (!c.stepContract || !engine.childContext) c.stopped = true;
         return null;
