@@ -60,10 +60,12 @@ export const compactBenefit = (before: RequestShape | null, after: RequestShape 
   const rates = billing === 'chatgpt' && before.standard && after.standard ? CODEX_CREDIT_RATES[after.model] : undefined;
   if (!rates) return { ...facts, ...shared, allow: false, reason: 'reuse_cost_unknown' };
   // Count the shared suffix once for the complete proposed edit, not once per candidate.
-  // Compare equal output, with the prior matching prefix reusable in the native request.
+  // Serialized sizes cannot bound the server tokenizer or rendered prefix. An actual
+  // OAuth check reduced raw tokens but increased credits despite a favorable delta.
+  // Keep this scenario as diagnostics only; it cannot authorize destroying known reuse.
   const delta = (after.tokens - before.tokens) * rates[0] + lost * (rates[0] - rates[1]);
-  return { ...facts, ...shared, allow: delta < 0, reason: delta < 0 ? 'estimated_net_benefit' : 'prefix_reprocessing_risk',
-    estimated_credit_delta: delta / 1_000_000, included_allowance: 'unknown' };
+  return { ...facts, ...shared, allow: false, reason: 'prefix_reprocessing_risk',
+    estimated_credit_delta: delta / 1_000_000, authorization: 'rendered_token_bound_unavailable', included_allowance: 'unknown' };
 };
 
 /** Only a closed, scalar projection of server-provided diagnostics is observable. */

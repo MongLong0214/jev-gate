@@ -35,9 +35,21 @@ Raw = uncached input + cached input + cache write + output. Cached input is not 
 
 Representative coding totals: Router 510,700 → 476,510 (**6.69% lower**); both 510,700 → 434,482 (**14.92% lower**). Compact has no complete two-case total because graph timed out. Across all three planned cases, including synthetic stress, Router is **0.09% lower** and both **4.71% lower**. These are single-run workload totals, not estimates of a population mean. There is insufficient replication for confidence intervals or p95.
 
-The largest observed raw increase in a completed comparison was **6.49%**, on the Router context stress case; graph Router used two more requests than OFF. A smaller model does not ensure fewer tokens. All Compact changes were held/ineligible: eight context preparations recorded `prefix_reprocessing_risk`, with a long retained suffix. This validates that the safeguard ran, but does not measure the counterfactual cost avoided. The different Compact/both totals therefore do not establish a causal Compact benefit or a combined interaction. No negative-result tuning or favorable rerun followed this experiment.
+The largest observed raw increase in a completed comparison was **6.49%**, on the Router context stress case; graph Router used two more requests than OFF. A smaller model does not ensure fewer tokens. All Compact changes were held/ineligible: eight context preparations recorded `prefix_reprocessing_risk`, with a long retained suffix. This validates that the safeguard ran, but does not measure the counterfactual cost avoided. The different Compact/both totals therefore do not establish a causal Compact benefit or a combined interaction. No held-out cell was tuned or rerun after this experiment. The separate functional safety checks below later found a guard defect; their candidate revisions are not silently substituted for this frozen held-out bundle.
 
 For reference only, applying the [published standard credit rates](https://learn.chatgpt.com/docs/pricing#token-rates) to complete observed usage gives representative coding estimates of 9.125720 OFF, 0.546861 Router and 0.512779 both. These estimates include each actual model, including native Sol compaction where applicable. They are **not raw tokens, actual included-plan allowance deductions or Jev usage**. Current rates were checked on 2026-10-23; the exact rates and per-cell estimates are in the JSON.
+
+## Separate functional safety checks
+
+These checks use artificially injected native tool history and real OAuth inference. They are not held-out coding benchmarks, and every attempt is retained in `functional.json`. Each condition uses a fresh thread, two turns, a 90-second turn limit, and a fixed checker requiring original parser facts and later numeric facts together. Server cache residency remains unknown; no allowance polling, paid retries of a failed cell, or installed-plugin claim is involved.
+
+| Synthetic check | OFF raw | Compact raw | Applied requests | Quality | Interpretation |
+| --- | ---: | ---: | ---: | --- | --- |
+| Large repeated output | 47,866 | 47,866 | 0 | 4/4 turns pass | Native tool-history truncation prevents whole-text repetition; one Jev selection retained its candidates. |
+| Smaller complete output, prior comparison | 33,940 | 29,588 | 1 | 4/4 turns pass | **Unsafe pre-final candidate:** raw −12.82%, but published-credit estimate 0.46580→0.58260 (+25.08%). |
+| Complete output, initially no comparison, final guard | 34,252 | 25,518 | 2 | 4/4 turns pass | Raw −25.50%; published-credit estimate 0.47304→0.23926. First application is labelled reuse unobserved; the next preserves the previous transformed prefix. |
+
+The middle check exposed that serialized JSON estimates do not bound server tokenization. Its favorable estimated credit delta was wrong. The final implementation therefore preserves a previously matching prefix even when that scenario estimate is favorable. It allows already-preserved transformed prefixes and retains the existing bounded path when comparison context is missing/incompatible; it does not call unknown context cold. The final no-comparison fixture was specified separately to verify that supported application and fact recovery still work, rather than replacing the negative warm-edit result. No semantic-selection benefit or general subscription reduction is established by these small checks. Published credits above are estimates, not actual included-plan deductions; Jev usage is separate in the JSON.
 
 ## Reproducibility and limits
 
@@ -47,7 +59,7 @@ Raw traces, native IDs, candidates, frozen fixture/checker and diagnostic script
 - Manifest SHA-256: `17eee1622300167e1c33397adb98f29249498f787524a0d7bf065f60137c44e9`.
 - Bundle SHA-256: `329fa37524f5a104e4a847b9d47bb96b65a8b628503dadce38666ee6ecfc4793`.
 - Checker SHA-256: `458e2c2959479f4ee5173ec7b9b314f1a20dcebe09107d458695f55e620f8977`.
-- The measured bundle predates final account-change and nonstandard-service-tier safeguards. No account/tier changes occurred in these cells; those later boundaries are covered by fake/native contract tests, not silently presented as measured here.
+- The measured bundle predates final account-change, nonstandard-service-tier and favorable-warm-estimate safeguards. No account/tier changes occurred in these cells; the recorded long-suffix holds also remain holds. Later boundaries are covered by fake/native contract and separate functional tests, not silently presented as this measured bundle.
 
 An earlier protocol (`8aff3ac0e2ca176e24ea0ece037ab33d9f0da59c4568eea1cba60b4819ae7231`) was stopped because native startup memory extraction contaminated the OFF cell and its requests were misattributed to root connection affinity. Its completed cell, interrupted cell, ten unexecuted cells and observed consumption are preserved separately; none are evidence of efficacy and missing consumption remains unknown. The correction disabled memory only in diagnostic children and repaired auxiliary request attribution. The replacement reused the same fixture, checker and condition order, frozen before all twelve replacement cells. See `invalidated_protocol` in the JSON.
 

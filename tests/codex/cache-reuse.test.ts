@@ -13,9 +13,11 @@ describe('Codex cache-aware input estimates', () => {
     expect(result).toMatchObject({ allow: false, reason: 'prefix_reprocessing_risk', first_changed_item: 1, cache_residency: 'unknown', total_token_saving: 'unmeasured', future_requests: 'not_assumed' });
     expect('estimated_credit_delta' in result && result.estimated_credit_delta).toBeGreaterThan(0);
   });
-  it('allows a strong late reduction, with marker overhead included in the complete after shape', () => {
+  it('holds even a favorable late-edit estimate without a bound on rendered token reprocessing', () => {
     const before = request('preserve'.repeat(10000), 'z'.repeat(20000)), after = request('preserve'.repeat(10000), 'short replacement marker');
-    expect(compactBenefit(requestShape(before), requestShape(after), requestShape(before)!, 'chatgpt')).toMatchObject({ allow: true, reason: 'estimated_net_benefit', first_changed_item: 2 });
+    const result = compactBenefit(requestShape(before), requestShape(after), requestShape(before)!, 'chatgpt');
+    expect(result).toMatchObject({ allow: false, reason: 'prefix_reprocessing_risk', first_changed_item: 2, authorization: 'rendered_token_bound_unavailable' });
+    expect('estimated_credit_delta' in result && result.estimated_credit_delta).toBeLessThan(0);
   });
   it('reuses an identical previous transformed prefix instead of repeatedly charging for it', () => {
     const before = request('x'.repeat(10000), 'keep'.repeat(30000)), after = request('omitted', 'keep'.repeat(30000));
