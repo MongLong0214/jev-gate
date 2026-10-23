@@ -1126,6 +1126,7 @@ describe('spawn model', () => {
       const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['high', 0.95] }) });
       // As the host resolves them.
       f.engine.modelAliases = async () => ({ opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5', fable: 'claude-fable-5-1' });
+      f.engine.childContext = async () => ({ messages: 0, coverage: 'available', tools: [] });
       router.agentOffer(OFFER_BUILT_IN('general-purpose'));
       const e = spawn({ subagentType: 'general-purpose', model });
       const n = spawnNext(() => ({ model: 'claude-fable-5-1', agentId: 'child' }));
@@ -1133,6 +1134,12 @@ describe('spawn model', () => {
       expect(n.calls).toEqual([e]);
       expect(f.sent).toHaveLength(0);
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'explicit_restricted' }));
+      // Its first step had no question asked: kept, and recorded as not asked rather than an invalid answer.
+      const first = childStep({ agentId: 'child', model: 'claude-fable-5-1' });
+      const s = streamNext<TurnStepEvent>();
+      await drain(router.turnStep(f.engine, first, s.next));
+      expect(s.calls).toEqual([first]);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child', agent_id: 'child', patch: null, reason: 'not_asked' }));
     }
   });
 

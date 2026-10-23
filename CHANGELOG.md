@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.56 — 2026-10-23 — Label an unasked child's first step correctly
+
+- Router recorded the first step of a child whose spawn it did not ask Jev about (a skipped spawn, or a named Fable child) as `answer_invalid`, shown on the dashboard as an invalid assessment. The kept effort was right; it is now recorded as `not_asked` (#359).
+
 ## v0.8.55 — 2026-10-22 — Run a Fable subagent the call names
 
 - Router no longer replaces a restricted model that an Agent call names (`model: "fable"`) without the Fable opt-in. It ran such a child on Opus and the root, unaware, reported a Fable review (#357). A named restricted model is now a manual selection, as on the root: it runs as named, without a Jev call. Inherited, default and automatic Fable children stay restricted.
