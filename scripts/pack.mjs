@@ -74,8 +74,10 @@ const INSTALL_DOCS = [
   'assets/readme/jev-gate-logo-dark.svg',
   'assets/readme/results.svg',
   'assets/readme/results-dark.svg',
-  'assets/readme/dashboard.svg',
-  'assets/readme/dashboard-dark.svg',
+  'assets/readme/dashboard.webp',
+  'assets/readme/dashboard-dark.webp',
+  'assets/readme/dashboard-still.webp',
+  'assets/readme/dashboard-still-dark.webp',
 ];
 
 // [source path relative to root, path inside the archive]. The hook set is the only file that is renamed.

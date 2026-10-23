@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.62 — 2026-10-23 — Worker reports that acceptance can read, and a live README dashboard
+
+- Worker instructions (`agents/worker*.md`) and the Gate worker prompt now require each `check_id` copied character for character from its Bash call, with no `cd`, assignment or `export` prefix, and explanations in `note`. Over the previous 24 h no Gate worker result was accepted: two reported passes were unobserved because workers reported shortened names (`node m1.mjs fail`) instead of the command they ran.
+- `blockers` now lists only what kept the outcome from completing or being checked, and any blocker means `blocked`; a worked-around limit or a fact outside the outcome goes in `summary`. Two results had been marked incomplete for `done` with such notes. Acceptance rules and the transcript verifier are unchanged; the effect on acceptance has not been measured yet.
+- The README dashboard preview is a recording of the real page fed a minute of synthetic Jev calls and a new call every 150–450 ms (`assets/readme/dashboard*.webp`, about 1.3 MB each), with a still frame under `prefers-reduced-motion`. `scripts/readme-dashboard.mjs` needs `img2webp` and `cwebp` from libwebp. The results chart animates its bars and changes, also off under reduced motion.
+- `scripts/build-codex.mjs` no longer rewrites an unchanged `plugins/codex/hooks/hooks.json`, which truncated the file under a parallel test's read.
+
 ## v0.8.61 — 2026-10-23 — Rebuild the dashboard layout and cut its live-update cost
 
 - Rebuild the dashboard to the approved layout: a KPI row, a Jev call scatter (one dot per call, height = response time) with a 60-minute band and the last recorded round trip replayed on a Gate⇄Jev track, a stage strip for Gate A, Gate B, workers, Router and Compact, 24-hour status per feature, the call log with its decision basis, and the run list with a run trace view (timeline and stage detail). Korean/English and light/dark switching stay; the palette is neutral with a blue accent and prefers locally installed Geist/Inter (no font is downloaded). `src/dashboard-circuit.ts` is removed and the README previews are regenerated.
