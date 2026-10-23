@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.58 — 2026-10-23 — Offer a handoff to a long direct turn
+
+- Gate A cannot tell a long task from its text before work starts. A root turn Gate A left direct that has already made as many requests as the delegation cost model needs at its context depth (about 9–19) is now told so once, before its next tool call, with what a worker brief must carry; nothing is blocked and the root decides. Real-host A/B on a 10-stage task at ~135K context (6 pairs, preregistered): the note appeared in 6/6 cells at request 9, quality 6/6 vs 6/6, cost cheaper in 5/6 pairs, median ratio 0.634. Ordinary turns below the break-even see nothing (#356).
+
 ## v0.8.57 — 2026-10-23 — Compact keeps older user-role text cut instead of handing the compaction to the engine
 
 - When the previous summary, earlier user-role messages and failed calls did not all fit beside the tail, Compact handed the whole compaction to the engine (`mandatory_overflow`), 28 of 122 auto compactions in a week. They now share 70% of the digest's room newest first: whole while they fit, then cut to their first 520 and last 260 characters around "[…]", then left out, counted on one line. On those 28, the digest keeps 0.727 of the referents the next steps used against 0.570 for the engine's summary with its attachments; every compaction that fitted builds the same digest as before (#361).
