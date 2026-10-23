@@ -303,6 +303,8 @@ export interface JobGeneration {
   background_stopped?: Array<{ agent_id: string; tool_use_id: string }>;
   /** #281: notices taken as the host's before their row was written (noticeClaim). A later copy is a person's. */
   notices_taken?: string[];
+  /** #356: this turn was offered the observed-progress handoff; it is offered once. */
+  handoff_offered?: true;
 }
 
 export interface JobState {

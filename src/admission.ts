@@ -233,6 +233,25 @@ export const delegationSaving = (turns: number, depth: number, model: Delegation
   (turns - model.coordinatorTurns) * depth - turns * model.workerTokensPerCall;
 
 /**
+ * #356: root requests a handoff still takes after its dispatch: the dispatch, the result, its review and the report. The
+ * exploration before it is already spent. Measured, not fitted: the median from dispatch to the end of the turn over
+ * the 12 real-host cells of 2026-10-22-handoff-ab (4-9 requests).
+ */
+export const HANDOFF_ROOT_REQUESTS = 6;
+
+/** The delegation cost model with a handoff's coordinator cost in place of a whole delegated turn's. */
+export const handoffModel = (config: ConfigV5): DelegationCostModel => ({ ...delegationModel(config), coordinatorTurns: HANDOFF_ROOT_REQUESTS });
+
+/**
+ * #356: the fewest root requests that pay for a handoff at `depth`, by the same saving: a turn that has made this many is
+ * offered one, on the assumption that what remains is about what was done. `null` when no count up to 1000 pays.
+ */
+export const handoffBreakEven = (depth: number, model: DelegationCostModel): number | null => {
+  for (let turns = 1; turns <= 1000; turns++) if (delegationSaving(turns, depth, model) > 0) return turns;
+  return null;
+};
+
+/**
  * The shallowest depth at which the largest answer could still pay: below it no answer can admit, so the turn stays
  * direct without sending Gate A at all. `Infinity` when even the largest answer never pays.
  */

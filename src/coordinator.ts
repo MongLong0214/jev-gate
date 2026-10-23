@@ -28,6 +28,14 @@ export const singleRules = (preferFastWorker = false): string[] => [
   'Report what was implemented, what was checked, and what was reported but not verified, separately.',
 ];
 
+/**
+ * #356: Gate A cannot tell a long task from its text before any work is done. A root turn that has already made
+ * `requests` requests is told once, before its next tool call, that a worker would be cheaper if about as much remains;
+ * the root alone knows how much does.
+ */
+export const renderHandoff = (requests: number, depth: number, breakEven: number): string =>
+  `[Jev Gate handoff] Observed in this turn: ${requests} model requests at about ${Math.round(depth / 1000)}K tokens of context, and each further request here re-reads all of it; a jev-gate:worker starts from a small context of its own. By Jev Gate's cost model, handing the rest of this turn to one worker is cheaper when about ${breakEven} or more steps of work remain, and finishing here is cheaper when fewer do. If you hand off, give one worker the whole remainder, not a part of it, and do not change files while it runs. It cannot see this conversation, so its brief carries the goal and the user's constraints, the decisions already made and why, what is done and which files changed, what remains, approaches already tried and their errors, the exact checks to run, and a request for a short report. Pass no model argument. When it returns, check its result against the request before finishing. This note appears once per turn.`;
+
 export const WORKTREE_REMINDER = 'The worker runs in an isolated worktree. Apply only its changes relative to its initial snapshot baseline to the main checkout before final checks and reporting; do not merge the snapshot commit.';
 
 export interface SingleGuidanceOptions {

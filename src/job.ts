@@ -12,7 +12,7 @@ import { workerTraceData } from './worker-record.js';
 // Retired state layouts can carry whole reports outside receipts. Keep only the supported generation/reservation fields.
 const GENERATION_FIELDS = new Set(['prompt_id', 'generation_id', 'request', 'created_at', 'shape', 'attempts', 'outcome', 'forced',
   'execution', 'root_fallback', 'root_fallback_reason', 'admission_revision', 'background_job', 'interactive_prompt_id',
-  'background_idle_since', 'background_delivery', 'background_stopped', 'notices_taken']);
+  'background_idle_since', 'background_delivery', 'background_stopped', 'notices_taken', 'handoff_offered']);
 const RESERVATION_FIELDS = new Set(['role', 'task_id', 'contract_hash', 'rev', 'tier', 'attempt', 'deliverables', 'started_at',
   'orphaned', 'codex_execution', 'allocation_pair', 'background_execution']);
 
