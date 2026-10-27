@@ -274,7 +274,8 @@ describe('register', () => {
   it('reads step evidence by session id without a classic event, which an earlier plugin in that chain can skip', async () => {
     const host = fakeHost({ env: { TYPESAFE_API_KEY: FAKE_KEY } });
     const runs: string[][] = [];
-    const $ = Object.assign(host.$, { plugin: { root: '/plugin' }, process: { run: async (argv: string[]) => (runs.push(argv), { exitCode: 0, stdout: 'null', stderr: '' }) } });
+    const timeouts: number[] = [];
+    const $ = Object.assign(host.$, { plugin: { root: '/plugin' }, process: { run: async (argv: string[], options: { timeoutMs: number }) => (runs.push(argv), timeouts.push(options.timeoutMs), { exitCode: 0, stdout: 'null', stderr: '' }) } });
     const hooks = await registered({ enabled: true });
     await hooks.get('agent.offer')?.($, OFFER, withSignal(async (e: unknown) => ({ isOffered: true, e })));
     await hooks.get('agent.spawn')?.($, SPAWN, withSignal(async (e: { model?: string }) => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'a1' })));
@@ -282,6 +283,7 @@ describe('register', () => {
     await drain(hooks.get('turn.step')?.($, { turnId: 'c1', index: 0, model: 'claude-haiku-5-5', agentId: 'a1', messageCount: 1 }, stepNext) as AsyncGenerator<string, unknown>);
     expect(runs).toHaveLength(1);
     expect(runs[0]!.slice(0, 4)).toEqual(['node', '/plugin/dist/router-observation-hook.js', 'session', 'a1']);
+    expect(timeouts).toEqual([2000]);
   });
 
   it('prefers a valid explicit key, and never falls back from an invalid one to the environment', async () => {

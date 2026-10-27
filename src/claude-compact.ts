@@ -250,7 +250,7 @@ const preCompact = async (input: HookInput, env: Env, config: CompactConfig, dep
       const baseline: DigestResult = { digest: '', start: lastAssistant, digestChars: 0, tailChars: 0, tailMessages: 0, headMessages: lastAssistant };
       const selection = await createCompactSelector(config.jevTimeoutMs ?? 1000)(messages, baseline, key, deps.transport ?? nodeTransport, deps.signal, true);
       priorities = selection.priorities; jev = selection.reason;
-      log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, jev_model: selection.model, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason });
+      log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, jev_model: selection.model, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason, selection_validation: selection.validation });
     } catch { jev = 'error'; log({ stage: 'jev', jev_sent: null, selection: 'error' }); }
   }
   const restore = buildRestore(messages, requests, priorities, room);

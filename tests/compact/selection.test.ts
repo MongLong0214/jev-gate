@@ -19,7 +19,7 @@ describe('bounded current-task compaction dependency selection', () => {
     const s = setup(); expect(s.baseline.digest).not.toContain(dependencyFact);
     const result = await createCompactSelector(1000)(s.messages, s.baseline, 'key', s.transport);
     expect(result).toMatchObject({ sent: true, model: JEV_MODEL, reason: 'current_dependencies', priorities: [{ message: 5, tool: 0 }], usage: { input_tokens: 10, output_tokens: 2 } });
-    expect(result.candidates).toBeLessThanOrEqual(16); expect(result.available).toBeGreaterThanOrEqual(result.candidates);
+    expect(result.candidates).toBe(16); expect(result.available).toBeGreaterThanOrEqual(result.candidates);
     const enhanced = buildDigest(s.messages, { budgetChars: 8000, priorityResults: result.priorities });
     expect(enhanced.ok).toBe(true); if (!enhanced.ok) return;
     expect(enhanced.result.digest).toContain(dependencyFact);
@@ -56,6 +56,37 @@ describe('bounded current-task compaction dependency selection', () => {
       return { status: 200, text: JSON.stringify({ ...body, request_id: 'r-1' }) };
     });
     expect(await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch, sleep })).toMatchObject({ reason: 'current_dependencies', priorities: [{ message: 5, tool: 0 }] });
+  });
+  it.each(['null', 'array', 'missing', 'extra', 'replaced_id', 'choice', 'probabilities', 'tie', 'confidence'])('records only bounded validation metadata for %s, retaining usage and conservative fallback', async kind => {
+    const s = setup();
+    const fetch = vi.fn(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(dependencyReply(init.body).text);
+      const ids = Object.keys(body.answers), first = ids[0]!;
+      if (kind === 'null') body.answers = null;
+      else if (kind === 'array') body.answers = [];
+      else if (kind === 'missing') delete body.answers[first];
+      else if (kind === 'extra') body.answers.PRIVATE_EXTRA_CANDIDATE = body.answers[first];
+      else if (kind === 'replaced_id') { body.answers.PRIVATE_EXTRA_CANDIDATE = body.answers[first]; delete body.answers[first]; }
+      else {
+        const answer = body.answers[ids.at(-1)!];
+        if (kind === 'choice') answer.choice = 'PRIVATE_INVALID_CHOICE';
+        if (kind === 'probabilities') delete answer.probabilities.unclear;
+        if (kind === 'tie') { answer.choice = 'required'; answer.probabilities = { required: .5, related: .5, unrelated: 0, unclear: 0 }; }
+        if (kind === 'confidence') answer.confidence = 2;
+      }
+      return { status: 200, text: JSON.stringify(body) };
+    });
+    const result = await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch, sleep });
+    const shape = kind === 'null' || kind === 'array';
+    expect(result).toMatchObject({ sent: true, reason: shape ? 'malformed' : 'invalid_answers', priorities: [], usage: { input_tokens: 10, output_tokens: 2 }, validation: {
+      reason: shape ? 'response_shape' : kind === 'missing' || kind === 'extra' ? 'candidate_count' : kind === 'replaced_id' ? 'candidate_ids' : 'choice',
+      expected_count: 16, answer_count: shape ? null : kind === 'missing' ? 15 : kind === 'extra' ? 17 : 16,
+      missing_count: shape ? null : kind === 'missing' || kind === 'replaced_id' ? 1 : 0,
+      extra_count: shape ? null : kind === 'extra' || kind === 'replaced_id' ? 1 : 0,
+      invalid_choice_count: shape || ['missing', 'extra', 'replaced_id'].includes(kind) ? null : 1,
+    } });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE');
+    expect(fetch).toHaveBeenCalledOnce();
   });
   it('withholds full secret-bearing and interrupted evidence before excerpting', () => {
     const s = setup(); const m = s.messages[5]!; const u = m.toolUses[0]!;

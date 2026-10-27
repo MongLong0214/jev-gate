@@ -2,7 +2,8 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readd
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { routerObservation, type RouterObservation } from './router-observation.js';
+import { routerObservation, ROUTER_OBSERVATION_WAIT_MS, type RouterObservation } from './router-observation.js';
+import { normalizeUsage } from './cost.js';
 import { subagentTranscriptPath } from './verify.js';
 
 /** The session's main transcript, `<config>/projects/<project>/<session>.jsonl`. Hooks modules learn its path only from
@@ -42,14 +43,16 @@ const isMain = (): boolean => {
 if (isMain()) {
   const [session = '', agent = '', since = '', raw = 'null'] = process.argv.slice(2);
   try {
-    const usage: unknown = JSON.parse(raw), deadline = Date.now() + 300;
+    const usage: unknown = JSON.parse(raw), deadline = Date.now() + ROUTER_OBSERVATION_WAIT_MS;
     // A new session's transcript file appears with its first rows, so it is looked up again only until it is found.
     let path: string | null = null;
     const read = (): RouterObservation | null => readRouterObservation((path ??= transcriptOf(session)) ?? '', session, agent, Number(since), usage);
     let observation = read();
     // Claude queues transcript writes: the response can finish before its assistant row reaches disk. Bound the wait
-    // within the adapter's 500 ms process deadline; this reads metadata again and never repeats a model request.
-    while (!observation && Date.now() < deadline) {
+    // within the adapter's process deadline; this reads metadata again and never repeats a model request.
+    const observable = normalizeUsage('claude', usage).coverage === 'complete' &&
+      typeof (usage as { model?: unknown } | null)?.model === 'string' && Number.isFinite(Number(since));
+    while (!observation && observable && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 25));
       observation = read();
     }

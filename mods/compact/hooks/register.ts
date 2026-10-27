@@ -113,7 +113,7 @@ export const registerCompact = (on: On, config: CompactConfig, observer?: { cont
           }
           const selection = await select(e.messages, outcome.result, key,
             { fetch: (url, init) => $.http.fetch(url, init), sleep: (ms, signal) => $.clock.sleep(ms, { signal }) }, next.signal);
-          log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, jev_model: selection.model, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason });
+          log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, jev_model: selection.model, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason, selection_validation: selection.validation });
           if (!next.signal?.aborted && selection.priorities.length) {
             const enhanced = buildDigest(e.messages, { budgetChars: config.budgetChars, priorityResults: selection.priorities });
             if (enhanced.ok) outcome = enhanced;
