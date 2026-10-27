@@ -281,9 +281,12 @@ describe('register', () => {
     await hooks.get('agent.spawn')?.($, SPAWN, withSignal(async (e: { model?: string }) => ({ model: e.model ?? 'claude-opus-5-5', agentId: 'a1' })));
     const stepNext = withSignal(async function* (e: { model: string }) { yield 'chunk'; return { usage: { model: e.model, input_tokens: 1, output_tokens: 1 } }; });
     await drain(hooks.get('turn.step')?.($, { turnId: 'c1', index: 0, model: 'claude-haiku-5-5', agentId: 'a1', messageCount: 1 }, stepNext) as AsyncGenerator<string, unknown>);
-    expect(runs).toHaveLength(1);
+    expect(runs).toHaveLength(2);
+    expect(runs[1]!.slice(0, 3)).toEqual(['node', '/plugin/dist/router-observation-hook.js', '--defer']);
+    expect(runs[1]![3]).toMatch(/^\/trace\/mod_router-[0-9a-f-]+\.json$/);
+    expect(Number(runs[0]![6])).toBeGreaterThanOrEqual(Number(runs[0]![4]));
     expect(runs[0]!.slice(0, 4)).toEqual(['node', '/plugin/dist/router-observation-hook.js', 'session', 'a1']);
-    expect(timeouts).toEqual([2000]);
+    expect(timeouts).toEqual([2000, 500]);
   });
 
   it('prefers a valid explicit key, and never falls back from an invalid one to the environment', async () => {

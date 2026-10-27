@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.65 — 2026-10-27 — Reconcile delayed Claude response evidence
+
+- Reconcile late Claude Router effort and cache TTL evidence after the Function Hook returns, matching only a unique request within the completed response window. Update the original record without repeating the model request or double counting; absent or ambiguous evidence stays unknown (#385).
+
 ## v0.8.64 — 2026-10-27 — Terra routing and Claude observation fixes
 
 - Add account-listed `gpt-6.1-terra` to standard Codex routing with the efforts advertised by that account. Verify native low/medium/high/xhigh/max/ultra and API none/low/medium/high/xhigh/max; ultra remains a native host control. Defaults and pins remain authoritative.

@@ -14,13 +14,13 @@ export interface RouterObservation {
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 
 /** Only metadata from the current response and its exact api-request, never a previous request's effort or TTL. */
-export const routerObservation = (text: string, session: string, agent: string, since: number, raw: unknown): RouterObservation | null => {
+export const routerObservation = (text: string, session: string, agent: string, since: number, raw: unknown, until = Infinity): RouterObservation | null => {
   const expected = normalizeUsage('claude', raw), model = object(raw)['model'];
   if (expected.coverage !== 'complete' || typeof model !== 'string' || !Number.isFinite(since)) return null;
   const rows = text.split('\n').flatMap(line => { try { return [object(JSON.parse(line))]; } catch { return []; } })
     .filter(r => r['sessionId'] === session && (r['agentId'] ?? '') === agent);
   const requests = new Map(rows.filter(r => r['type'] === 'api-request' && typeof r['id'] === 'string' &&
-    typeof r['timestamp'] === 'string' && Date.parse(r['timestamp']) >= since).map(r => [r['id'], r]));
+    typeof r['timestamp'] === 'string' && Date.parse(r['timestamp']) >= since && Date.parse(r['timestamp']) <= until).map(r => [r['id'], r]));
   const matches = new Map<string, RouterObservation>();
   for (const row of rows) {
     if (row['type'] !== 'assistant') continue;

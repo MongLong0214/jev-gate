@@ -43,7 +43,7 @@ export interface HostPins {
 }
 
 export interface RouterEngine extends Transport {
-  observation?: (agent: string | undefined, since: number, usage: unknown) => Promise<RouterObservation | null>;
+  observation?: (agent: string | undefined, since: number, usage: unknown, until?: number) => Promise<RouterObservation | null>;
   envKey: () => Promise<string | undefined>;
   pins: (scope?: 'effort' | 'root' | 'spawn') => Promise<HostPins>;
   /** The settings allowlist when one is set. */
@@ -1164,13 +1164,13 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'step_abandoned' });
   };
 
-  const observeStep = (engine: RouterEngine, e: TurnStepEvent, patch: RoutingPatch | null, result: TurnStepOutcome | void, observation: RouterObservation | null): void => {
+  const observeStep = (engine: RouterEngine, e: TurnStepEvent, patch: RoutingPatch | null, result: TurnStepOutcome | void, observation: RouterObservation | null, startedAt: number, finishedAt: number): void => {
     try {
       const requested = patch?.model ?? e.model;
       const seen = result && typeof result.usage?.model === 'string' ? result.usage.model : null;
       // `applied` is what was sent to next; only the linked api-request establishes applied effort.
       log(engine, {
-        event: 'root_result',
+        event: 'root_result', observation_since: startedAt, observation_until: finishedAt,
         turn: e.turnId,
         index: e.index,
         requested,
@@ -1274,6 +1274,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (prepared?.child && patch) prepared.child.dispatched = true;
     // Once next starts, every chunk, the return, a refusal or an error belongs to the host: nothing here retries it.
     let result: R;
+    const requestStartedAt = engine.now();
     try {
       const applied = patch ? applyEffort({ ...e, ...(patch.model ? { model: patch.model } : {}), ...(patch.effort ? { effort: patch.effort } : {}) }, patch.effortEdit) : e;
       const child = e.agentId ? children.get(e.agentId) : undefined;
@@ -1295,16 +1296,17 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       }
       throw err;
     }
+    const finishedAt = engine.now();
     let observation: RouterObservation | null = null;
-    try { if (result?.usage) observation = await engine.observation?.(e.agentId, startedAt, result.usage) ?? null; } catch { /* Observation cannot replay a completed native request. */ }
+    try { if (result?.usage) observation = await engine.observation?.(e.agentId, requestStartedAt, result.usage, finishedAt) ?? null; } catch { /* Observation cannot replay a completed native request. */ }
     // Keep the host's return untouched. Only the accounting/cache view gains the linked transcript's TTL counters.
     const accounted = result && observation ? { ...result, usage: { ...result.usage!, cache_creation: { ephemeral_5m_input_tokens: observation.usage.write5m, ephemeral_1h_input_tokens: observation.usage.write1h } } } : result;
-    if (e.agentId === undefined) observeStep(engine, e, patch, accounted, observation);
+    if (e.agentId === undefined) observeStep(engine, e, patch, accounted, observation, requestStartedAt, finishedAt);
     if (e.agentId !== undefined) {
       const requested = patch?.model ?? e.model;
       const observed = accounted?.usage?.model ?? null;
       log(engine, {
-        event: 'child_result', agent_id: e.agentId, turn: e.turnId, index: e.index,
+        event: 'child_result', observation_since: requestStartedAt, observation_until: finishedAt, agent_id: e.agentId, turn: e.turnId, index: e.index,
         requested, observed, requested_effort: patch?.effortEdit?.kind === 'omit' ? null : patch?.effort ?? e.effort ?? null, observed_effort: observation?.effort ?? 'unknown',
         effort_evidence: observation?.effort != null ? 'transcript_api_request' : 'unobserved',
         request_ref: observation?.request ?? null,

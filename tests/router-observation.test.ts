@@ -1,11 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { normalizeUsage } from '../src/cost.js';
 import { routerObservation } from '../src/router-observation.js';
-import { readRouterObservation, transcriptOf } from '../src/claude-router-observation.js';
+import { readRouterObservation, reconcileRouterResult, transcriptOf } from '../src/claude-router-observation.js';
+import { setRecording } from '../src/recording.js';
 
 const model = 'claude-opus-5-5', since = Date.parse('2026-10-20T00:00:00Z');
 const raw = { model, input_tokens: 2, cache_read_input_tokens: 100, cache_creation_input_tokens: 20, output_tokens: 10 };
@@ -43,6 +45,12 @@ describe('Router transcript evidence', () => {
     if (kind === 'counters') rs[1].message.usage.output_tokens++;
     if (kind === 'ambiguous') rs.push({ ...rs[0], id: 'request-2' }, { ...rs[1], requestRef: 'request-2' });
     expect(routerObservation(lines(rs), 'session', '', since, raw)).toBeNull();
+  });
+  it('excludes requests started after the response completed', () => {
+    const evidence: any[] = rows();
+    evidence[0].timestamp = new Date(since + 101).toISOString();
+    expect(routerObservation(lines(evidence), 'session', '', since, raw, since + 100)).toBeNull();
+    expect(routerObservation(lines([...rows(), ...evidence.map((r, i) => ({ ...r, ...(i ? { requestRef: 'request-2' } : { id: 'request-2' }) }))]), 'session', '', since, raw, since + 100)?.request).toBe('request-1');
   });
   it('reads root and child tails, skips malformed lines and rejects symlinks', () => {
     temp = mkdtempSync(join(tmpdir(), 'jev-router-observation-'));
@@ -98,4 +106,78 @@ describe('Router transcript evidence', () => {
       expect(JSON.parse(stdout)).toBeNull();
     } finally { clearTimeout(timer); }
   });
+  it.each(['root', 'child'])('reconciles %s evidence flushed only after the hook process returns, without another request', async kind => {
+    temp = mkdtempSync(join(tmpdir(), 'jev-router-deferred-'));
+    const project = join(temp, 'projects', 'repo'), trace = join(temp, 'trace');
+    mkdirSync(project, { recursive: true }); mkdirSync(trace);
+    const agent = kind === 'child' ? 'child' : '';
+    const path = join(project, 'session.jsonl'); writeFileSync(path, '');
+    const file = agent ? join(project, 'session', 'subagents', 'agent-child.jsonl') : path;
+    if (agent) mkdirSync(join(project, 'session', 'subagents'), { recursive: true });
+    const evidence = rows('xhigh').map(r => ({ ...r, ...(agent ? { agentId: agent } : {}) }));
+    const record = join(trace, 'mod_router-12345678-1234-1234-1234-123456789012.json');
+    const original = { phase: 'mod_router', event: agent ? 'child_result' : 'root_result', session_id: 'session', agent_id: agent || null,
+      invocation_id: '12345678-1234-1234-1234-123456789012', recording_id: 'recording', written_at: new Date().toISOString(),
+      turn: 'original-turn', index: 0, requested: model, observed: model, requested_effort: 'low', observed_effort: 'unknown',
+      effort_evidence: 'unobserved', request_ref: null, accounting: normalizeUsage('claude', raw),
+      observation_since: since, observation_until: since + 1000 };
+    writeFileSync(record, JSON.stringify(original));
+    const { stdout } = await exec(process.execPath, [join(bundleDir, 'observe.mjs'), '--defer', record], {
+      env: { ...process.env, CLAUDE_CONFIG_DIR: temp, XDG_CONFIG_HOME: join(temp, 'config'), JEV_GATE_TRACE_DIR: trace }, timeout: 2000,
+    });
+    expect(JSON.parse(stdout)).toEqual({ started: true });
+    expect(JSON.parse(readFileSync(record, 'utf8')).request_ref).toBeNull();
+    // A synchronous wait cannot see these bytes: the caller releases them after its subprocess has exited.
+    await new Promise(resolve => setTimeout(resolve, 2200));
+    writeFileSync(file, lines(evidence));
+    const deadline = Date.now() + 3000;
+    while (JSON.parse(readFileSync(record, 'utf8')).request_ref === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    const result = JSON.parse(readFileSync(record, 'utf8'));
+    expect(result).toMatchObject({ ...original, observed_effort: 'xhigh', effort_evidence: 'transcript_api_request', request_ref: 'request-1',
+      accounting: { ...original.accounting, write5m: 0, write1h: 20 }, observation_status: 'resolved' });
+    expect(result.observation_reconciled_at).toBeTypeOf('string');
+    expect(readdirSync(trace)).toEqual([record.split('/').at(-1)]);
+    expect(statSync(record).mode & 0o777).toBe(0o600);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE');
+  });
+
+  it.each(['absent', 'ambiguous', 'future', 'changed'])('keeps deferred %s evidence unknown without duplicating or overwriting records', async kind => {
+    temp = mkdtempSync(join(tmpdir(), 'jev-router-deferred-unknown-'));
+    const project = join(temp, 'projects', 'repo'), trace = join(temp, 'trace');
+    mkdirSync(project, { recursive: true }); mkdirSync(trace);
+    const path = join(project, 'session.jsonl'), record = join(trace, 'mod_router-12345678-1234-1234-1234-123456789012.json');
+    const original = { phase: 'mod_router', event: 'root_result', session_id: 'session', invocation_id: '12345678-1234-1234-1234-123456789012',
+      observed: model, observed_effort: 'unknown', request_ref: null, accounting: normalizeUsage('claude', raw), observation_since: since, observation_until: since + 100 };
+    writeFileSync(record, JSON.stringify(original));
+    const evidence: any[] = rows();
+    if (kind === 'ambiguous') evidence.push({ ...evidence[0], id: 'request-2' }, { ...evidence[1], requestRef: 'request-2' });
+    if (kind === 'future') evidence[0].timestamp = new Date(since + 101).toISOString();
+    if (kind !== 'absent' && kind !== 'changed') writeFileSync(path, lines(evidence));
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: temp, XDG_CONFIG_HOME: join(temp, 'config'), JEV_GATE_TRACE_DIR: trace };
+    const pending = reconcileRouterResult(record, env, 150);
+    if (kind === 'changed') writeFileSync(record, JSON.stringify({ ...original, external_update: true }));
+    await pending;
+    const result = JSON.parse(readFileSync(record, 'utf8'));
+    expect(result.request_ref).toBeNull();
+    expect(result.observed_effort).toBe('unknown');
+    if (kind === 'changed') expect(result).toEqual({ ...original, external_update: true });
+    else expect(result.observation_status).toBe('unavailable');
+    expect(readdirSync(trace)).toEqual([record.split('/').at(-1)]);
+  });
+  it('stops reconciliation if recording is turned off while evidence is pending', async () => {
+    temp = mkdtempSync(join(tmpdir(), 'jev-router-deferred-off-'));
+    const project = join(temp, 'projects', 'repo'), trace = join(temp, 'trace');
+    mkdirSync(project, { recursive: true }); mkdirSync(trace);
+    const record = join(trace, 'mod_router-12345678-1234-1234-1234-123456789012.json');
+    const original = { phase: 'mod_router', event: 'root_result', session_id: 'session', invocation_id: '12345678-1234-1234-1234-123456789012',
+      observed: model, observed_effort: 'unknown', request_ref: null, accounting: normalizeUsage('claude', raw), observation_since: since, observation_until: since + 100 };
+    writeFileSync(record, JSON.stringify(original));
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: temp, XDG_CONFIG_HOME: join(temp, 'config'), JEV_GATE_TRACE_DIR: trace };
+    const pending = reconcileRouterResult(record, env, 200);
+    setRecording(env, false);
+    writeFileSync(join(project, 'session.jsonl'), lines(rows()));
+    await pending;
+    expect(JSON.parse(readFileSync(record, 'utf8'))).toEqual(original);
+  });
+
 });

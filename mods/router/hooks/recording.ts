@@ -17,6 +17,7 @@ export type RecordingState = ReturnType<typeof createRecordingState>;
 
 export const createRecorder = (io: RecorderIO, state: RecordingState = createRecordingState()) => {
   const pending = state.pending;
+  const records: Array<{ path: string; fields: Record<string, unknown> }> = [];
   const track = (task: Promise<void>): void => {
     pending.add(task); void task.finally(() => pending.delete(task));
   };
@@ -57,6 +58,7 @@ export const createRecorder = (io: RecorderIO, state: RecordingState = createRec
           ...fields, host: 'claude', session_id: c.session, phase: `mod_${component}`, version: 5, loss_marker: true, recording_id: state.id, invocation_id: id, written_at: at,
         }));
         state.written++;
+        records.push({ path: `${c.dir}/${name}.json`, fields });
       }
     })().catch(() => { state.failed = true; });
     track(task);
@@ -92,5 +94,5 @@ export const createRecorder = (io: RecorderIO, state: RecordingState = createRec
       }));
     })());
   };
-  return { log, touch, flush, finish };
+  return { log, touch, flush, finish, records };
 };

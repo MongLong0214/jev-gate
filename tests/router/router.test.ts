@@ -2605,7 +2605,7 @@ describe('#81: control correctness', () => {
     expect(result).toEqual({ chunks: ['chunk'], result: host });
     expect(result.result).toBe(host);
     expect(calls).toHaveLength(1);
-    expect(f.engine.observation).toHaveBeenCalledExactlyOnceWith(e.agentId, 0, host.usage);
+    expect(f.engine.observation).toHaveBeenCalledExactlyOnceWith(e.agentId, 0, host.usage, 0);
     const row = f.logs.find(l => l.event === `${scope}_result`);
     expect(row).toMatchObject({ observed_effort: fails ? 'unknown' : 'medium', effort_evidence: fails ? 'unobserved' : 'transcript_api_request',
       accounting: { write5m: fails ? null : 0, write1h: fails ? null : 20 } });

@@ -76,9 +76,9 @@ const recorderOf = ($: EngineInterface, state: RecordingState) => createRecorder
  * so every variable is spelled out here and nowhere else.
  */
 const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine => ({
-  observation: async (agent, since, usage) => {
+  observation: async (agent, since, usage, until) => {
     const path = $.plugin.root + '/dist/router-observation-hook.js';
-    const result = await $.process.run(['node', path, await $.session.id(), agent ?? '', String(since), JSON.stringify(usage)], { timeoutMs: ROUTER_OBSERVATION_PROCESS_MS });
+    const result = await $.process.run(['node', path, await $.session.id(), agent ?? '', String(since), JSON.stringify(usage), String(until ?? Infinity)], { timeoutMs: ROUTER_OBSERVATION_PROCESS_MS });
     return result.exitCode === 0 ? JSON.parse(result.stdout) as RouterObservation | null : null;
   },
   frontierEnabled: async () => {
@@ -254,7 +254,16 @@ export const registerRouter = (on: On, config: RouterConfig, ownedDispatch = fal
     on('turn.step', async function* ($, e, next) {
       const recorder = recorderOf($, recording);
       try { return yield* router.turnStep(engineOf($, recorder.log), e, next); }
-      finally { await recorder.flush(); }
+      finally {
+        await recorder.flush();
+        for (const { path, fields } of recorder.records) {
+          if (!['root_result', 'child_result'].includes(String(fields.event)) || fields.request_ref !== null) continue;
+          try {
+            // The launcher exits before the bounded reader; transcript flushing can depend on this hook returning.
+            await $.process.run(['node', $.plugin.root + '/dist/router-observation-hook.js', '--defer', path], { timeoutMs: 500 });
+          } catch { /* Optional evidence stays unknown; never repeat the completed request. */ }
+        }
+      }
     });
   }
   if (router.spawnEnabled) {

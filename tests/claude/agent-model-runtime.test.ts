@@ -151,7 +151,13 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         }); child.stderr.on('data', c => { output += c; }); const timer = setTimeout(() => child.kill('SIGKILL'), 25_000);
         child.on('error', e => { clearTimeout(timer); reject(e); }); child.on('close', code => { clearTimeout(timer); resolve(code); });
       });
-      const traces = readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')));
+      const readTraces = () => readdirSync(trace).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')));
+      let traces = readTraces();
+      const observationDeadline = Date.now() + 11_000;
+      while (traces.some(r => r.phase === 'mod_router' && ['root_result', 'child_result'].includes(r.event) && r.request_ref === null && r.observation_status !== 'unavailable') && Date.now() < observationDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        traces = readTraces();
+      }
       const diagnostic = JSON.stringify({ output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort, messageEfforts: ((r as any).messages ?? []).map((m: any) => ({ role: m.role, effort: m.effort, metadata: m.metadata, extra: Object.keys(m).filter(k => !['role','content'].includes(k)) })) })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result' || r.phase === 'admission_result' || r.phase.startsWith('background_')) });
       expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.childSteps ? 3 : scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.documentation ? 3 : scenario.sequence ? scenario.sequence.length * 2 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
       for (const [i, request] of workerRequests.entries()) { const expected = scenario.childSteps?.[i - 1] ?? scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe('cost' in expected && String(expected.cost).endsWith('_hold') ? 'claude-opus-5-5' : expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
