@@ -19,9 +19,10 @@ const config = join(dir, 'policy.json');
 const saveConfig = (router: Obj = {}) => writeFileSync(config, JSON.stringify({ gate: { mode: 'off' }, router: { timeoutMs: 2000, ...router } }));
 const answers = (req: Obj, model: string, effort: string) => Object.fromEntries(Object.entries(req['questions'] as Record<string, {type:string;criteria:Record<string,string>|string[]}>).map(([k,q]) => {
   // Keeping is the fixture root's own role: its baseline is fixture-A.
-  const pick = k === 'model' ? model : k === 'capability' ? ({ 'gpt-6-luna': 'mechanical', 'gpt-6.1-sol': 'complex', 'fixture-A': 'mechanical', 'fixture-B': 'complex', __keep__: 'mechanical' } as Record<string, string>)[model]! : k === 'control' ? 'task_clear' : 'ordinary';
+  const pick = k === 'model' ? model : k === 'capability' ? ({ 'gpt-6-luna': 'mechanical', 'gpt-6.1-sol': 'complex', 'gpt-6.1-terra': 'routine', 'fixture-A': 'mechanical', 'fixture-B': 'complex', __keep__: 'mechanical' } as Record<string, string>)[model]! : k === 'control' ? 'task_clear' : 'ordinary';
+  const prefix = ({ none: 'No reasoning', low: 'Light', medium: 'Ordinary', high: 'Strong', xhigh: 'Exceptional', max: 'Maximum', ultra: 'Exhaustive' } as Record<string, string>)[effort]!;
   return [k, q.type === 'choice' ? {type:'choice',choice:pick,confidence:1,probabilities:Object.fromEntries(Object.keys(q.criteria).map(v=>[v,v===pick?1:0]))} :
-    {type:'score',probabilities:Object.fromEntries((q.criteria as string[]).map((v,i)=>[i,v.startsWith(effort === 'max' ? 'Maximum' : effort === 'low' ? 'Light' : 'Strong') ? 1 : 0]))}];
+    {type:'score',probabilities:Object.fromEntries((q.criteria as string[]).map((v,i)=>[i,v.startsWith(prefix) ? 1 : 0]))}];
 }));
 const fixture = async (external: boolean, model: string, effort: string, wait?: Promise<void>) => {
   saveConfig(); const sent: Obj[] = [];
@@ -82,6 +83,36 @@ const rootContinuationFixture = async (wait?: Promise<void>) => {
   return { ...f, first, next, signal };
 };
 describe('native Codex billing-aware model routing', () => {
+  it.each(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])('routes Terra with account-supported %s through native turn settings', async effort => {
+    const f = await fixture(false, 'gpt-6.1-terra', effort);
+    f.policy.catalog = [catalog[0]!, {
+      model: 'gpt-6.1-terra', description: 'GPT-6.1 Terra Codex model.', defaultReasoningEffort: 'low',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(reasoningEffort => ({ reasoningEffort })),
+    }];
+    try {
+      await f.policy.client(f.start);
+      expect(f.forward).toHaveBeenCalledOnce();
+      expect(f.forward.mock.calls[0]?.[0]).toMatchObject({ method: 'turn/start', params: {
+        model: 'gpt-6.1-terra', effort,
+        collaborationMode: { settings: { model: 'gpt-6.1-terra', reasoning_effort: effort, developer_instructions: 'preserve' } },
+      } });
+      expect(f.policy.sessions.size).toBe(1);
+    } finally { f.rpc.close(); }
+  });
+  it.each(['none', 'low', 'medium', 'high', 'xhigh', 'max'])('routes Terra with advertised API effort %s and excludes host-only ultra', async effort => {
+    const f = await fixture(true, 'gpt-6.1-terra', effort);
+    f.policy.catalog = [catalog[0]!, {
+      model: 'gpt-6.1-terra', description: 'GPT-6.1 Terra Codex model.', defaultReasoningEffort: 'low',
+      supportedReasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(reasoningEffort => ({ reasoningEffort })),
+    }];
+    try {
+      const result = await f.policy.externalRequest('root', f.request, new AbortController().signal, 'codex-tui', 'chatgpt');
+      expect(result.request).toEqual({ ...f.request, model: 'gpt-6.1-terra', reasoning: { ...f.request.reasoning, effort } });
+      const questions = Object.values(f.sent[0]?.questions as Record<string, { type: string; criteria: unknown }>);
+      expect(JSON.stringify(questions.filter(q => q.type === 'score'))).not.toContain('Exhaustive host');
+      expect(f.fetchImpl).toHaveBeenCalledOnce();
+    } finally { f.rpc.close(); }
+  });
   it.each([
     'Chunk ID: native-failure\nWall time: 0.2 seconds\nProcess exited with code 1\nOutput:\nPRIVATE_FAILURE_OUTPUT',
     'Wall time: 0.2000 seconds\nProcess exited with code 1\nOriginal token count: 100000\nOutput:\nPRIVATE_FAILURE_OUTPUT',

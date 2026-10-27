@@ -86,7 +86,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     installed = true;
   }, 60_000);
 
-  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'cancelled', 'routing-gpt-6.1-sol', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
+  it.each(['bounded-lookup', 'direct-lookup', 'background', 'single', 'failed', 'permission-boundary', 'edit-after-check', 'cancelled', 'routing-gpt-6.1-sol', 'routing-gpt-6.1-terra', 'routing-gpt-6-astra', 'routing-gpt-6-sol', 'routing-gpt-6-luna', 'routing-gpt-5.6-terra', 'routing-model-luna', 'routing-auto-model', 'routing-root-keep', 'routing-root-effort', 'routing-root-model', 'routing-root-both'])('runs automatic native Codex policies: %s', async scenario => {
     const routing = scenario.startsWith('routing-');
     const rootPair = scenario.startsWith('routing-root-');
     const baselineEffort = rootPair ? 'high' : 'medium';
@@ -155,6 +155,22 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const config = [...isolation, 'features.plugins=true', 'features.hooks=true', `model=${JSON.stringify(baselineModel)}`, `model_reasoning_effort=${JSON.stringify(baselineEffort)}`, 'model_context_window=1000000', 'model_auto_compact_token_limit=900000', `marketplaces.${market}.source_type="local"`, `marketplaces.${market}.source=${JSON.stringify(plugin)}`, `plugins.jev-gate@${market}.enabled=true`, 'shell_environment_policy.inherit="all"'];
+    if (scenario === 'routing-gpt-6.1-terra') {
+      // The isolated host has no account catalog and the fake upstream advertises none.
+      // Supply native model metadata at startup rather than modifying the router's catalog.
+      const catalog = join(tmp, 'terra-catalog.json');
+      writeFileSync(catalog, JSON.stringify({ models: [{
+        slug: baselineModel, display_name: 'GPT-6.1 Terra', description: 'GPT-6.1 Terra Codex model.',
+        base_instructions: 'You are a test assistant.',
+        default_reasoning_level: 'low',
+        supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(effort => ({ effort, description: effort })),
+        shell_type: 'shell_command', visibility: 'list', supported_in_api: true, priority: 0,
+        support_verbosity: true, default_verbosity: 'low', apply_patch_tool_type: 'freeform',
+        truncation_policy: { mode: 'tokens', limit: 10000 }, experimental_supported_tools: [],
+        multi_agent_version: 'v2', multi_agent_reasoning_effort: 'xhigh',
+      }] }));
+      config.push(`model_catalog_json=${JSON.stringify(catalog)}`);
+    }
     const policyFile = join(tmp, `policy ${scenario}.json`);
     writeFileSync(policyFile, JSON.stringify({
       gate: { mode: routing ? 'off' : 'auto',

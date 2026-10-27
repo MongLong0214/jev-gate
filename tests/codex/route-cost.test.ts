@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { codexRouteCost } from '../../src/codex/route-cost.js';
 import { codexBilling } from '../../src/codex/launch.js';
 import { ModelCache, cacheState, switchCost } from '../../src/cost.js';
+import { providerPrice, providerContextLimit } from '../../src/provider-prices.js';
 
 const from = 'gpt-6.1-sol', to = 'gpt-6-luna';
 const cache = () => {
@@ -10,6 +11,20 @@ const cache = () => {
   return c;
 };
 describe('Codex transport billing and cache-safe rate comparison', () => {
+  it('uses verified Terra rates and input capacity without bypassing the cache cost guard', () => {
+    const terra = 'gpt-6.1-terra';
+    expect(providerContextLimit('codex', terra)).toBe(922_000);
+    expect(providerPrice('codex', terra, 272_000)).toMatchObject({ input: 1, read: .05, write: 1.25, output: 5 });
+    expect(providerPrice('codex', terra, 272_001)).toMatchObject({ input: 2, read: .1, write: 2.5, output: 7.5 });
+    expect(providerPrice('codex', terra, 922_001)).toBeNull();
+    expect(codexRouteCost(from, terra, 'chatgpt', null, undefined, 'e', 1)).toMatchObject({
+      hold: true, reason: 'cost_unknown_hold', baseline: { input: 50, read: 2.5, output: 250 },
+      target: { input: 25, read: 1.25, output: 125 }, input_delta_range_per_million: [-48.75, 22.5],
+    });
+    expect(codexRouteCost(terra, to, 'chatgpt', null, undefined, 'e', 1)).toMatchObject({
+      hold: true, baseline: { input: 25, read: 1.25, output: 125 }, target: { input: 2.5, read: .25, output: 12.5 },
+    });
+  });
   it('uses only the selected native transport, never an account header at a custom upstream', () => {
     expect(codexBilling(undefined, 'native-account')).toBe('chatgpt');
     expect(codexBilling(undefined, undefined)).toBe('api');

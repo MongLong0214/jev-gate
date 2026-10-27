@@ -4,11 +4,12 @@ import { providerContextLimit } from '../provider-prices.js';
 
 export type CodexBilling = 'chatgpt' | 'api' | 'unknown';
 const source = 'https://learn.chatgpt.com/docs/pricing#token-rates';
-const revision = '2026-10-21';
+const revision = '2026-10-27';
 // Standard credits per million tokens. These are NOT API USD prices or included subscription allowance rates.
 // No separate cache-write charge: a cold target pays its ordinary input rate, without the API write multiplier.
 export const CODEX_CREDIT_RATES: Record<string, readonly [input: number, read: number, output: number]> = {
   'gpt-6-astra': [250, 25, 1250], 'gpt-6.1-sol': [50, 2.5, 250], 'gpt-6-sol': [50, 5, 250],
+  'gpt-6.1-terra': [25, 1.25, 125],
   'gpt-6-luna': [2.5, .25, 12.5], 'gpt-5.6-sol': [100, 10, 500],
   'gpt-5.6-terra': [50, 5, 300], 'gpt-5.6-luna': [5, .5, 30],
 };
