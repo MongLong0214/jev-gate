@@ -96,6 +96,28 @@ export default [
   },
   {
     "host": "codex",
+    "model": "gpt-6.1-terra",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+    "revision": "c3aa87d121a2f591",
+    "bands": [
+      {
+        "input": 1,
+        "read": 0.05,
+        "write": 1.25,
+        "output": 5,
+        "maxPrompt": 272000
+      },
+      {
+        "maxPrompt": 922000,
+        "input": 2,
+        "read": 0.1,
+        "write": 2.5,
+        "output": 7.5
+      }
+    ]
+  },
+  {
+    "host": "codex",
     "model": "gpt-6-luna",
     "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
     "revision": "1e81e2568dbf4bd8",

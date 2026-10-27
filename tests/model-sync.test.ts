@@ -25,6 +25,7 @@ const policy = { normalizeCatalog, generalCodexModel, catalogTierModels, codexCa
 const rawCodex = {
   models: [
     { slug: 'gpt-6.1-sol', description: 'Latest workhorse model for coding and everyday work.', visibility: 'list' },
+    { slug: 'gpt-6.1-terra', description: 'GPT-6.1 Terra Codex model.', visibility: 'list' },
     { slug: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', visibility: 'list' },
     { slug: 'gpt-6-astra', description: 'Frontier intelligence for the most demanding work.', visibility: 'list' },
     // Deliberately precedes no successor ordering contract: old versions must not get picked by description/rank.
@@ -101,6 +102,7 @@ describe('official model freshness CI', () => {
     const catalog = parseCodex(rawCodex);
     expect(verifyCodex(catalog, policy)).toEqual({ fast: 'gpt-6-luna', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' });
     expect(codexCandidates(catalog, false).find(m => m.id === 'gpt-6-luna')?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(codexCandidates(catalog, false).find(m => m.id === 'gpt-6.1-terra')).toMatchObject({ rank: 1, efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] });
     expect(codexCandidates(catalog, true).some(m => m.id === 'gpt-5.6-luna')).toBe(false);
     expect(catalogTierModels('gpt-5.6-luna', catalog).fast).toBe('gpt-6-luna');
   });

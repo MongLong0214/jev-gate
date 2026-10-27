@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.64 — 2026-10-27 — Route GPT-6.1 Terra with native effort support
+
+- Add account-listed `gpt-6.1-terra` to standard Codex routing with the efforts advertised by that account. Verify native low/medium/high/xhigh/max/ultra and API none/low/medium/high/xhigh/max; ultra remains a native host control. Defaults and pins remain authoritative.
+- Add verified Terra API prices, Codex credit rates and input capacity to existing cost guards and official-model synchronization. No savings claim is established by model support.
+
 ## v0.8.63 — 2026-10-23 — Preserve Codex contracts and distinguish hook connection failures
 
 - Routed Codex execution establishes the original public signatures, input types and invariants before editing. Missing or buried requirements are recovered through native tools; a smoke test or tests matching an invented interface do not establish contract compliance. The native input, tools, permissions and opaque history remain unchanged. This addresses the contract drift observed in #381 without disabling Luna or changing Claude routing.

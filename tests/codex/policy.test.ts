@@ -124,6 +124,15 @@ describe('Codex ordered routing and recorded application', () => {
     const fetchImpl = vi.fn(async () => new Response('', { status: 503 }));
     expect(await routeCodex({ model: 'gpt-6-luna', effort: 'ultra', task: 'task', session: 's', prompt: 'p', catalog: [{ ...catalog[0]!, model: 'gpt-6-luna', supportedReasoningEfforts: catalog[0]!.supportedReasoningEfforts.slice(0, 5) }], config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl })).toEqual({});
   });
+  it('uses only Terra efforts advertised by this account and recognizes its previous generation', () => {
+    const terra = { model: 'gpt-6.1-terra', description: 'GPT-6.1 Terra Codex model.', supportedReasoningEfforts: [{ reasoningEffort: 'high' }] };
+    expect(codexCandidates([terra], false)).toMatchObject([{ id: terra.model, rank: 1, efforts: ['high'] }]);
+    expect(codexCandidates([], false)).toEqual([]);
+    expect(codexCandidates([{ ...terra, hidden: true }], false)).toEqual([]);
+    const previous = { ...terra, model: 'gpt-5.6-terra', description: 'Older balanced model for straightforward work.' };
+    expect(codexSuccessor(previous.model, [previous, terra])).toBe(terra.model);
+    expect(codexCandidates([previous, terra], false).map(c => c.id)).toEqual([terra.model]);
+  });
   it('does not substitute a catalog default for an unobserved baseline effort', async () => {
     expect((await invoke('valid', null)).patch).toEqual({ effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
   });

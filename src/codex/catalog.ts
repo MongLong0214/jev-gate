@@ -56,6 +56,9 @@ export const codexModelRole = (m: CodexModel): { rank: number; description: stri
   // https://learn.chatgpt.com/docs/models and https://developers.openai.com/api/docs/guides/model-selection (2026-10-22).
   // This exact documented model must still be present/eligible in the account catalog. Future variants are not inferred.
   if (m.model === 'gpt-6-luna') return { rank: 1, description: 'standard: focused coding and problem solving with clear contracts and checks; complex end-to-end reasoning stays deep.' };
+  // The native catalog only says "Codex model". Published guidance includes scoped code fixes with clear checks.
+  // https://developers.openai.com/api/docs/guides/model-selection (2026-10-27). Availability/efforts remain account-owned.
+  if (m.model === 'gpt-6.1-terra') return { rank: 1, description: 'standard: scoped code fixes, clear writing, visual understanding and computer use with defined inputs and verification; complex projects stay deep.' };
   const text = m.description ?? '';
   if (/frontier|most demanding|most intelligent/i.test(text)) return { rank: 3, description: 'frontier: exceptional unresolved foundational reasoning.' };
   if (/fast|efficient|affordable|easier|lightweight/i.test(text)) return { rank: 0, description: 'fast: prioritize for file discovery, lookup, listing and mechanical edits with clear checks.' };

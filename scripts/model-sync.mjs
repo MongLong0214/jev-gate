@@ -13,6 +13,7 @@ export const SOURCES = {
   codex: 'https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json',
   caching: 'https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md',
   sol: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol.md',
+  terra: 'https://developers.openai.com/api/docs/models/gpt-6.1-terra.md',
   luna: 'https://developers.openai.com/api/docs/models/gpt-6-luna.md',
   astra: 'https://developers.openai.com/api/docs/models/gpt-6-astra.md',
   codexCredits: 'https://learn.chatgpt.com/docs/pricing.md',
@@ -193,7 +194,7 @@ export function priceMetadata(raw, official) {
     }).sort((a, b) => a.maxPrompt - b.maxPrompt);
     add('claude', model.ids[0], SOURCES.caching.replace(/\.md$/, ''), bands);
   }
-  for (const key of ['sol', 'luna', 'astra']) {
+  for (const key of ['sol', 'terra', 'luna', 'astra']) {
     const text = raw[key];
     const model = /Model ID: `([^`]+)`/.exec(text)?.[1];
     const value = name => Number(new RegExp('^\\| ' + name + ' \\| \\$(\\d+(?:\\.\\d+)?) \\| 1M tokens \\|$', 'm').exec(text)?.[1]);
