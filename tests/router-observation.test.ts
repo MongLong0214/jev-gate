@@ -1,7 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { routerObservation } from '../src/router-observation.js';
 import { readRouterObservation, transcriptOf } from '../src/claude-router-observation.js';
 
@@ -14,6 +16,13 @@ const rows = (effort: unknown = 'low', creation: unknown = { ephemeral_5m_input_
 const lines = (rs: unknown[]) => rs.map(r => JSON.stringify(r)).join('\n') + '\n';
 let temp: string;
 afterEach(() => { if (temp) rmSync(temp, { recursive: true, force: true }); });
+const exec = promisify(execFile);
+let bundleDir: string;
+beforeAll(() => {
+  bundleDir = mkdtempSync(join(tmpdir(), 'jev-router-observation-cli-'));
+  execFileSync(process.execPath, ['scripts/build-claude-router.mjs', join(bundleDir, 'observe.mjs')]);
+});
+afterAll(() => rmSync(bundleDir, { recursive: true, force: true }));
 
 describe('Router transcript evidence', () => {
   it.each(['low', 'medium', 'high', 'xhigh', 'max', 16000])('reads applied effort and TTL from the exact linked request: %s', effort => {
@@ -60,5 +69,33 @@ describe('Router transcript evidence', () => {
     expect(transcriptOf('../projects', env)).toBeNull();
     writeFileSync(join(temp, 'projects', '-Users-a-other', `${id}.jsonl`), '');
     expect(transcriptOf(id, env)).toBeNull();
+  });
+  it.each(['root', 'child', 'new_file'])('links %s evidence flushed after the old 300 ms window through the real helper process', async kind => {
+    temp = mkdtempSync(join(tmpdir(), 'jev-router-delayed-'));
+    const project = join(temp, 'projects', 'repo'); mkdirSync(project, { recursive: true });
+    const path = join(project, 'session.jsonl'), agent = kind === 'child' ? 'child' : '';
+    const evidence = rows('xhigh').map(r => ({ ...r, ...(agent ? { agentId: agent } : {}) }));
+    const file = agent ? join(project, 'session', 'subagents', 'agent-child.jsonl') : path;
+    if (kind !== 'new_file') {
+      writeFileSync(path, ''); mkdirSync(join(project, 'session', 'subagents'), { recursive: true });
+      writeFileSync(file, lines(evidence.slice(0, 1)));
+    }
+    const timer = setTimeout(() => writeFileSync(file, lines(evidence)), kind === 'new_file' ? 1100 : 800);
+    try {
+      const { stdout } = await exec(process.execPath, [join(bundleDir, 'observe.mjs'), 'session', agent, String(since), JSON.stringify(raw)], { env: { ...process.env, CLAUDE_CONFIG_DIR: temp }, timeout: 2500 });
+      expect(JSON.parse(stdout)).toMatchObject({ request: 'request-1', effort: 'xhigh', usage: { write1h: 20 } });
+      expect(stdout).not.toContain('PRIVATE');
+    } finally { clearTimeout(timer); }
+  });
+  it.each(['absent', 'ambiguous', 'past_deadline'])('bounds the helper process and keeps %s evidence unknown', async kind => {
+    temp = mkdtempSync(join(tmpdir(), 'jev-router-unknown-'));
+    const project = join(temp, 'projects', 'repo'); mkdirSync(project, { recursive: true });
+    const path = join(project, 'session.jsonl'), evidence = rows();
+    if (kind === 'ambiguous') writeFileSync(path, lines([...evidence, { ...evidence[0], id: 'request-2' }, { ...evidence[1], requestRef: 'request-2' }]));
+    const timer = kind === 'past_deadline' ? setTimeout(() => writeFileSync(path, lines(evidence)), 2200) : undefined;
+    try {
+      const { stdout } = await exec(process.execPath, [join(bundleDir, 'observe.mjs'), 'session', '', String(since), JSON.stringify(raw)], { env: { ...process.env, CLAUDE_CONFIG_DIR: temp }, timeout: 2000 });
+      expect(JSON.parse(stdout)).toBeNull();
+    } finally { clearTimeout(timer); }
   });
 });

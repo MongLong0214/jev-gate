@@ -1,9 +1,11 @@
 # Changelog
 
-## v0.8.64 — 2026-10-27 — Route GPT-6.1 Terra with native effort support
+## v0.8.64 — 2026-10-27 — Terra routing and Claude observation fixes
 
 - Add account-listed `gpt-6.1-terra` to standard Codex routing with the efforts advertised by that account. Verify native low/medium/high/xhigh/max/ultra and API none/low/medium/high/xhigh/max; ultra remains a native host control. Defaults and pins remain authoritative.
 - Add verified Terra API prices, Codex credit rates and input capacity to existing cost guards and official-model synchronization. No savings claim is established by model support.
+- Wait up to 1.5 seconds for Claude's queued transcript flush, within a 2-second helper deadline, to link observed Router effort and cache TTL to the exact response (#385). Missing, ambiguous or later evidence remains unknown; no model request is repeated.
+- Record only closed validation reasons and counts for rejected Compact selections in classic and Function Hooks paths (#386). Keep usage and conservative local restore/digest fallback; historical rejected provider responses cannot be reconstructed from these new diagnostics.
 
 ## v0.8.63 — 2026-10-23 — Preserve Codex contracts and distinguish hook connection failures
 

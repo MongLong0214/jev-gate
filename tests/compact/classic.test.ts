@@ -8,6 +8,7 @@ import type { Transport } from '../../mods/router/hooks/client.ts';
 import { activityChecks } from '../../src/doctor-activity.js';
 import { loadActivity } from '../../src/activity.js';
 import { sessionFacts } from '../../src/bench/ab.js';
+import { dependencyReply } from '../fixtures/compact-dependencies.ts';
 
 const loss = vi.hoisted(() => ({ on: false }));
 vi.mock('node:fs', async original => {
@@ -139,6 +140,27 @@ describe('classic path: which path runs', () => {
 });
 
 describe('classic path: restore', () => {
+  it('retains invalid selection diagnostics and usage while restore and PostCompact complete as one execution', async () => {
+    write(session(30, 400));
+    const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' };
+    let sends = 0;
+    const transport: Transport = { sleep: () => new Promise<void>(() => undefined), fetch: async (_url, init) => {
+      sends++;
+      const body = JSON.parse(dependencyReply(init.body).text);
+      delete body.answers[Object.keys(body.answers)[0]!];
+      body.usage = { input_tokens: 8513, output_tokens: 807 };
+      return { status: 200, text: JSON.stringify(body) };
+    } };
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev, { transport, key: 'k'.repeat(16) })).toContain('jev-gate compact');
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), jev)).toContain('additionalContext');
+    await runClassicCompact(input('PostCompact', { compact_summary: 'x'.repeat(7521) }), jev);
+    const records = traces();
+    expect(records.find(r => r['stage'] === 'jev')).toMatchObject({ selection: 'invalid_answers', jev_sent: true, candidates: 16, dependencies: 0, usage: { input_tokens: 8513, output_tokens: 807 }, selection_validation: { reason: 'candidate_count', expected_count: 16, answer_count: 15, missing_count: 1, extra_count: 0 } });
+    expect(records.find(r => r['stage'] === 'post')).toMatchObject({ selection: 'invalid_answers', summary_chars: 7521, within_budget: true });
+    expect(sends).toBe(1);
+    expect(sessionFacts(join(dir, 'trace'), SESSION)).toMatchObject({ jevRequests: 1 });
+    expect(activityChecks({ traces: { claude: { records, unreadable: 0 } }, now: Date.now(), installed: null, recording: true, keyPresent: true, codexOwner: null, liveness: null }).find(c => c.feature === 'compact')?.metrics).toMatchObject({ fired: 1, restored: 1 });
+  });
   it.each([false, true])('finds the last human request before a tool-filled 2 MiB tail (one oversized row: %s)', async oversized => {
     const task = '현재 작업: repair the parser and keep the existing API.';
     const output = oversized ? call(1, 'x'.repeat(5 * 1024 * 1024)) : Array.from({ length: 6 }, (_, i) => call(i, 'x'.repeat(512 * 1024))).flat();

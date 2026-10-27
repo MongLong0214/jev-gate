@@ -5,6 +5,14 @@ import { DIGEST_MARK, type DigestMessage, type DigestResult } from './digest.ts'
 
 const labels = ['required', 'related', 'unrelated', 'unclear'] as const;
 export interface CompactCandidate { id: string; message: number; tool: number; input: string; result: string; excerpt: boolean }
+export interface SelectionValidation {
+  reason: 'response_shape' | 'answers_shape' | 'candidate_count' | 'candidate_ids' | 'choice';
+  expected_count: number;
+  answer_count: number | null;
+  missing_count: number | null;
+  extra_count: number | null;
+  invalid_choice_count: number | null;
+}
 export interface CompactSelection {
   priorities: Array<{ message: number; tool: number }>;
   reason: string;
@@ -15,6 +23,8 @@ export interface CompactSelection {
   available: number | null;
   durationMs: number;
   usage: { input_tokens: number | null; output_tokens: number | null } | null;
+  /** Closed validation boundary and counts only; never candidate IDs or provider content. */
+  validation?: SelectionValidation;
 }
 
 /** Only optional old successful results compete. Mandatory text and the complete tail are never offered for removal. */
@@ -70,16 +80,25 @@ export const createCompactSelector = (timeoutMs: number): ((messages: readonly D
     const outcome = await client.assess(transport, key, stateFor(candidates), compactQuestions(candidates), signal, undefined, () => { result.sent = true; });
     result.durationMs = Math.max(0, Date.now() - started); result.usage = outcome.usage;
     if (signal?.aborted) return { ...result, reason: 'aborted' };
-    if (!outcome.ok) return { ...result, reason: outcome.reason, sent: outcome.sent };
+    const validation: SelectionValidation = { reason: 'response_shape', expected_count: candidates.length, answer_count: null, missing_count: null, extra_count: null, invalid_choice_count: null };
+    if (!outcome.ok) return { ...result, reason: outcome.reason, sent: outcome.sent, ...(outcome.reason === 'malformed' ? { validation } : {}) };
     result.model = JEV_MODEL;
     const raw = outcome.answers;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...result, reason: 'invalid_answers' };
-    if (Object.keys(raw).length !== candidates.length) return { ...result, reason: 'invalid_answers' };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...result, reason: 'invalid_answers', validation: { ...validation, reason: 'answers_shape' } };
+    const ids = Object.keys(raw), expected = new Set(candidates.map(c => c.id));
+    validation.answer_count = ids.length;
+    validation.missing_count = candidates.filter(c => !Object.prototype.hasOwnProperty.call(raw, c.id)).length;
+    validation.extra_count = ids.filter(id => !expected.has(id)).length;
+    if (ids.length !== candidates.length || validation.missing_count || validation.extra_count) return {
+      ...result, reason: 'invalid_answers', validation: { ...validation, reason: ids.length !== candidates.length ? 'candidate_count' : 'candidate_ids' },
+    };
+    let invalid = 0;
     for (const c of candidates) {
       const answer = validateChoice((raw as Record<string, unknown>)[c.id], labels);
-      if (!answer) return { ...result, priorities: [], reason: 'invalid_answers' };
-      if (answer.choice === 'required') result.priorities.push({ message: c.message, tool: c.tool });
+      if (!answer) invalid++;
+      else if (answer.choice === 'required') result.priorities.push({ message: c.message, tool: c.tool });
     }
+    if (invalid) return { ...result, priorities: [], reason: 'invalid_answers', validation: { ...validation, reason: 'choice', invalid_choice_count: invalid } };
     return { ...result, reason: result.priorities.length ? 'current_dependencies' : 'recency_kept' };
   };
 };

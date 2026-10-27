@@ -7,7 +7,7 @@ import { createRouter } from './router.ts';
 import { installedKeyPath, parseInstalledKey } from './key.ts';
 import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
 import { createRecorder, createRecordingState, type RecordingState } from './recording.ts';
-import type { RouterObservation } from '../../../src/router-observation.ts';
+import { ROUTER_OBSERVATION_PROCESS_MS, type RouterObservation } from '../../../src/router-observation.ts';
 import { childStepContext } from '../../../src/router-child-context.ts';
 import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel, hostFlag } from './models.ts';
 
@@ -78,7 +78,7 @@ const recorderOf = ($: EngineInterface, state: RecordingState) => createRecorder
 const engineOf = ($: EngineInterface, log: RouterEngine['log']): RouterEngine => ({
   observation: async (agent, since, usage) => {
     const path = $.plugin.root + '/dist/router-observation-hook.js';
-    const result = await $.process.run(['node', path, await $.session.id(), agent ?? '', String(since), JSON.stringify(usage)], { timeoutMs: 500 });
+    const result = await $.process.run(['node', path, await $.session.id(), agent ?? '', String(since), JSON.stringify(usage)], { timeoutMs: ROUTER_OBSERVATION_PROCESS_MS });
     return result.exitCode === 0 ? JSON.parse(result.stdout) as RouterObservation | null : null;
   },
   frontierEnabled: async () => {

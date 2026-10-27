@@ -1,6 +1,10 @@
 import { sameModel } from './claude-models.ts';
 import { normalizeUsage, type TokenUsage } from './cost.ts';
 
+export const ROUTER_OBSERVATION_WAIT_MS = 1500;
+// Leave startup/serialization room beyond the bounded transcript flush wait.
+export const ROUTER_OBSERVATION_PROCESS_MS = ROUTER_OBSERVATION_WAIT_MS + 500;
+
 export interface RouterObservation {
   effort: string | number | null;
   request: string;

@@ -7,6 +7,7 @@ import { resolveCompactConfig } from '../../mods/compact/hooks/config.ts';
 import { activityChecks, activityStableUntil } from '../../src/doctor-activity.js';
 import { loadActivity } from '../../src/activity.js';
 import { rowOf, type CellResult } from '../../src/bench/ab.js';
+import { dependencyReply } from '../fixtures/compact-dependencies.ts';
 
 /**
  * register.ts types itself against the host's `claude-code` declarations, which this Node typecheck does not load, so
@@ -280,6 +281,25 @@ describe('register', () => {
 
 
 describe('optional Jev failure does not discard the local digest', () => {
+  it('records invalid selection counts without provider content and still applies the local digest', async () => {
+    const hook = (await hooksFor({ enabled: true, jevEnabled: true })).get('session.compact')!;
+    const records: Record<string, unknown>[] = [];
+    const host = hostWith(async (path, text) => { if (path.endsWith('.json')) records.push(JSON.parse(text)); });
+    host.env.get = async name => ({ HOME: '/h', JEV_GATE_TRACE_DIR: '/h/trace', TYPESAFE_API_KEY: 'k'.repeat(16) } as Record<string, string>)[name];
+    let sends = 0;
+    const engine = { ...host, http: { fetch: async (_url: string, init: { body: string }) => {
+      sends++;
+      const body = JSON.parse(dependencyReply(init.body).text);
+      delete body.answers[Object.keys(body.answers)[0]!];
+      return { status: 200, text: JSON.stringify(body) };
+    } } };
+    const { next, calls } = nextSpy();
+    const result = await hook(engine, { trigger: 'auto', messages: conversation() }, next) as { messages: Array<{ text: string }> };
+    expect(result.messages[0]!.text).toContain('[jev-gate compact]'); expect(calls).toEqual([]); expect(sends).toBe(1);
+    expect(records.find(r => r['stage'] === 'jev')).toMatchObject({ selection: 'invalid_answers', jev_sent: true, dependencies: 0, usage: { input_tokens: 10, output_tokens: 2 }, selection_validation: { reason: 'candidate_count', expected_count: 16, answer_count: 15, missing_count: 1, extra_count: 0 } });
+    expect(JSON.stringify(records)).not.toContain('m5t0');
+    expect(records.some(r => r['applied'] === true)).toBe(true);
+  });
   it('keeps active local compaction when credential access throws', async () => {
     const hook = (await hooksFor({ enabled: true, jevEnabled: true })).get('session.compact')!;
     const { next, calls } = nextSpy();
