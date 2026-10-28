@@ -167,6 +167,37 @@ describe('Codex ordered routing and recorded application', () => {
     { model: 'gpt-daybreak-blue-latest', description: 'Latest frontier agentic coding model for broad defensive cybersecurity work.', supportedReasoningEfforts: levels() },
     { model: 'codex-auto-review', description: 'Automatic approval review model for Codex.', hidden: true, supportedReasoningEfforts: levels(5) },
   ];
+  it('routes ordinary coding from Luna to listed Terra while reserving Luna for quick work', async () => {
+    const available = [...account, { model: 'gpt-6.1-terra', description: 'GPT-6.1 Terra Codex model.', supportedReasoningEfforts: levels() }];
+    const rows: Obj[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const req = JSON.parse(String(init?.body));
+      expect(req.questions.capability.criteria).toHaveProperty('routine');
+      return response({ model: req.model, answers: answersFor(req, 'routine', 'medium') });
+    });
+    const patch = await routeCodex({ model: 'gpt-6-luna', effort: 'low', task: 'Implement the specified helper and its checks.',
+      session: 's', prompt: 'p', catalog: available, config, env: { TYPESAFE_API_KEY: 'key' }, billing: 'chatgpt', fetchImpl,
+      trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } });
+    expect(patch).toEqual({ model: 'gpt-6.1-terra', effort: 'medium', effortEdit: { kind: 'set', value: 'medium' } });
+    expect(rows.at(-1)).toMatchObject({ reasons: { model: 'selected', effort: 'selected' }, selection: { policy: 'role', roles: [
+      { option: 'mechanical', model: 'gpt-6-luna' }, { option: 'routine', model: 'gpt-6.1-terra' }, { option: 'complex', model: 'gpt-6.1-sol' },
+    ] } });
+    expect(codexCandidates(available, false).find(c => c.id === 'gpt-6-luna')?.rank).toBe(0);
+    expect(codexCandidates(account, false).find(c => c.id === 'gpt-6-luna')?.rank).toBe(1);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+  it('reports an unlisted native baseline without calling its effort answer invalid', async () => {
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const req = JSON.parse(String(init?.body));
+      return response({ model: req.model, answers: answersFor(req, '__keep__') });
+    });
+    const rows: Obj[] = [];
+    expect(await routeCodex({ model: 'gpt-6.1-terra', effort: 'xhigh', task: 'Review the change.', session: 's', prompt: 'p',
+      catalog: account, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl: fetchImpl as typeof fetch,
+      trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({});
+    expect(rows.at(-1)).toMatchObject({ phase: 'codex_router_result', reasons: { model: 'baseline_unlisted', effort: 'baseline_unlisted' } });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
   // The same IDs without any older/previous wording, so only the version rule can find a successor.
   const plain = account.map(m => ({ ...m, description: 'Coding model.' }));
   it('finds the newest general successor by family and numeric version, and never for an ID outside the grammar', () => {

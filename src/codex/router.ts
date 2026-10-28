@@ -23,12 +23,16 @@ export interface CodexModel {
 const supported = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 export const codexCandidates = (catalog: readonly CodexModel[], allowAstra: boolean, baseline?: string): RouteCandidate[] => {
   const models = normalizeCatalog(catalog, true).models;
+  // When Terra is available, let Luna serve quick work and Terra serve ordinary coding.
+  // Without Terra, Luna retains its documented standard role.
+  const terraAvailable = models.some(m => m.model === 'gpt-6.1-terra' && generalCodexModel(m) && !codexSuccessor(m.model, models));
   return models.filter(m => m.model === baseline || generalCodexModel(m) && codexTargetAllowed(m.model, allowAstra) && !codexSuccessor(m.model, models)).map(m => {
     const role = codexModelRole(m);
+    const lunaFast = terraAvailable && m.model === 'gpt-6-luna';
     return {
       id: m.model, description: ((m.description ?? m.displayName ?? 'Account-listed coding model; performance and price rank unknown.') +
-        (role ? ` Product role ${role.description}` : '')).slice(0, 1200),
-      ...(role ? { rank: role.rank } : {}),
+        (role ? ` Product role ${lunaFast ? 'fast: quick, checkable work; Terra serves ordinary coding when available.' : role.description}` : '')).slice(0, 1200),
+      ...(role ? { rank: lunaFast ? 0 : role.rank } : {}),
       efforts: supported.filter(e => m.supportedReasoningEfforts.some(v => v.reasoningEffort === e)),
       omitEffort: true,
     };

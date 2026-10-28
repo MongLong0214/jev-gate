@@ -307,7 +307,10 @@ export const selectPair = (offer: PairOffer, raw: unknown): PairDecision => {
   if (lift && lift.rank! > (offer.candidates.find(c => c.id === model)?.rank ?? -1)) { model = lift.id; reasons.model = 'retry_step_up'; Object.assign(diagnostics, { direction: 'upgrade', threshold: null, probability: null }); }
   else if (unclear) { if (offer.effortEnabled) reasons.effort = 'capability_unclear'; return native(); }
   const target = offer.candidates.find(c => c.id === model);
-  if (!target) { reasons.model = 'candidate_unavailable'; return native(); }
+  if (!target) {
+    reasons.model = reasons.effort = offer.baselineCandidate ? 'candidate_unavailable' : 'baseline_unlisted';
+    return native();
+  }
   let edit: EffortEdit = { kind: 'keep' };
   if (offer.effortEnabled && control.choice !== 'effort_lock') {
     if (target.omitEffort && !target.efforts.length) { edit = { kind: 'omit' }; reasons.effort = 'selected'; diagnostics.effort_policy = 'omit'; }
