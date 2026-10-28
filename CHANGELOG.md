@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.67 — 2026-10-28 — Calibrate the Claude downgrade floor
+
+- Raise Claude Router's default downgrade confidence from 0.60 to 0.65 across the runtime and both plugin manifests. Keep its upgrade floor at 0.80 and Codex at 0.80/0.60. Explicit user settings still take precedence.
+- This is a provisional operating choice from a small task evaluation, with direct outcome evidence on Claude effort. It does not establish a globally optimal model threshold or a general quality or cost improvement.
+
 ## v0.8.66 — 2026-10-28 — Route routine Codex work to Terra
 
 - When the account lists GPT-6.1 Terra, use Luna for quick tasks and offer Terra for ordinary coding. Keep the account's model and effort availability, explicit pins and cost checks.

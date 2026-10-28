@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-router",
-  "version": "0.8.66",
+  "version": "0.8.67",
   "license": "MIT",
   "description": "Routes the main thread's effort and each subagent's model and effort with one TypeSafe Jev assessment; on by default, native on any doubt.",
   "author": {
@@ -91,7 +91,7 @@
       "title": "Downgrade confidence floor",
       "description": "Least probability, 0.5 to 1, that the weaker model or lower effort is enough: Jev's answer mass at or below it.",
       "type": "number",
-      "default": 0.6
+      "default": 0.65
     },
     "timeoutMs": {
       "title": "Preparation budget (ms)",

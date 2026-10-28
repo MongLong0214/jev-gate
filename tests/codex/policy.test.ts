@@ -32,6 +32,7 @@ describe('Codex ordered routing and recorded application', () => {
     expect(p.gate).toMatchObject({ models, delegationDepthFloor: 0 });
     expect(p.gate).not.toHaveProperty('maxParallelWorkers');
     expect(p.router.model).toBe(true);
+    expect(p.router).toMatchObject({ minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.6 });
     const serial = join(tmp, 'serial-policy.json'); writeFileSync(serial, JSON.stringify({ gate: { maxParallelWorkers: 1, guardAllowTools: [], workerIsolation: 'worktree' } }));
     // #289: a deployed file that still sets the removed keys loads, and they are dropped unread.
     const old = loadCodexPolicy({ JEV_CODEX_CONFIG: serial }).gate;

@@ -24,7 +24,7 @@ describe('resolveConfig', () => {
       tiers: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-1' },
       tierIssues: [],
       minUpgradeConfidence: 0.8,
-      minDowngradeConfidence: 0.6,
+      minDowngradeConfidence: 0.65,
       timeoutMs: 800,
       logDecisions: true,
     });
