@@ -162,21 +162,35 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
       if (res.destroyed || req.destroyed && !req.complete) return;
       let submitted: ReturnType<CodexPolicy['observeRequest']>;
       let compactTerminal = false;
-      let requestFailed = false;
-      const recordFailure = (): void => {
-        if (requestFailed) return; requestFailed = true;
+      let requestTerminal = false;
+      let observing = false;
+      let clientDisconnected = false;
+      const sentAt = performance.now();
+      let upstreamStatus: number | undefined;
+      const recordCancellation = (): void => {
+        if (requestTerminal || !clientDisconnected) return;
+        requestTerminal = true;
+        if (sessionId) policy?.observeRequestCancellation(sessionId, submitted);
+        if (sessionId && compact && (nativeCompact || compact.applied) && !compactTerminal) {
+          compactTerminal = true;
+          policy?.recordCompact(sessionId, compact, 'result', { model_request_id: submitted?.requestId ?? null, outcome: 'cancelled', usage: null, total_token_saving: 'unmeasured' });
+        }
+      };
+      const recordFailure = (stage: 'connect' | 'stream' | 'http' | 'sse'): void => {
+        if (requestTerminal) return; requestTerminal = true;
         if (sessionId) {
-          policy?.observeRequestFailure(sessionId, submitted);
+          policy?.observeRequestFailure(sessionId, submitted, { stage, elapsed_ms: Math.max(0, Math.round(performance.now() - sentAt)), ...(upstreamStatus !== undefined ? { status: upstreamStatus } : {}) });
           if (compact && (nativeCompact || compact.applied) && !compactTerminal) { compactTerminal = true; policy?.recordCompact(sessionId, compact, 'result', { model_request_id: submitted?.requestId ?? null, outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); }
         }
       };
       const fail = (): void => {
-        if (res.destroyed) return; // A native cancellation is not an upstream failure.
-        recordFailure();
+        if (res.destroyed) { if (!observing) recordCancellation(); return; }
+        recordFailure(upstreamStatus === undefined ? 'connect' : 'stream');
         if (!res.headersSent) { res.writeHead(502); res.end(); }
         else res.destroy(); // Never present a truncated SSE body as a clean completion.
       };
       const upstream = (base.protocol === 'https:' ? httpsRequest : httpRequest)(base, { method: req.method, headers }, response => {
+        upstreamStatus = response.statusCode;
         // ClientRequest errors do not handle an IncomingMessage reset after headers.
         response.once('aborted', fail); response.once('error', fail);
         const output = Object.fromEntries(Object.entries(response.headers).filter(([k]) => !['connection', 'transfer-encoding'].includes(k)));
@@ -185,13 +199,17 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           const receipt = compact;
           const observed = (value: Obj, failed = false) => {
             if (compactTerminal) return; compactTerminal = true;
+            if (nativeCompact) requestTerminal = true;
             const r = obj(value['response']) ?? value;
             policy?.recordCompact(sessionId, receipt, 'result', { model_request_id: submitted?.requestId ?? null, status: response.statusCode, outcome: failed || r['status'] === 'failed' || r['status'] === 'incomplete' || r['error'] ? 'failed' : 'completed', usage: normalizeUsage('codex', obj(r['usage']) ?? {}), model: typeof r['model'] === 'string' ? r['model'] : null, total_token_saving: 'unmeasured' });
           };
           // Native /responses streams can omit Content-Type. Use the endpoint's contract,
           // just as ordinary response accounting does, rather than parsing SSE as JSON.
           const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
-          if (contentType.includes('text/event-stream') || route === '/responses' && !contentType.includes('application/json')) observeResponseStream(response, observed, value => observed(value, true));
+          if (contentType.includes('text/event-stream') || route === '/responses' && !contentType.includes('application/json')) {
+            if (nativeCompact) observing = true;
+            observeResponseStream(response, observed, value => observed(value, true), nativeCompact ? recordCancellation : undefined);
+          }
           else {
             const chunks: Buffer[] = []; let bytes = 0;
             response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes <= 1024 * 1024) chunks.push(chunk); });
@@ -201,14 +219,25 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           // still decompressing. Transport failures are handled by fail(); a close alone
           // must not replace an eventual completed event with a fabricated failure.
         }
-        if ((response.statusCode ?? 502) >= 400) recordFailure();
+        if ((response.statusCode ?? 502) >= 400) recordFailure('http');
         if (!nativeCompact && sessionId && response.statusCode === 200 && req.method === 'POST' && route === '/responses') {
-          observeResponseStream(response, value => policy?.observeUsage(sessionId, value, submitted));
+          observing = true;
+          observeResponseStream(response, value => { if (requestTerminal) return; requestTerminal = true; policy?.observeUsage(sessionId, value, submitted); }, value => {
+            // A failed/incomplete SSE is a terminal response too, and may carry usage.
+            if (requestTerminal) return;
+            policy?.observeUsage(sessionId, value, submitted); recordFailure('sse');
+          }, recordCancellation);
         }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
       upstream.on('error', fail);
-      res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
+      res.on('close', () => {
+        if (!res.writableEnded) {
+          clientDisconnected = true;
+          if (!observing) recordCancellation();
+          upstream.destroy();
+        }
+      });
       if (!nativeCompact && req.method === 'POST' && route === '/responses' && sessionId && policy) {
         try { submitted = policy.observeRequest(sessionId, obj(JSON.parse((modified ? payload : decoded).toString('utf8'))) ?? {}, codexBilling(configured, account), routedInput, nativeInput ? { native: nativeInput, guidance, ...(compact ? { compact } : {}) } : undefined); } catch { /* Observation does not block sending. */ }
       }

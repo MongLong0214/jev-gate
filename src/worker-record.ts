@@ -76,6 +76,13 @@ export const workerTraceData = (phase: string, body: Record<string, unknown>): R
     return value;
   };
   const out = clean(body) as Record<string, unknown>;
+  // Connection diagnostics are closed metadata; never admit arbitrary error text through this path.
+  const stage = body['connection_stage'];
+  if (typeof stage === 'string' && ['state', 'credentials', 'headers', 'body'].includes(stage)) out['connection_stage'] = stage;
+  for (const key of ['elapsed_ms', 'budget_ms', 'connection_status']) {
+    const value = body[key];
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && (key !== 'connection_status' || value >= 100 && value <= 599)) out[key] = value;
+  }
   if ('verdict' in body) out['verdict'] = ['accept', 'incomplete', 'invalid', 'unknown', 'rework', 'replan'].includes(String(body['verdict'])) ? body['verdict'] : 'unknown';
   if ('status' in body) out['status'] = ['completed', 'failed', 'cancelled', 'interrupted', 'async_launched', 'running'].includes(String(body['status'])) ? body['status'] : 'unknown';
   if ('verdict_reason' in body) out['verdict_reason'] = verdictReason(String(body['verdict']), body['verdict_reason'])?.[0] ?? null;

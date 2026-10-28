@@ -33,19 +33,28 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
  * of the returned probabilities that is the stated choice. A tie is not an answer: nothing about it says which side to
  * take.
  */
-export const validateChoice = (value: unknown, keys: readonly string[]): ChoiceAnswer | null => {
-  if (!isRecord(value) || value['type'] !== 'choice') return null;
+export type ChoiceFailure = 'type' | 'label' | 'probabilities_shape' | 'probability_labels' | 'probability_value' | 'probability_sum' | 'tie' | 'choice_not_maximum' | 'confidence';
+/** Closed metadata only; never returns provider strings or labels. Same validation path as validateChoice. */
+export const inspectChoice = (value: unknown, keys: readonly string[]): { answer: ChoiceAnswer; reason: null } | { answer: null; reason: ChoiceFailure } => {
+  const invalid = (reason: ChoiceFailure): { answer: null; reason: ChoiceFailure } => ({ answer: null, reason });
+  if (!isRecord(value) || value['type'] !== 'choice') return invalid('type');
   const choice = value['choice'];
-  if (typeof choice !== 'string' || !keys.includes(choice)) return null;
+  if (typeof choice !== 'string' || !keys.includes(choice)) return invalid('label');
+  const probs = value['probabilities'];
+  if (!isRecord(probs)) return invalid('probabilities_shape');
+  if (Object.keys(probs).length !== keys.length || !keys.every(k => Object.prototype.hasOwnProperty.call(probs, k))) return invalid('probability_labels');
+  if (keys.some(k => typeof probs[k] !== 'number' || !Number.isFinite(probs[k]) || (probs[k] as number) < 0 || (probs[k] as number) > 1)) return invalid('probability_value');
   const probabilities = choiceDistribution(value, keys);
-  if (probabilities === null) return null;
+  if (probabilities === null) return invalid('probability_sum');
   const max = Math.max(...keys.map((k) => probabilities[k] as number));
   const top = keys.filter((k) => (probabilities[k] as number) >= max - ARGMAX_TOLERANCE);
-  if (top.length !== 1 || top[0] !== choice) return null;
+  if (top.length !== 1) return invalid('tie');
+  if (top[0] !== choice) return invalid('choice_not_maximum');
   const confidence = value['confidence'];
-  if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
-  return { choice, confidence, probabilities };
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return invalid('confidence');
+  return { answer: { choice, confidence, probabilities }, reason: null };
 };
+export const validateChoice = (value: unknown, keys: readonly string[]): ChoiceAnswer | null => inspectChoice(value, keys).answer;
 
 /**
  * The distribution of a choice answer alone: the exact label set with finite probabilities in [0,1] summing to 1 up to

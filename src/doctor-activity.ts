@@ -168,7 +168,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   say(failed ? 'warn' : terminals.length ? 'ok' : 'info', `background: ${terminals.length} background workers ended${terminals.length ? ` (${tally(terminals.map(r => ['completed', 'failed', 'cancelled', 'interrupted'].includes(String(r['status'])) ? String(r['status']) : 'unknown'))}; reasons ${tally(terminals.map(r => verdictReason('', r['verdict_reason'])?.[0] ?? 'none'))})` : ''}`,
     'Open the failed background workers in the dashboard; user-stopped tasks are recorded as cancelled.');
 
-  const routerRecords = rs.filter(r => isRouter(r) || String(r['phase']).startsWith('codex_router_') || r['phase'] === 'codex_route_applied' || r['phase'] === 'codex_model_request' || r['phase'] === 'codex_model_failure' || r['phase'] === 'post');
+  const routerRecords = rs.filter(r => isRouter(r) || String(r['phase']).startsWith('codex_router_') || r['phase'] === 'codex_route_applied' || r['phase'] === 'codex_model_request' || r['phase'] === 'codex_model_failure' || r['phase'] === 'codex_model_cancelled' || r['phase'] === 'post');
   const routerKey = [input.traces.claude ? 'claude' : '', input.traces.codex ? 'codex' : ''].join(':'), cachedRouter = routerChecks.get(routerKey);
   if (cachedRouter && cachedRouter.records.length === routerRecords.length && routerRecords.every((r, i) => r === cachedRouter.records[i])) out.push(...cachedRouter.checks);
   else {
@@ -223,7 +223,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     }
     // Codex uses a distinct request_id for every provider send, shared by its response/failure (not the Jev id).
     const codexSteps = new Map<string, Rec[]>();
-    for (const r of [...phase('codex_model_request'), ...phase('codex_model_failure'), ...phase('codex_router_response')]) group(codexSteps, JSON.stringify([r['session_id'], r['request_id'] ?? r['invocation_id']]), r);
+    for (const r of [...phase('codex_model_request'), ...phase('codex_model_failure'), ...phase('codex_model_cancelled'), ...phase('codex_router_response')]) group(codexSteps, JSON.stringify([r['session_id'], r['request_id'] ?? r['invocation_id']]), r);
     for (const rows of codexSteps.values()) {
       const results = rows.filter(r => r['phase'] === 'codex_router_response');
       const complete = results.length === 1 && str(results[0]!['request_id']) !== null && sub(results[0]!, 'usage')['coverage'] === 'complete';

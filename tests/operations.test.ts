@@ -925,3 +925,12 @@ describe('Gate cleanup reason fixtures', () => {
     expect(view.feed[0]?.summary).toContain(label);
   });
 });
+
+it('settles client-disconnected Codex requests as interrupted without inventing usage or model success (#396)', () => {
+  const req = { ...base, host: 'codex', phase: 'codex_model_request', request_id: 'model-1', submitted_model: 'gpt-6.1-sol' };
+  const cancellation = { ...req, written_at: later, phase: 'codex_model_cancelled', reason: 'client_disconnected', usage: null };
+  const view = buildOperations([req, cancellation], [], new Date('2026-09-29T06:02:00.000Z'), { trace: true });
+  expect(view.feed.find(s => s.title === '모델 · 응답 대기')?.state).toBe('done');
+  expect(view.feed.find(s => s.title === '모델 · 연결 종료')).toMatchObject({ state: 'interrupted', summary: '클라이언트 연결 종료 · 응답/소비 미확인' });
+  expect(view.feed.some(s => s.state === 'error')).toBe(false);
+});

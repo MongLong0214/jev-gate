@@ -116,7 +116,12 @@ export const runCodexHook = async (deps: CodexHookDeps): Promise<Rec> => {
     }
     const reply = automatic ? await connectionRequest(deps.env, '/hook', input, signal) : await helperRequest(new URL('/hook', bridge).href, secret, input, signal);
     if (!reply.ok) {
-      if (opened.ok) recordOnce(codexTraceDir(deps.env), opened.writer, reply.reason, { session_id: token(input['session_id']), event: token(input['hook_event_name']), tool_name: token(input['tool_name']) });
+      if (opened.ok) recordOnce(codexTraceDir(deps.env), opened.writer, reply.reason, {
+        session_id: token(input['session_id']), prompt_id: token(input['turn_id']), tool_use_id: token(input['tool_use_id']),
+        event: token(input['hook_event_name']), tool_name: token(input['tool_name']), connection_stage: reply.stage,
+        elapsed_ms: Math.max(0, Math.round(performance.now() - startedAt)), budget_ms: budget,
+        ...(reply.status !== undefined ? { connection_status: reply.status } : {}),
+      });
       return { ...recorded, ...notice };
     }
     if (Object.keys(reply.value).length) return { ...reply.value, ...notice };

@@ -24,6 +24,7 @@ export type TracePhase =
   | 'codex_router_skipped'
   | 'codex_model_request'
   | 'codex_model_failure'
+  | 'codex_model_cancelled'
   | 'codex_router_response'
   | 'codex_route_applied'
   | 'codex_event'
