@@ -58,4 +58,16 @@ describe('native Responses observation without required Content-Type', () => {
     expect(completed).not.toHaveBeenCalled(); expect(failed).toHaveBeenCalledExactlyOnceWith(response);
     expect(Buffer.concat(native).equals(bytes)).toBe(true);
   });
+  it.each([false, true])('drains already-received gzip before settling a disconnect (complete=%s)', async complete => {
+    const input = new PassThrough() as unknown as IncomingMessage; input.headers = { 'content-encoding': 'gzip' };
+    const completed = vi.fn(), ended = vi.fn();
+    observeResponseStream(input, completed, undefined, ended);
+    const bytes = zlib.gzipSync(Buffer.from(event('\n')));
+    (input as unknown as PassThrough).write(complete ? bytes : bytes.subarray(0, 10));
+    input.emit('aborted');
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+    expect(completed).toHaveBeenCalledTimes(complete ? 1 : 0);
+    if (complete) expect(completed.mock.invocationCallOrder[0]).toBeLessThan(ended.mock.invocationCallOrder[0]!);
+    (input as unknown as PassThrough).destroy();
+  });
 });

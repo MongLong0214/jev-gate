@@ -193,14 +193,14 @@ const callDetails = (r: Rec): string[] => {
 
 export const traceFeature = (phase: string): FeatureId | null => {
   if (phase === 'codex_compact') return 'compact';
-  if (phase === 'codex_model_request' || phase === 'codex_model_failure' || phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied' || phase === 'codex_router_response') return 'router';
+  if (phase === 'codex_model_request' || phase === 'codex_model_failure' || phase === 'codex_model_cancelled' || phase === 'codex_router_intent' || phase === 'codex_router_result' || phase === 'codex_router_skipped' || phase === 'codex_route_applied' || phase === 'codex_router_response') return 'router';
   if (phase.startsWith('admission_')) return 'admission';
   if (phase.startsWith('pre_')) return 'allocation';
   if (phase.startsWith('background_') || phase.startsWith('worktree_') || phase === 'dispatch_denied' || phase === 'dispatch' || phase === 'post' || phase === 'failure' || phase === 'stop') return 'workers';
   return null;
 };
 const traceTitle = (phase: string, r: Rec): string => ({
-  codex_model_request: '모델 · 응답 대기', codex_model_failure: '모델 · 요청 실패',
+  codex_model_request: '모델 · 응답 대기', codex_model_failure: '모델 · 요청 실패', codex_model_cancelled: '모델 · 연결 종료',
   codex_router_intent: 'Router · Jev 요청', codex_router_result: 'Router · 턴 설정 결정', codex_router_skipped: 'Router · Jev 호출 생략', codex_router_response: 'Router · Codex 응답 관측', codex_route_applied: 'Router · Codex 요청 전송',
   admission_intent: 'Gate A · Jev 요청', admission_result: 'Gate A · 실행 형태',
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
@@ -482,6 +482,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     lane = 'host';
     details.push(`전달 모델 ${token(r['submitted_model']) ?? '?'}`);
   }
+  if (phase === 'codex_model_cancelled') { state = 'interrupted'; lane = 'host'; summary = '클라이언트 연결 종료 · 응답/소비 미확인'; }
   if (phase === 'codex_model_failure') { state = 'error'; lane = 'host'; summary = '호스트 모델 요청 실패'; }
   if (state === 'error' && !issue) issue = lane === 'jev' ? 'jev' : 'host';
   const cause = state !== 'error' ? null : phase === 'post' ? refusal?.[0] ?? null : token(http?.['code']) ?? token(r['reason']);
@@ -494,7 +495,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     ...(outcome ? { outcome } : {}), ...((outcome === 'accepted' || outcome === 'rejected') && token(r['task_id']) ? { task: token(r['task_id'])! } : {}),
     // A host end and a policy delivery decide nothing, so a later one never stands in for the contract verdict before it.
     // #269: a Jev request whose response is recorded is that response's start, which the response row already times.
-    ...(['stop', 'background_conversation', 'background_policy_delivery', 'codex_model_request', 'codex_model_failure'].includes(phase) || outcome === 'host_ended' && phase === 'background_terminal' || isIntent && hasResult && lane === 'jev' ? { lifecycle: true } : {}),
+    ...(['stop', 'background_conversation', 'background_policy_delivery', 'codex_model_request', 'codex_model_failure', 'codex_model_cancelled'].includes(phase) || outcome === 'host_ended' && phase === 'background_terminal' || isIntent && hasResult && lane === 'jev' ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
@@ -737,7 +738,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   const responseBindings = new Map<string, Rec>();
   const modelTerminals = new Map<string, string>();
   for (const r of records) {
-    if (!['codex_router_response', 'codex_model_failure'].includes(String(r['phase']))) continue;
+    if (!['codex_router_response', 'codex_model_failure', 'codex_model_cancelled'].includes(String(r['phase']))) continue;
     const key = modelRequestKey(r); if (!key) continue;
     const at = iso(r['written_at']);
     if (at && at >= (modelTerminals.get(key) ?? '')) modelTerminals.set(key, at);

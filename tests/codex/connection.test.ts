@@ -187,7 +187,7 @@ describe('connection failures are named, not collapsed (#287)', () => {
       const call = helperRequest(`http://127.0.0.1:${(hanging.address() as { port: number }).port}`, 'test', {}, cancel.signal);
       await started;
       cancel.abort(reason === 'timeout' ? new DOMException('deadline', 'TimeoutError') : 'MCP caller cancelled');
-      await expect(call).resolves.toEqual({ ok: false, reason });
+      await expect(call).resolves.toEqual({ ok: false, reason, stage: 'body', status: 200 });
     } finally { spy.mockRestore(); hanging.closeAllConnections(); await new Promise<void>(r => hanging.close(() => r())); }
   });
   it('answers an /agent call whose dispatch throws with fixed text instead of a bare 502', async () => {
@@ -217,6 +217,10 @@ describe('connection failures are named, not collapsed (#287)', () => {
     await new Promise<void>(r => failing.close(() => r()));
     expect(await run(bridged, 'bridge-thread')).toEqual({});
     const rows = failures(trace);
+    for (const row of rows) {
+      expect(row).toMatchObject({ prompt_id: 'turn', tool_use_id: 'call', budget_ms: 4200, elapsed_ms: expect.any(Number), connection_stage: expect.any(String) });
+      expect(JSON.stringify(row)).not.toContain('secret/path');
+    }
     expect(rows.map(r => `${String(r['session_id'])}:${String(r['connection_failure'])}`).sort()).toEqual(['bridge-thread:http_error', 'bridge-thread:unreachable', 'root-thread:http_error', 'root-thread:state_missing']);
     for (const row of rows) expect(row).toMatchObject({ host: 'codex', event: 'PreToolUse', tool_name: 'Bash', error_first_line: `connection_${String(row['connection_failure'])}` });
     expect(readdirSync(trace).filter(f => f.startsWith('codex_event-'))).toHaveLength(4);

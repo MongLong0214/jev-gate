@@ -5,7 +5,9 @@ import * as zlib from 'node:zlib';
 import { obj, type Obj } from './source.js';
 
 /** A bounded observation branch; native response bytes and headers stay untouched. */
-export const observeResponseStream = (response: IncomingMessage, completed: (response: Obj) => void, failed?: (response: Obj) => void): void => {
+export const observeResponseStream = (response: IncomingMessage, completed: (response: Obj) => void, failed?: (response: Obj) => void, ended?: () => void): void => {
+  let finished = false;
+  const finish = (): void => { if (finished) return; finished = true; try { ended?.(); } catch { /* Observation only. */ } };
   const encoding = String(response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
   let inflate: Transform | undefined;
   if (encoding === 'gzip') inflate = zlib.createGunzip();
@@ -13,10 +15,11 @@ export const observeResponseStream = (response: IncomingMessage, completed: (res
   else if (encoding === 'br') inflate = zlib.createBrotliDecompress();
   else if (encoding === 'zstd') {
     const create = (zlib as unknown as { createZstdDecompress?: () => Transform }).createZstdDecompress;
-    if (!create) return;
+    if (!create) { response.once('close', finish); return; }
     inflate = create();
-  } else if (encoding !== 'identity') return;
+  } else if (encoding !== 'identity') { response.once('close', finish); return; }
   const source = inflate ?? response;
+  source.once('end', finish); source.once('close', finish);
   const decoder = new StringDecoder('utf8');
   const limit = 4 * 1024 * 1024;
   let line = ''; let data: string[] = []; let size = 0; let discarded = false; let skipLf = false;
@@ -56,8 +59,14 @@ export const observeResponseStream = (response: IncomingMessage, completed: (res
     append(text.slice(start));
   });
   if (inflate) {
-    const stop = (): void => { response.unpipe(inflate); inflate.destroy(); };
-    inflate.on('error', stop); response.once('aborted', stop); response.once('error', stop);
+    const drain = (): void => {
+      response.unpipe(inflate);
+      // Drain bytes already received before deciding cancellation: a complete compressed
+      // terminal event may still be waiting on zlib when the client disconnects.
+      if (!inflate.writableEnded && !inflate.destroyed) inflate.end();
+    };
+    inflate.on('error', () => { response.unpipe(inflate); inflate.destroy(); });
+    response.once('aborted', drain); response.once('error', drain);
     response.pipe(inflate);
   }
 };

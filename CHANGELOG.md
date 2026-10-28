@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.68 — 2026-10-28 — Account for cancelled Codex requests
+
+- Settle client-disconnected Codex model requests with a distinct cancellation receipt tied to the exact request. Keep consumption unknown and display the interruption without inventing an upstream failure. Drain already-received compressed terminal events before deciding cancellation; duplicate terminals do not duplicate usage (#396).
+- Record closed Compact Choice validation subreasons and counts to investigate #394. Preserve strict validation, conservative fallback, usage and zero retries; the historical provider answers remain unknown.
+- Record the closed helper connection stage, known HTTP status, elapsed/budget milliseconds and hook identities for future Codex connection failures (#395). Preserve native deadlines and metadata-only recording. This instrumentation does not establish the historical timeout cause.
+- Distinguish connect, response stream, HTTP and failed/incomplete SSE boundaries in upstream failure metadata, with known HTTP status and elapsed time (#397). Never retain raw exceptions or error bodies, replay inference, or infer the cause of an older record.
+- Claude owned Haiku continuation effort mismatch on host 2.1.312 remains open in #392; this release does not claim to repair that host boundary.
+
 ## v0.8.67 — 2026-10-28 — Calibrate the Claude downgrade floor
 
 - Raise Claude Router's default downgrade confidence from 0.60 to 0.65 across the runtime and both plugin manifests. Keep its upgrade floor at 0.80 and Codex at 0.80/0.60. Explicit user settings still take precedence.

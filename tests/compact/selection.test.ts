@@ -85,6 +85,8 @@ describe('bounded current-task compaction dependency selection', () => {
       extra_count: shape ? null : kind === 'extra' || kind === 'replaced_id' ? 1 : 0,
       invalid_choice_count: shape || ['missing', 'extra', 'replaced_id'].includes(kind) ? null : 1,
     } });
+    const reason = { choice: 'label', probabilities: 'probability_labels', tie: 'tie', confidence: 'confidence' }[kind];
+    if (reason) expect(result.validation?.choice_failures).toEqual({ [reason]: 1 });
     expect(JSON.stringify(result)).not.toContain('PRIVATE');
     expect(fetch).toHaveBeenCalledOnce();
   });

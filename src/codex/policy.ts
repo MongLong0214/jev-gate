@@ -37,6 +37,7 @@ import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.t
 import type { RoutingCache } from '../../mods/router/hooks/context.ts';
 
 export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null; defaultCachePolicy: boolean; billing: CodexBilling; cacheInput?: RequestShape }
+export interface CodexRequestFailure { stage: 'connect' | 'stream' | 'http' | 'sse'; elapsed_ms: number; status?: number }
 interface WorkerDispatch {
   parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
   worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
@@ -462,9 +463,13 @@ export class CodexPolicy {
     const reasoning = applyEffort(obj(request['reasoning']) ?? {}, step.patch.effortEdit);
     return { request: { ...request, ...(step.patch.model ? { model: step.patch.model } : {}), ...(step.patch.effortEdit && step.patch.effortEdit.kind !== 'keep' ? { reasoning } : {}) } };
   }
-  observeRequestFailure(id: string, submitted: CodexSubmission | undefined): void {
+  observeRequestFailure(id: string, submitted: CodexSubmission | undefined, failure?: CodexRequestFailure): void {
     if (!submitted) return;
-    this.trace?.write('codex_model_failure', { host: 'codex', session_id: id, prompt_id: submitted.prompt, request_id: submitted.requestId, reason: 'host_request_failed' });
+    this.trace?.write('codex_model_failure', { host: 'codex', session_id: id, prompt_id: submitted.prompt, request_id: submitted.requestId, reason: 'host_request_failed', ...(failure ? { failure_stage: failure.stage, elapsed_ms: failure.elapsed_ms, ...(failure.status !== undefined ? { http_status: failure.status } : {}) } : {}) });
+  }
+  observeRequestCancellation(id: string, submitted: CodexSubmission | undefined): void {
+    if (!submitted) return;
+    this.trace?.write('codex_model_cancelled', { host: 'codex', session_id: id, prompt_id: submitted.prompt, request_id: submitted.requestId, reason: 'client_disconnected', usage: null });
   }
   observeUsage(id: string, response: Obj, submitted?: CodexSubmission): void {
     const session = this.sessions.get(id); const input = obj(response['usage'])?.['input_tokens'];

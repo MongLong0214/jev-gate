@@ -67,7 +67,7 @@ describe('native hook total deadline (#305)', () => {
     try {
       owner(home, server.url);
       const start = performance.now();
-      expect(await connectionRequest({ HOME: home, CODEX_HOME: home, TYPESAFE_API_KEY: 'isolated-provision-key' }, '/hook', {}, AbortSignal.timeout(100))).toEqual({ ok: false, reason: 'timeout' });
+      expect(await connectionRequest({ HOME: home, CODEX_HOME: home, TYPESAFE_API_KEY: 'isolated-provision-key' }, '/hook', {}, AbortSignal.timeout(100))).toEqual({ ok: false, reason: 'timeout', stage: 'credentials' });
       expect(performance.now() - start).toBeLessThan(400);
       expect(paths).toEqual(['/credentials']);
     } finally { await server.close(); rmSync(home, { recursive: true, force: true }); }

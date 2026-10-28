@@ -1,4 +1,5 @@
 import { createServer, request } from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -117,6 +118,7 @@ it.each([false, true])('survives an upstream connection reset before headers or 
     await session.policy.externalHook({ hook_event_name: 'SessionStart', session_id: 's', cwd: root, model: 'gpt-6.1-sol' });
     await session.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 's', cwd: root, turn_id: 'p', prompt: 'Preserve the parser contract.' });
     const compact = vi.spyOn(session.policy, 'recordCompact');
+    const failure = vi.spyOn(session.policy, 'observeRequestFailure');
     const headers = { 'session-id': 's', 'x-codex-turn-metadata': JSON.stringify({ session_id: 's', ...(nativeCompact ? { request_kind: 'compaction' } : {}) }) };
     const first = await fetch(endpoint, { method: 'POST', body: '{}', headers }); expect(first.status).toBe(502); await first.text();
     const response = await fetch(endpoint, { method: 'POST', body: '{}', headers });
@@ -128,6 +130,60 @@ it.each([false, true])('survives an upstream connection reset before headers or 
     if (nativeCompact) {
       await vi.waitFor(() => expect(compact.mock.calls.filter(c => c[2] === 'result')).toHaveLength(3));
       expect(compact.mock.calls.filter(c => c[2] === 'result').map(c => c[3].outcome)).toEqual(['failed', 'failed', 'completed']);
+    } else {
+      expect(failure).toHaveBeenCalledTimes(2);
+      expect(failure.mock.calls.map(c => c[2])).toEqual([
+        { stage: 'connect', elapsed_ms: expect.any(Number) },
+        { stage: 'stream', elapsed_ms: expect.any(Number), status: 200 },
+      ]);
     }
   } finally { abort?.(); await session.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each(['before_headers', 'during_stream', 'completed_gzip', 'duplicate_completed', 'failed_sse', 'incomplete_sse', 'http_error'])('settles an exact native model request on %s without replay or invented usage (#396, #397)', async scenario => {
+  const root = mkdtempSync(join(tmpdir(), 'jev-request-terminal-'));
+  writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n');});\n`, { mode: 0o755 });
+  writeFileSync(join(root, 'policy.json'), '{}');
+  let arrived!: () => void; const receiving = new Promise<void>(r => { arrived = r; }); let sent = 0;
+  const value = { id: 'response-1', model: 'gpt-6.1-sol', status: scenario === 'failed_sse' ? 'failed' : scenario === 'incomplete_sse' ? 'incomplete' : 'completed', usage: { input_tokens: 42, output_tokens: 2 } };
+  const upstream = createServer(async (req, res) => {
+    for await (const _ of req) { /* The fixture never forwards a real prompt. */ }
+    sent++;
+    if (scenario === 'before_headers') { arrived(); return; }
+    if (scenario === 'http_error') { res.writeHead(503); res.end('PRIVATE upstream error'); arrived(); return; }
+    res.writeHead(200, { 'content-type': 'text/event-stream', ...(scenario === 'completed_gzip' ? { 'content-encoding': 'gzip' } : {}) });
+    if (scenario === 'during_stream') { res.write('data: {"type":"response.created"}\n\n'); arrived(); return; }
+    const bytes = Buffer.from(`data: ${JSON.stringify({ type: `response.${value.status}`, response: value })}\n\n`);
+    res.end(scenario === 'completed_gzip' ? gzipSync(bytes) : scenario === 'duplicate_completed' ? Buffer.concat([bytes, bytes]) : bytes); arrived();
+  });
+  await new Promise<void>(r => upstream.listen(0, '127.0.0.1', r));
+  const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1` }, connection: { token: 'a'.repeat(64), port: 0 } });
+  try {
+    await session.policy.externalHook({ hook_event_name: 'SessionStart', session_id: 's', cwd: root, model: 'gpt-6.1-sol' });
+    await session.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 's', cwd: root, turn_id: 'p', prompt: 'Preserve the parser contract.' });
+    const cancelled = vi.spyOn(session.policy, 'observeRequestCancellation'), failed = vi.spyOn(session.policy, 'observeRequestFailure'), observed = vi.spyOn(session.policy, 'observeUsage');
+    const endpoint = `${session.url.replace('ws:', 'http:')}/native/${session.token}/responses`;
+    const headers = { 'session-id': 's', 'x-codex-turn-metadata': '{"session_id":"s"}' };
+    if (scenario === 'before_headers' || scenario === 'during_stream') {
+      const client = request(endpoint, { method: 'POST', headers }, res => res.resume()); client.on('error', () => undefined); client.end('{}');
+      await receiving; client.destroy();
+      await vi.waitFor(() => expect(cancelled).toHaveBeenCalledTimes(1));
+      expect(cancelled.mock.calls[0]?.[1]).toMatchObject({ requestId: expect.any(String), prompt: 'p' });
+      expect(failed).not.toHaveBeenCalled(); expect(observed).not.toHaveBeenCalled();
+    } else if (scenario === 'http_error') {
+      const response = await fetch(endpoint, { method: 'POST', headers, body: '{}' });
+      expect(response.status).toBe(503); expect(await response.text()).toBe('PRIVATE upstream error');
+      expect(observed).not.toHaveBeenCalled(); expect(cancelled).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledTimes(1);
+      expect(failed.mock.calls[0]?.[2]).toEqual({ stage: 'http', status: 503, elapsed_ms: expect.any(Number) });
+    } else {
+      const response = await fetch(endpoint, { method: 'POST', headers, body: '{}' });
+      expect(await response.text()).toContain(`response.${value.status}`);
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+      expect(observed.mock.calls[0]?.[1]).toEqual(value);
+      expect(cancelled).not.toHaveBeenCalled(); expect(failed).toHaveBeenCalledTimes(['completed_gzip', 'duplicate_completed'].includes(scenario) ? 0 : 1);
+      if (scenario.endsWith('_sse')) expect(failed.mock.calls[0]?.[2]).toEqual({ stage: 'sse', status: 200, elapsed_ms: expect.any(Number) });
+    }
+    expect(sent).toBe(1);
+  } finally { await session.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
 });

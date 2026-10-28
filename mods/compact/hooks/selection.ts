@@ -1,4 +1,4 @@
-import { validateChoice } from '../../../src/router-answers.ts';
+import { inspectChoice, type ChoiceFailure } from '../../../src/router-answers.ts';
 import { createClient, type Transport, type JevClient, estimateTokens, MAX_REQUEST_BYTES, MAX_REQUEST_TOKENS, JEV_MODEL } from '../../router/hooks/client.ts';
 import { looksSecret } from '../../router/hooks/secret.ts';
 import { DIGEST_MARK, type DigestMessage, type DigestResult } from './digest.ts';
@@ -12,6 +12,7 @@ export interface SelectionValidation {
   missing_count: number | null;
   extra_count: number | null;
   invalid_choice_count: number | null;
+  choice_failures?: Partial<Record<ChoiceFailure, number>>;
 }
 export interface CompactSelection {
   priorities: Array<{ message: number; tool: number }>;
@@ -93,12 +94,13 @@ export const createCompactSelector = (timeoutMs: number): ((messages: readonly D
       ...result, reason: 'invalid_answers', validation: { ...validation, reason: ids.length !== candidates.length ? 'candidate_count' : 'candidate_ids' },
     };
     let invalid = 0;
+    const failures: Partial<Record<ChoiceFailure, number>> = {};
     for (const c of candidates) {
-      const answer = validateChoice((raw as Record<string, unknown>)[c.id], labels);
-      if (!answer) invalid++;
+      const { answer, reason } = inspectChoice((raw as Record<string, unknown>)[c.id], labels);
+      if (!answer) { invalid++; failures[reason] = (failures[reason] ?? 0) + 1; }
       else if (answer.choice === 'required') result.priorities.push({ message: c.message, tool: c.tool });
     }
-    if (invalid) return { ...result, priorities: [], reason: 'invalid_answers', validation: { ...validation, reason: 'choice', invalid_choice_count: invalid } };
+    if (invalid) return { ...result, priorities: [], reason: 'invalid_answers', validation: { ...validation, reason: 'choice', invalid_choice_count: invalid, choice_failures: failures } };
     return { ...result, reason: result.priorities.length ? 'current_dependencies' : 'recency_kept' };
   };
 };
