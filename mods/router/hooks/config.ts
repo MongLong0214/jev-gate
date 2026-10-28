@@ -74,10 +74,7 @@ export const resolveConfig = (options: Options): ConfigResult => {
   // A floor at or under one half would let a coin flip move a model.
   const minUpgradeConfidence = num('minUpgradeConfidence', 0.8, 0.5, 1);
   if (minUpgradeConfidence === null) return { ok: false, field: 'minUpgradeConfidence' };
-  // 0.9 moved 2 of 174 routable spawns and 2 of 245 root turns in a week of the owner's traffic (2026-09-21..28);
-  // 0.6 moves 43 spawns to Sonnet, and lowers most spawns' and a fifth of root turns' effort below xhigh, on the same
-  // answers (before the root's cache hold).
-  const minDowngradeConfidence = num('minDowngradeConfidence', 0.6, 0.5, 1);
+  const minDowngradeConfidence = num('minDowngradeConfidence', 0.65, 0.5, 1);
   if (minDowngradeConfidence === null) return { ok: false, field: 'minDowngradeConfidence' };
   const timeoutMs = num('timeoutMs', 800, 50, 30_000);
   if (timeoutMs === null) return { ok: false, field: 'timeoutMs' };

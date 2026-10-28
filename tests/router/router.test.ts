@@ -146,6 +146,27 @@ const later = (hops: number, f: () => void): void => {
 };
 
 describe('root effort', () => {
+  it.each([
+    { mass: 0.64, options: {}, expected: 'high' },
+    { mass: 0.65, options: {}, expected: 'medium' },
+    { mass: 0.64, options: { minDowngradeConfidence: 0.6 }, expected: 'medium' },
+  ])('respects the Claude downgrade floor and explicit overrides: $mass / $expected', async ({ mass, options, expected }) => {
+    const router = createRouter(configOf({ ...EFFORT_ONLY, ...options }));
+    const f = fakeEngine({ respond: async req => {
+      const reply = await answering({ ...CLEAR, effort: ['medium', .99] })(req);
+      const body = JSON.parse(reply.text);
+      // The cumulative mass through medium is exactly `mass`; the remainder asks for high.
+      body.answers.effort_0.probabilities = Object.fromEntries(Object.keys(body.answers.effort_0.probabilities)
+        .map(key => [key, key === '1' ? mass : key === '2' ? 1 - mass : 0]));
+      return { ...reply, text: JSON.stringify(body) };
+    } });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const next = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step(), next.next));
+    expect(next.calls).toEqual([step({ effort: expected as SymbolicEffort })]);
+    expect(f.sent).toHaveLength(1);
+  });
+
   it('applies a confident, ordinary downgrade to the first step and every later step of the turn, with one request', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95] }) });

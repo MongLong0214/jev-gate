@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.66",
+  "version": "0.8.67",
   "license": "MIT",
   "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor and the Jev effort and model router. Every part is on by default; each has its own on/off option.",
   "author": {
@@ -138,7 +138,7 @@
       "title": "Router: Downgrade confidence floor",
       "description": "Least probability, 0.5 to 1, that the weaker model or lower effort is enough: Jev's answer mass at or below it.",
       "type": "number",
-      "default": 0.6
+      "default": 0.65
     },
     "routerTimeoutMs": {
       "title": "Router: Preparation budget (ms)",
