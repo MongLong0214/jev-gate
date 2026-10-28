@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.66 — 2026-10-28 — Route routine Codex work to Terra
+
+- When the account lists GPT-6.1 Terra, use Luna for quick tasks and offer Terra for ordinary coding. Keep the account's model and effort availability, explicit pins and cost checks.
+- Report a native model missing from the account catalog as `baseline_unlisted` instead of implying Jev returned an invalid effort answer.
+
 ## v0.8.65 — 2026-10-27 — Reconcile delayed Claude response evidence
 
 - Reconcile late Claude Router effort and cache TTL evidence after the Function Hook returns, matching only a unique request within the completed response window. Update the original record without repeating the model request or double counting; absent or ambiguous evidence stays unknown (#385).
