@@ -1,0 +1,1272 @@
+{
+  "plan_sha256": "2d19ab046a39e6eee71cc853095549124bf74bd97fd7f7eebd2742563a01bac9",
+  "scope": "Codex Router ON before vs after #399; Gate and Compact OFF; fixed six existing validation fixtures, not held-out; same model/effort defaults; all planned cells retained",
+  "sources": {
+    "before": "official v0.8.68 runtime with startCodexSession/resolveApiKey export only",
+    "after": "v0.8.68 source plus candidate.patch bundled with esbuild; Gate workers unused in this scope",
+    "baseline_commit": "d2faa8f3a532de61a5b296de24c295bea7b0151f",
+    "sha256": {
+      "before.mjs": "70199c27ce2356b55ebec6f90ab11dbdb308826cb2988f98d6278d2f38d5e458",
+      "after.mjs": "d9851035c68a5ea550a47b94cac95482c508e5353991c534c310805ed7ba64cf",
+      "plan.json": "2d19ab046a39e6eee71cc853095549124bf74bd97fd7f7eebd2742563a01bac9",
+      "candidate.patch": "54b1eed54fb7e92fcef631236f566d571b7378bac49fd8f998019e4d3e0eb90e",
+      "run.mjs": "dc2330c3c1ff0d6f6b93644b259d9a23b32a2962c90754f726a66ea71409c3bf"
+    },
+    "candidate_commit": "395a8b2"
+  },
+  "comparison": {
+    "planned": 24,
+    "finished": 24,
+    "complete_usage": 24,
+    "quality_pass": 24,
+    "arms": {
+      "before": {
+        "provider_tokens": 1271550,
+        "jev_input": 46048,
+        "jev_output": 2436,
+        "jev_tokens": 48484,
+        "total_tokens": 1320034,
+        "provider_requests": 54,
+        "provider": {
+          "input": 274047,
+          "read": 967552,
+          "write": 0,
+          "output": 29951,
+          "thinking": 2437
+        },
+        "tools": {
+          "calls": 55,
+          "results": 55,
+          "failures": 3,
+          "unfinished": 0
+        },
+        "wall_s": 773.015,
+        "host_api_equivalent_cost_usd": 0.9443592000000001,
+        "jev_input_list_cost_usd": 0.001934016,
+        "quality_pass": 12
+      },
+      "after": {
+        "provider_tokens": 1335270,
+        "jev_input": 46048,
+        "jev_output": 2436,
+        "jev_tokens": 48484,
+        "total_tokens": 1383754,
+        "provider_requests": 56,
+        "provider": {
+          "input": 421284,
+          "read": 882432,
+          "write": 0,
+          "output": 31554,
+          "thinking": 2420
+        },
+        "tools": {
+          "calls": 56,
+          "results": 56,
+          "failures": 4,
+          "unfinished": 0
+        },
+        "wall_s": 790.601,
+        "host_api_equivalent_cost_usd": 1.2463511999999999,
+        "jev_input_list_cost_usd": 0.001934016,
+        "quality_pass": 12
+      }
+    },
+    "pairs": [
+      {
+        "task": "atomic-ledger",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -0.5429650613786591,
+        "delta": 690,
+        "before": 127080,
+        "after": 127770
+      },
+      {
+        "task": "atomic-ledger",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -0.6125244930145126,
+        "delta": 769,
+        "before": 125546,
+        "after": 126315
+      },
+      {
+        "task": "bounded-map",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -28.05641819258213,
+        "delta": 27013,
+        "before": 96281,
+        "after": 123294
+      },
+      {
+        "task": "bounded-map",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -1.3052117774131577,
+        "delta": 1583,
+        "before": 121283,
+        "after": 122866
+      },
+      {
+        "task": "csv-records",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -27.067835077543815,
+        "delta": 25761,
+        "before": 95172,
+        "after": 120933
+      },
+      {
+        "task": "csv-records",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -0.5107476342670928,
+        "delta": 489,
+        "before": 95742,
+        "after": 96231
+      },
+      {
+        "task": "dependency-order",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -28.016602125731236,
+        "delta": 27203,
+        "before": 97096,
+        "after": 124299
+      },
+      {
+        "task": "dependency-order",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": 0.18950022365906227,
+        "delta": -233,
+        "before": 122955,
+        "after": 122722
+      },
+      {
+        "task": "interval-subtract",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": 19.109154987838576,
+        "delta": -23098,
+        "before": 120874,
+        "after": 97776
+      },
+      {
+        "task": "interval-subtract",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -0.6545056624030887,
+        "delta": 634,
+        "before": 96867,
+        "after": 97501
+      },
+      {
+        "task": "lru-expiry",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": 21.4402460527693,
+        "delta": -26629,
+        "before": 124201,
+        "after": 97572
+      },
+      {
+        "task": "lru-expiry",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -30.471337053962884,
+        "delta": 29538,
+        "before": 96937,
+        "after": 126475
+      }
+    ],
+    "saving_pct": -4.8271483916323366,
+    "provider_only_saving_pct": -5.011206794856671,
+    "paired_wins": 3,
+    "paired_losses": 9,
+    "median_paired_saving_pct": -0.6335150777088007,
+    "task_aggregates": [
+      {
+        "task": "atomic-ledger",
+        "complete": true,
+        "saving_pct": -0.5775335872000507,
+        "quality_both": true,
+        "before": 252626,
+        "after": 254085
+      },
+      {
+        "task": "bounded-map",
+        "complete": true,
+        "saving_pct": -13.143718629920391,
+        "quality_both": true,
+        "before": 217564,
+        "after": 246160
+      },
+      {
+        "task": "csv-records",
+        "complete": true,
+        "saving_pct": -13.749646437663031,
+        "quality_both": true,
+        "before": 190914,
+        "after": 217164
+      },
+      {
+        "task": "dependency-order",
+        "complete": true,
+        "saving_pct": -12.256249687572426,
+        "quality_both": true,
+        "before": 220051,
+        "after": 247021
+      },
+      {
+        "task": "interval-subtract",
+        "complete": true,
+        "saving_pct": 10.31684432422006,
+        "quality_both": true,
+        "before": 217741,
+        "after": 195277
+      },
+      {
+        "task": "lru-expiry",
+        "complete": true,
+        "saving_pct": -1.3154681691975147,
+        "quality_both": true,
+        "before": 221138,
+        "after": 224047
+      }
+    ],
+    "task_cluster_signflip_p_one_sided": 0.9375,
+    "task_bootstrap_saving_pct_95_interval": [
+      -11.093395435343304,
+      2.6169008177815054
+    ],
+    "off_reported_token_lower_bound": 1320034,
+    "on_exact_tokens_for_lower_bound": 1383754,
+    "saving_pct_lower_bound": -4.8271483916323366,
+    "token_saving_lower_bound": -63720,
+    "host_failures": 0,
+    "unknown_usage_cells": 0,
+    "claim": "no_net_token_savings_on_this_fixed_suite"
+  },
+  "cells": [
+    {
+      "id": "codex-interval-subtract-1-before",
+      "task": "interval-subtract",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23242,
+        "read": 91520,
+        "write": 0,
+        "output": 2105,
+        "thinking": 125
+      },
+      "provider_tokens": 116867,
+      "jev_tokens": 4007,
+      "total_tokens": 120874,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 116867
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3804,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-interval-subtract-1-after",
+      "task": "interval-subtract",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 30438,
+        "read": 61056,
+        "write": 0,
+        "output": 2275,
+        "thinking": 110
+      },
+      "provider_tokens": 93769,
+      "jev_tokens": 4007,
+      "total_tokens": 97776,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 93769
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3804,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-1-after",
+      "task": "atomic-ledger",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 38154,
+        "read": 81408,
+        "write": 0,
+        "output": 4149,
+        "thinking": 1117
+      },
+      "provider_tokens": 123711,
+      "jev_tokens": 4059,
+      "total_tokens": 127770,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 123711
+      },
+      "efforts_requests": {
+        "high": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-1-before",
+      "task": "atomic-ledger",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 27082,
+        "read": 92416,
+        "write": 0,
+        "output": 3523,
+        "thinking": 632
+      },
+      "provider_tokens": 123021,
+      "jev_tokens": 4059,
+      "total_tokens": 127080,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 6,
+        "results": 6,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 123021
+      },
+      "efforts_requests": {
+        "high": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-dependency-order-1-before",
+      "task": "dependency-order",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 22898,
+        "read": 67712,
+        "write": 0,
+        "output": 2434,
+        "thinking": 207
+      },
+      "provider_tokens": 93044,
+      "jev_tokens": 4052,
+      "total_tokens": 97096,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 93044
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3849,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-dependency-order-1-after",
+      "task": "dependency-order",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 56369,
+        "read": 61056,
+        "write": 0,
+        "output": 2822,
+        "thinking": 140
+      },
+      "provider_tokens": 120247,
+      "jev_tokens": 4052,
+      "total_tokens": 124299,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 120247
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3849,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-csv-records-1-after",
+      "task": "csv-records",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 33679,
+        "read": 81408,
+        "write": 0,
+        "output": 1802,
+        "thinking": 123
+      },
+      "provider_tokens": 116889,
+      "jev_tokens": 4044,
+      "total_tokens": 120933,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 116889
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3841,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-csv-records-1-before",
+      "task": "csv-records",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 22876,
+        "read": 66688,
+        "write": 0,
+        "output": 1564,
+        "thinking": 71
+      },
+      "provider_tokens": 91128,
+      "jev_tokens": 4044,
+      "total_tokens": 95172,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 91128
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3841,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-bounded-map-1-before",
+      "task": "bounded-map",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 22791,
+        "read": 67328,
+        "write": 0,
+        "output": 2140,
+        "thinking": 100
+      },
+      "provider_tokens": 92259,
+      "jev_tokens": 4022,
+      "total_tokens": 96281,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 92259
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3819,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-bounded-map-1-after",
+      "task": "bounded-map",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 35571,
+        "read": 81408,
+        "write": 0,
+        "output": 2293,
+        "thinking": 100
+      },
+      "provider_tokens": 119272,
+      "jev_tokens": 4022,
+      "total_tokens": 123294,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 119272
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3819,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-lru-expiry-1-after",
+      "task": "lru-expiry",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 30254,
+        "read": 61056,
+        "write": 0,
+        "output": 2204,
+        "thinking": 34
+      },
+      "provider_tokens": 93514,
+      "jev_tokens": 4058,
+      "total_tokens": 97572,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 93514
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3855,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-lru-expiry-1-before",
+      "task": "lru-expiry",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23302,
+        "read": 93056,
+        "write": 0,
+        "output": 3785,
+        "thinking": 90
+      },
+      "provider_tokens": 120143,
+      "jev_tokens": 4058,
+      "total_tokens": 124201,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 3,
+        "results": 3,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 120143
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3855,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-interval-subtract-2-after",
+      "task": "interval-subtract",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 30242,
+        "read": 61056,
+        "write": 0,
+        "output": 2196,
+        "thinking": 120
+      },
+      "provider_tokens": 93494,
+      "jev_tokens": 4007,
+      "total_tokens": 97501,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 93494
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3804,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-interval-subtract-2-before",
+      "task": "interval-subtract",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23012,
+        "read": 67584,
+        "write": 0,
+        "output": 2264,
+        "thinking": 111
+      },
+      "provider_tokens": 92860,
+      "jev_tokens": 4007,
+      "total_tokens": 96867,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 92860
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3804,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-2-before",
+      "task": "atomic-ledger",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 27151,
+        "read": 90880,
+        "write": 0,
+        "output": 3456,
+        "thinking": 540
+      },
+      "provider_tokens": 121487,
+      "jev_tokens": 4059,
+      "total_tokens": 125546,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 121487
+      },
+      "efforts_requests": {
+        "high": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-2-after",
+      "task": "atomic-ledger",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 37357,
+        "read": 81408,
+        "write": 0,
+        "output": 3491,
+        "thinking": 421
+      },
+      "provider_tokens": 122256,
+      "jev_tokens": 4059,
+      "total_tokens": 126315,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 122256
+      },
+      "efforts_requests": {
+        "high": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "codex-dependency-order-2-after",
+      "task": "dependency-order",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 38309,
+        "read": 77824,
+        "write": 0,
+        "output": 2537,
+        "thinking": 94
+      },
+      "provider_tokens": 118670,
+      "jev_tokens": 4052,
+      "total_tokens": 122722,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 118670
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3849,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-dependency-order-2-before",
+      "task": "dependency-order",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23357,
+        "read": 92928,
+        "write": 0,
+        "output": 2618,
+        "thinking": 153
+      },
+      "provider_tokens": 118903,
+      "jev_tokens": 4052,
+      "total_tokens": 122955,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 118903
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3849,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-csv-records-2-before",
+      "task": "csv-records",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 22935,
+        "read": 67072,
+        "write": 0,
+        "output": 1691,
+        "thinking": 238
+      },
+      "provider_tokens": 91698,
+      "jev_tokens": 4044,
+      "total_tokens": 95742,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 91698
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3841,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-csv-records-2-after",
+      "task": "csv-records",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 29623,
+        "read": 61056,
+        "write": 0,
+        "output": 1508,
+        "thinking": 0
+      },
+      "provider_tokens": 92187,
+      "jev_tokens": 4044,
+      "total_tokens": 96231,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 92187
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3841,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-bounded-map-2-after",
+      "task": "bounded-map",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 24399,
+        "read": 92288,
+        "write": 0,
+        "output": 2157,
+        "thinking": 108
+      },
+      "provider_tokens": 118844,
+      "jev_tokens": 4022,
+      "total_tokens": 122866,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 118844
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3819,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-bounded-map-2-before",
+      "task": "bounded-map",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 12260,
+        "read": 102784,
+        "write": 0,
+        "output": 2217,
+        "thinking": 137
+      },
+      "provider_tokens": 117261,
+      "jev_tokens": 4022,
+      "total_tokens": 121283,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 117261
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3819,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-lru-expiry-2-before",
+      "task": "lru-expiry",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23141,
+        "read": 67584,
+        "write": 0,
+        "output": 2154,
+        "thinking": 33
+      },
+      "provider_tokens": 92879,
+      "jev_tokens": 4058,
+      "total_tokens": 96937,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 92879
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3855,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-lru-expiry-2-after",
+      "task": "lru-expiry",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 36889,
+        "read": 81408,
+        "write": 0,
+        "output": 4120,
+        "thinking": 53
+      },
+      "provider_tokens": 122417,
+      "jev_tokens": 4058,
+      "total_tokens": 126475,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 122417
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3855,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    }
+  ]
+}
