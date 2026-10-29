@@ -20,6 +20,8 @@ describe('Codex routed execution guidance', () => {
     expect(JSON.stringify(input.at(-1))).toContain('required verification remain authoritative');
     expect(JSON.stringify(input.at(-1))).toContain('Keep dependent operations sequential');
     expect(JSON.stringify(input.at(-1))).toContain('original public signatures, input types');
+    expect(JSON.stringify(input.at(-1))).toContain('one native discovery call');
+    expect(JSON.stringify(input.at(-1))).toContain('make every check result observable');
     expect(JSON.stringify(input.at(-1))).toContain('recover the original source with native tools before implementing');
     expect(JSON.stringify(input.at(-1))).toContain('passing a smoke test or tests written around your implementation is not proof');
   });
