@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { connectionBaseUrl, helperRequest, installConnection, restoreConnection, type Connection } from '../../src/codex/connection.js';
+import { connectionBaseUrl, connectionRequest, helperRequest, installConnection, restoreConnection, type Connection } from '../../src/codex/connection.js';
 import { runCodexHook } from '../../src/codex/hook.js';
 import { startCodexSession } from '../../src/codex/launch.js';
 import { DISPATCH_FAILED } from '../../src/codex/policy.js';
@@ -122,10 +122,44 @@ describe('connection failures are named, not collapsed (#287)', () => {
     const server = createServer((req, res) => { req.resume(); req.on('end', () => answer(res)); });
     await new Promise<void>(r => server.listen(0, '127.0.0.1', r)); return server;
   };
-  const owner = (home: string, port: number) => {
+  const owner = (home: string, port: number, credentialsInRequest = false) => {
     mkdirSync(join(home, 'jev-gate/connection'), { recursive: true, mode: 0o700 });
-    writeFileSync(join(home, 'jev-gate/connection/owner.json'), JSON.stringify({ version: 1, pid: process.pid, port, token: 'a'.repeat(64), marker: 'm', root: home, original: {}, installed: {} }), { mode: 0o600 });
+    writeFileSync(join(home, 'jev-gate/connection/owner.json'), JSON.stringify({ version: 1, pid: process.pid, port, token: 'a'.repeat(64), marker: 'm', root: home, original: {}, installed: {}, ...(credentialsInRequest ? { credentialsInRequest: true } : {}) }), { mode: 0o600 });
   };
+  it.each(['/hook', '/agent'] as const)('reaches %s without a separate credential deadline when the helper supports request credentials (#395)', async path => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-connect-inline-')); temps.push(home);
+    const seen: string[] = [];
+    const key = 'fake-inline-key';
+    const server = createServer((req, res) => {
+      seen.push(req.url!); req.resume();
+      // The old two-request protocol times out here even though the actual endpoint is healthy.
+      if (req.url === '/credentials') return;
+      expect(req.headers.authorization).toBe(`Bearer ${'a'.repeat(64)}.${Buffer.from(key).toString('base64url')}`);
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"received":true}');
+    });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    owner(home, (server.address() as { port: number }).port, true);
+    try {
+      for (let i = 0; i < 2; i++) expect(await connectionRequest({ CODEX_HOME: home, TYPESAFE_API_KEY: key }, path, {}, AbortSignal.timeout(150))).toEqual({ ok: true, value: { received: true } });
+      expect(seen).toEqual([path, path]);
+    } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+  });
+  it('retains the separate credential protocol for an older running helper (#395)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'jev-connect-legacy-')); temps.push(home);
+    const seen: string[] = [];
+    const key = 'fake-legacy-key';
+    const server = createServer((req, res) => {
+      seen.push(req.url!); req.resume();
+      if (req.url === '/credentials') { expect(req.headers.authorization).toBe(`Bearer ${'a'.repeat(64)}.${Buffer.from(key).toString('base64url')}`); res.writeHead(204); res.end(); return; }
+      expect(req.headers.authorization).toBe(`Bearer ${'a'.repeat(64)}`);
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}');
+    });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r)); owner(home, (server.address() as { port: number }).port);
+    try {
+      expect(await connectionRequest({ CODEX_HOME: home, TYPESAFE_API_KEY: key }, '/hook', {}, AbortSignal.timeout(1000))).toEqual({ ok: true, value: {} });
+      expect(seen).toEqual(['/credentials', '/hook']);
+    } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+  });
   const meta = (home: string) => ({ [CODEX_SANDBOX_META]: { sandboxCwd: home }, threadId: 'root-thread' });
   async function* hookEvent(session: string): AsyncIterable<string> { yield JSON.stringify({ hook_event_name: 'PreToolUse', session_id: session, turn_id: 'turn', tool_use_id: 'call', tool_name: 'Bash', tool_input: { command: 'ls' } }); }
   const failures = (trace: string): Obj[] => readdirSync(trace).filter(f => f.startsWith('failure-')).map(f => JSON.parse(readFileSync(join(trace, f), 'utf8')) as Obj);
@@ -203,6 +237,26 @@ describe('connection failures are named, not collapsed (#287)', () => {
       const rows = readdirSync(join(root, 'trace')).filter(f => f.startsWith('failure-')).map(f => JSON.parse(readFileSync(join(root, 'trace', f), 'utf8')) as Obj);
       expect(rows).toEqual([expect.objectContaining({ host: 'codex', session_id: 'root-thread', tool_name: 'jev_agent', error_first_line: 'dispatch_exception', dispatch_failure: 'exception' })]);
       expect(JSON.stringify(rows)).not.toMatch(/EACCES|secret/);
+    } finally { vi.restoreAllMocks(); await session.close(); }
+  });
+  it.each(['/hook', '/agent'] as const)('authenticates request credentials on %s without exposing them or weakening local auth (#395)', async path => {
+    const root = mkdtempSync(join(tmpdir(), 'jev-connect-auth-')); temps.push(root);
+    writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n');});\n`, { mode: 0o755 });
+    writeFileSync(join(root, 'policy.json'), '{}');
+    const token = 't'.repeat(64); const key = 'fake-request-key';
+    const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace') }, connection: { token, port: 0 } });
+    const supply = vi.spyOn(session.policy, 'supplyKey');
+    const handle = path === '/hook' ? vi.spyOn(session.policy, 'externalHook').mockResolvedValue({}) : vi.spyOn(session.policy, 'dispatch').mockResolvedValue('fixture');
+    const post = (authorization: string) => fetch(session.url.replace('ws:', 'http:') + path, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: '{}' });
+    try {
+      for (const authorization of [`Bearer ${'x'.repeat(64)}.${Buffer.from(key).toString('base64url')}`, `Bearer ${token}.!`, `Bearer ${token}.${Buffer.from('bad\nkey').toString('base64url')}`]) expect((await post(authorization)).status).toBe(401);
+      expect(supply).not.toHaveBeenCalled(); expect(handle).not.toHaveBeenCalled();
+      expect((await post(`Bearer ${token}.${Buffer.from(key).toString('base64url')}`)).status).toBe(200);
+      expect(supply).toHaveBeenCalledExactlyOnceWith(key); expect(handle).toHaveBeenCalledTimes(1);
+      expect((await post(`Bearer ${token}`)).status).toBe(200);
+      expect(supply).toHaveBeenCalledTimes(1); expect(handle).toHaveBeenCalledTimes(2);
+      const rows = readdirSync(join(root, 'trace')).filter(f => f.endsWith('.json')).map(f => readFileSync(join(root, 'trace', f), 'utf8'));
+      expect(rows.join('')).not.toContain(key);
     } finally { vi.restoreAllMocks(); await session.close(); }
   });
   it('records why a hook did not reach the helper, on both the automatic connection and the managed bridge (#287 R2)', async () => {
