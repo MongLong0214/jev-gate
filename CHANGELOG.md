@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.70 — 2026-10-29 — Record Codex responses that end without a terminal event
+
+- Settle a fully observed clean SSE EOF without a terminal response against its exact model request. Record `response_terminal_not_observed` at stage `eof`, with unknown usage; distinguish it from upstream transport failure, HTTP/SSE errors, client cancellation and normal completion (#404).
+- Keep unsupported encoding, malformed or oversized events, invalid UTF-8, incomplete events and decompression errors unobserved. Drain received compressed data before deciding the outcome so a pending terminal event is not overwritten.
+- Apply the same EOF accounting to native streamed compaction and show a readable terminal-event reason in the dashboard. Preserve native response bytes/headers, permissions and zero inference retries.
+- Add a real native Codex differential regression for six direct/proxied completion, reset, client-disconnect and clean-EOF conditions. Keep the known Claude same-turn effort limitation tracked in #392; Claude routing policy is unchanged.
+
 ## v0.8.69 — 2026-10-29 — Remove redundant Codex credential preflight
 
 - Send credentials in the authenticated local hook/agent request when the connection helper advertises support. Native hooks run in separate processes, so the previous process-local cache repeated a credential POST with an independent 500ms deadline before each healthy endpoint. Keep the old protocol for already-running older helpers, existing total deadlines and zero retries (#395).

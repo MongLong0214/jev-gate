@@ -47,13 +47,15 @@ describe('native Codex compaction forwarding (#178, #292)', () => {
     } finally { await session.close(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
   });
   it.each([
-    ['/responses', { request_kind: 'compaction', compaction: { trigger: 'manual', implementation: 'responses' } }, false],
-    ['/responses', { request_kind: 'compaction' }, true],
-    ['/responses/compact', {}, true],
-  ] as const)('preserves native compact bytes on %s (gzip=%s) without Router or context pollution', async (path, labels, compressed) => {
+    ['/responses', { request_kind: 'compaction', compaction: { trigger: 'manual', implementation: 'responses' } }, false, true],
+    ['/responses', { request_kind: 'compaction' }, true, true],
+    ['/responses/compact', {}, true, true],
+    ['/responses', { request_kind: 'compaction' }, false, false],
+    ['/responses', { request_kind: 'compaction' }, true, false],
+  ] as const)('preserves native compact bytes on %s (gzip=%s, terminal=%s) without Router or context pollution', async (path, labels, compressed, terminal) => {
     const root = mkdtempSync(join(tmpdir(), 'jev-forward-')); const trace = join(root, 'trace');
     const requests: string[] = [];
-    const event = 'data: ' + JSON.stringify({ type: 'response.completed', response: { model: 'gpt-6.1-sol', usage: { input_tokens: 31, output_tokens: 7, input_tokens_details: { cached_tokens: 10, cache_write_tokens: 0 } }, output: [] } }) + '\n\n';
+    const event = terminal ? 'data: ' + JSON.stringify({ type: 'response.completed', response: { model: 'gpt-6.1-sol', usage: { input_tokens: 31, output_tokens: 7, input_tokens_details: { cached_tokens: 10, cache_write_tokens: 0 } }, output: [] } }) + '\n\n' : 'data: {"type":"response.created"}\n\n';
     const upstream = createServer(async (req, res) => { let body = ''; for await (const b of req) body += String(b); requests.push(body);
       res.writeHead(200, { ...(path === '/responses/compact' ? { 'content-type': 'text/event-stream' } : {}), ...(compressed ? { 'content-encoding': 'gzip' } : {}) });
       res.end(compressed ? gzipSync(event) : event);
@@ -73,10 +75,10 @@ describe('native Codex compaction forwarding (#178, #292)', () => {
       const body = JSON.stringify({ model: 'gpt-6.1-sol', reasoning: { effort: 'xhigh' }, input: [{ type: 'function_call_output', call_id: 'orphan', output: 'must be preserved' }, { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Summarize the conversation.' }] }], extra_owner_field: 'preserve' });
       const metadata = JSON.stringify({ session_id: 's', thread_id: 's', ...labels });
       const response = await fetch(session.url.replace('ws:', 'http:') + path, { method: 'POST', headers: { 'x-jev-gate-session': session.token, 'session-id': 's', 'x-codex-turn-metadata': metadata, 'content-type': 'application/json' }, body });
-      expect(await response.text()).toContain('response.completed'); expect(requests).toEqual([body]); expect(routing).not.toHaveBeenCalled();
+      expect(await response.text()).toBe(event); expect(requests).toEqual([body]); expect(routing).not.toHaveBeenCalled();
       expect(readdirSync(trace).some(f => f.startsWith('codex_route_applied') || f.startsWith('codex_router_response') || f.startsWith('codex_model_request'))).toBe(false);
       expect(observe).not.toHaveBeenCalled(); expect(native.cache).toBeUndefined(); expect(native.route?.effort).toBe('low');
-      await vi.waitFor(() => expect(compact).toHaveBeenCalledWith('s', expect.objectContaining({ path: 'native' }), 'result', expect.objectContaining({ outcome: 'completed', usage: expect.objectContaining({ input: 21, read: 10, write: 0, output: 7 }) })));
+      await vi.waitFor(() => expect(compact).toHaveBeenCalledWith('s', expect.objectContaining({ path: 'native' }), 'result', expect.objectContaining(terminal ? { outcome: 'completed', usage: expect.objectContaining({ input: 21, read: 10, write: 0, output: 7 }) } : { outcome: 'failed', reason: 'response_terminal_not_observed', usage: null })));
       expect(compact.mock.calls.filter(c => c[2] === 'result')).toHaveLength(1);
     } finally { await session.close(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
   });

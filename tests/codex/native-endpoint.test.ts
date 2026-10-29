@@ -1,6 +1,6 @@
 import { createServer, request } from 'node:http';
 import { gzipSync } from 'node:zlib';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
@@ -140,7 +140,7 @@ it.each([false, true])('survives an upstream connection reset before headers or 
   } finally { abort?.(); await session.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
 });
 
-it.each(['before_headers', 'during_stream', 'completed_gzip', 'duplicate_completed', 'failed_sse', 'incomplete_sse', 'http_error'])('settles an exact native model request on %s without replay or invented usage (#396, #397)', async scenario => {
+it.each(['before_headers', 'during_stream', 'completed_gzip', 'duplicate_completed', 'failed_sse', 'incomplete_sse', 'http_error', 'clean_eof', 'clean_eof_gzip'])('settles an exact native model request on %s without replay or invented usage (#396, #397, #404)', async scenario => {
   const root = mkdtempSync(join(tmpdir(), 'jev-request-terminal-'));
   writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport {createInterface} from 'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n');});\n`, { mode: 0o755 });
   writeFileSync(join(root, 'policy.json'), '{}');
@@ -151,10 +151,10 @@ it.each(['before_headers', 'during_stream', 'completed_gzip', 'duplicate_complet
     sent++;
     if (scenario === 'before_headers') { arrived(); return; }
     if (scenario === 'http_error') { res.writeHead(503); res.end('PRIVATE upstream error'); arrived(); return; }
-    res.writeHead(200, { 'content-type': 'text/event-stream', ...(scenario === 'completed_gzip' ? { 'content-encoding': 'gzip' } : {}) });
+    res.writeHead(200, { 'content-type': 'text/event-stream', ...(scenario.endsWith('_gzip') ? { 'content-encoding': 'gzip' } : {}) });
     if (scenario === 'during_stream') { res.write('data: {"type":"response.created"}\n\n'); arrived(); return; }
-    const bytes = Buffer.from(`data: ${JSON.stringify({ type: `response.${value.status}`, response: value })}\n\n`);
-    res.end(scenario === 'completed_gzip' ? gzipSync(bytes) : scenario === 'duplicate_completed' ? Buffer.concat([bytes, bytes]) : bytes); arrived();
+    const bytes = Buffer.from(`data: ${JSON.stringify(scenario.startsWith('clean_eof') ? { type: 'response.created', response: { id: value.id, status: 'in_progress' } } : { type: `response.${value.status}`, response: value })}\n\n`);
+    res.end(scenario.endsWith('_gzip') ? gzipSync(bytes) : scenario === 'duplicate_completed' ? Buffer.concat([bytes, bytes]) : bytes); arrived();
   });
   await new Promise<void>(r => upstream.listen(0, '127.0.0.1', r));
   const session = await startCodexSession({ cwd: root, env: { HOME: root, PATH: root, JEV_CODEX_CONFIG: join(root, 'policy.json'), JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_TRACE_DIR: join(root, 'trace'), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1` }, connection: { token: 'a'.repeat(64), port: 0 } });
@@ -176,6 +176,15 @@ it.each(['before_headers', 'during_stream', 'completed_gzip', 'duplicate_complet
       expect(observed).not.toHaveBeenCalled(); expect(cancelled).not.toHaveBeenCalled();
       expect(failed).toHaveBeenCalledTimes(1);
       expect(failed.mock.calls[0]?.[2]).toEqual({ stage: 'http', status: 503, elapsed_ms: expect.any(Number) });
+    } else if (scenario.startsWith('clean_eof')) {
+      const response = await fetch(endpoint, { method: 'POST', headers, body: '{}' });
+      expect(response.status).toBe(200); expect(await response.text()).toContain('response.created');
+      await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+      expect(failed.mock.calls[0]?.[1]).toMatchObject({ requestId: expect.any(String), prompt: 'p' });
+      expect(failed.mock.calls[0]?.[2]).toEqual({ stage: 'eof', status: 200, elapsed_ms: expect.any(Number) });
+      expect(observed).not.toHaveBeenCalled(); expect(cancelled).not.toHaveBeenCalled();
+      const rows = readdirSync(join(root, 'trace')).map(file => JSON.parse(readFileSync(join(root, 'trace', file), 'utf8')) as Obj).filter(row => row['phase'] === 'codex_model_failure');
+      expect(rows).toEqual([expect.objectContaining({ request_id: failed.mock.calls[0]?.[1]?.requestId, reason: 'response_terminal_not_observed', failure_stage: 'eof', http_status: 200, usage: null })]);
     } else {
       const response = await fetch(endpoint, { method: 'POST', headers, body: '{}' });
       expect(await response.text()).toContain(`response.${value.status}`);

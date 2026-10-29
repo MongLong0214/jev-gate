@@ -70,4 +70,17 @@ describe('native Responses observation without required Content-Type', () => {
     if (complete) expect(completed.mock.invocationCallOrder[0]).toBeLessThan(ended.mock.invocationCallOrder[0]!);
     (input as unknown as PassThrough).destroy();
   });
+  it.each(['empty', 'created', 'gzip', 'malformed', 'oversized', 'partial', 'unknown_encoding', 'invalid_gzip', 'invalid_terminal', 'invalid_utf8'])('distinguishes fully observed EOF from observation loss: %s', async scenario => {
+    const input = new PassThrough() as unknown as IncomingMessage;
+    input.headers = scenario.includes('gzip') ? { 'content-encoding': 'gzip' } : scenario === 'unknown_encoding' ? { 'content-encoding': 'unknown' } : {};
+    const created = 'data: {"type":"response.created"}\n\n';
+    const text = scenario === 'empty' ? '' : scenario === 'malformed' ? 'data: nope\n\n' + created : scenario === 'oversized' ? 'data: ' + 'x'.repeat(4 * 1024 * 1024 + 1) + '\n\n' + created : scenario === 'partial' ? event('\n').slice(0, -1) : scenario === 'invalid_terminal' ? 'data: {"type":"response.completed"}\n\n' : created;
+    const bytes = scenario === 'gzip' ? zlib.gzipSync(Buffer.from(text)) : scenario === 'invalid_utf8' ? Buffer.concat([Buffer.from('data: {"type":"response.created","text":"'), Buffer.from([0xff]), Buffer.from('"}\n\n')]) : Buffer.from(text);
+    const native: Buffer[] = []; input.on('data', chunk => native.push(Buffer.from(chunk)));
+    const completed = vi.fn(), failed = vi.fn(), ended = vi.fn(); observeResponseStream(input, completed, failed, ended);
+    (input as unknown as PassThrough).end(bytes);
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledExactlyOnceWith(['empty', 'created', 'gzip'].includes(scenario) ? 'eof' : 'unobserved'));
+    expect(completed).not.toHaveBeenCalled(); expect(failed).not.toHaveBeenCalled();
+    expect(Buffer.concat(native)).toEqual(bytes);
+  });
 });
