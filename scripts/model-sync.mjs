@@ -32,6 +32,9 @@ const tokens = value => {
 };
 
 export function parseClaude(overview, effort) {
+  // Publisher guidance uses either per-model headings or bold model links.
+  // Keep each block bounded so one model can never supply another's facts.
+  const effortBlocks = effort.split(/(?=^(?:#{2,3} |\*\*\[Claude ))/m);
   const lines = overview.split('\n');
   const headers = lines.flatMap((line, index) => /^\| Feature\s*\|/.test(line) ? [index] : []);
   requireFact(headers.length === 1, 'Missing or ambiguous current Claude model table');
@@ -55,9 +58,9 @@ export function parseClaude(overview, effort) {
     requireFact(header[i + 1] === `Claude ${family[0].toUpperCase() + family.slice(1)} ${version}` && !seen.has(family), 'Claude header/ID mismatch');
     seen.add(family);
     const title = `### Recommended effort levels for ${header[i + 1]}`;
-    const sections = effort.split(title + '\n');
-    requireFact(sections.length === 2, `Missing or ambiguous effort section: ${id}`);
-    const section = sections[1].split(/\n#{2,3} /)[0];
+    const sections = effortBlocks.filter(block => block.startsWith(title + '\n') || block.startsWith(`**[${header[i + 1]}](`));
+    requireFact(sections.length === 1, `Missing or ambiguous effort section: ${id}`);
+    const section = sections[0];
     requireFact(/supports all five effort levels/.test(section), `Unrecognized effort support: ${id}`);
     requireFact(EFFORTS.includes(defaults[i]) && new RegExp('`' + defaults[i] + '`(?:\\*\\*)?[,]? (?:(?:is )?the )?default').test(section), `Effort default disagreement: ${id}`);
     let unconditionalEffort, conditionalEffort;
@@ -202,7 +205,9 @@ export function priceMetadata(raw, official) {
     const base = { input: value('Input'), read: value('Cached input'), write: value('Cache writes'), output: value('Output') };
     requireFact(model && context && Object.values(base).every(v => Number.isFinite(v) && v >= 0), `Unknown OpenAI price contract: ${key}`);
     const limit = Number(context.replaceAll(',', ''));
-    const long = /Prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output/.exec(text);
+    const surcharges = [...text.matchAll(/\b(?:API )?prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output/gi)];
+    requireFact(surcharges.length <= 1 && (surcharges.length === 1 || !/\bprompts\b[^\n]*\bpriced\b/i.test(text)), `Unknown long-context price contract: ${key}`);
+    const long = surcharges[0];
     const bands = long ? [{ ...base, maxPrompt: Number(long[1]) * 1000 }, { maxPrompt: limit, input: base.input * 2, read: base.read * 2, write: base.write * 2, output: base.output * 1.5 }] : [{ ...base, maxPrompt: limit }];
     add('codex', model, SOURCES[key].replace(/\.md$/, ''), bands);
   }

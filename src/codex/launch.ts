@@ -65,6 +65,16 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
     if (equal(req.url?.slice(0, prefix.length), prefix) && req.url?.[prefix.length] === '/') return req.url.slice(prefix.length);
     return equal(req.headers['x-jev-gate-session'], token) ? req.url ?? null : null;
   };
+  const localAuth = (header: unknown): boolean => {
+    if (equal(header, `Bearer ${token}`)) return true;
+    const prefix = `Bearer ${token}.`;
+    if (!options.connection || typeof header !== 'string' || !equal(header.slice(0, prefix.length), prefix)) return false;
+    const encoded = header.slice(prefix.length);
+    const key = Buffer.from(encoded, 'base64url').toString('utf8');
+    if (!key || key.length > 8192 || /[\r\n\0]/.test(key) || Buffer.from(key).toString('base64url') !== encoded) return false;
+    policy?.supplyKey(key);
+    return true;
+  };
   const server = createServer(async (req, res) => {
     try {
       const path = req.url?.split('?')[0];
@@ -86,7 +96,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ready: options.connection.ready?.() ?? !!policy })); return;
       }
       if (options.connection && path === '/agent' && req.method === 'POST') {
-        if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        if (!localAuth(req.headers.authorization)) { res.writeHead(401); res.end(); return; }
         if (restarting) { res.writeHead(503); res.end(); return; }
         active++; res.once('close', () => { active--; });
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
@@ -96,7 +106,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ output })); return;
       }
       if (req.url === '/hook' && req.method === 'POST') {
-        if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        if (!localAuth(req.headers.authorization)) { res.writeHead(401); res.end(); return; }
         if (restarting) { res.writeHead(503); res.end(); return; }
         active++; res.once('close', () => { active--; });
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));

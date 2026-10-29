@@ -753,7 +753,13 @@ export class CodexPolicy {
     }
     if (!this.bypassHookTrust) return {};
     // This grant is scoped to this process and only exists when the user explicitly passes Codex's trust bypass flag.
-    const state = Object.fromEntries(jev.filter(h => h['enabled'] === true && obj(inherited[String(h['key'])])?.['enabled'] !== false).map(h => [String(h['key']), { ...(obj(inherited[String(h['key'])]) ?? {}), trusted_hash: h['currentHash'] }]));
+    const state = Object.fromEntries(jev.filter(h => h['enabled'] === true && obj(inherited[String(h['key'])])?.['enabled'] !== false).map(h => {
+      // Native hooks/list now combines declaration/content hashes, but config
+      // still stores them separately. Older hosts return only the declaration.
+      const hash = h['currentHash'];
+      const hashes = typeof hash === 'string' && /^sha256:[a-f0-9]{64}\/sha256:[a-f0-9]{64}$/.test(hash) ? hash.split('/') : null;
+      return [String(h['key']), { ...(obj(inherited[String(h['key'])]) ?? {}), trusted_hash: hashes?.[0] ?? hash, ...(hashes ? { trusted_content_hash: hashes[1] } : {}) }];
+    }));
     return { 'hooks.state': { ...inherited, ...state } };
   }
   private async agent(p: Obj): Promise<string> {
