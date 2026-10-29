@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.71 — 2026-10-29 — Apply valid native Codex model routes
+
+- Remove the speculative price, billing and cache veto that retained Sol after Jev selected an eligible Terra/Luna route. Cost scenarios remain trace diagnostics; billing/cache changes no longer invalidate valid model choices (#399).
+- Carry a route already applied by App Server into HTTP preparation so routed execution guidance reaches the actual provider request. Keep native input prefixes and opaque context, reuse same-request decisions and batch independent discovery/check commands.
+- Preserve user model/effort pins, native permissions, supported model/effort catalogs, secret screening and original calls on invalid or uncertain decisions. Add no account lookup or authentication step; existing OAuth login stays native. Claude, Gate and Compact policies are unchanged.
+- Preserve all earlier benchmark outcomes. One predeclared OAuth development-task pair observed Sol→Terra with complete provider+Jev tokens of 128,174→98,621 (23.06% lower), both quality checks passing. This combined-repair observation is not a general average, held-out result or subscription-quota claim; see `bench/results/codex-model-route-399`.
+
 ## v0.8.70 — 2026-10-29 — Record Codex responses that end without a terminal event
 
 - Settle a fully observed clean SSE EOF without a terminal response against its exact model request. Record `response_terminal_not_observed` at stage `eof`, with unknown usage; distinguish it from upstream transport failure, HTTP/SSE errors, client cancellation and normal completion (#404).
