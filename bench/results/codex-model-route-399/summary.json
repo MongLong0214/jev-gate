@@ -1,0 +1,406 @@
+{
+  "scope": "One predeclared OAuth native source-runtime paired regression: released v0.8.68 Router ON versus #399 final candidate with Codex cost veto removed and guidance fix. Gate/Compact OFF. Atomic-ledger was chosen before outcomes because an earlier trace selected Terra but the cost gate held Sol. Same frozen development fixture/checker, one pair, no retries or expansion. Not held-out; no population-wide or subscription-quota claim.",
+  "plan_sha256": "4db864c940135db0c48100f5536be16e2dbe27ba7b7f469aa40d64005d55c889",
+  "sources": {
+    "baseline_commit": "d2faa8f3a532de61a5b296de24c295bea7b0151f",
+    "candidate": "PR #400 working source; cost selection veto removed; no account lookup added",
+    "sha256": {
+      "before.mjs": "70199c27ce2356b55ebec6f90ab11dbdb308826cb2988f98d6278d2f38d5e458",
+      "after.mjs": "d1c25ddfb72938138e3cc157f5e9139857432bad1f493c8d1ad51ccbc9f2f009",
+      "plan.json": "4db864c940135db0c48100f5536be16e2dbe27ba7b7f469aa40d64005d55c889",
+      "candidate.patch": "ed521a7ca195e3edb1e1cd37d1db32069fbbc3c25a2ee2bdc8b7890220552231",
+      "run.mjs": "47ff54c1148266d07c9b32b3c570659e7e4a341492b14a5d24975dec71ee94c4"
+    }
+  },
+  "candidate_commit": "74c03f4",
+  "comparison": {
+    "planned": 2,
+    "finished": 2,
+    "complete_usage": 2,
+    "quality_pass": 2,
+    "arms": {
+      "before": {
+        "provider_tokens": 124115,
+        "jev_input": 3856,
+        "jev_output": 203,
+        "jev_tokens": 4059,
+        "total_tokens": 128174,
+        "provider_requests": 5,
+        "provider": {
+          "input": 24102,
+          "read": 96384,
+          "write": 0,
+          "output": 3629,
+          "thinking": 654
+        },
+        "tools": {
+          "calls": 7,
+          "results": 7,
+          "failures": 0,
+          "unfinished": 0
+        },
+        "wall_s": 104.985,
+        "host_api_equivalent_cost_usd": 0.0941324,
+        "jev_input_list_cost_usd": 0.000161952,
+        "quality_pass": 1
+      },
+      "after": {
+        "provider_tokens": 94562,
+        "jev_input": 3856,
+        "jev_output": 203,
+        "jev_tokens": 4059,
+        "total_tokens": 98621,
+        "provider_requests": 4,
+        "provider": {
+          "input": 51854,
+          "read": 40704,
+          "write": 0,
+          "output": 2004,
+          "thinking": 166
+        },
+        "tools": {
+          "calls": 3,
+          "results": 3,
+          "failures": 1,
+          "unfinished": 0
+        },
+        "wall_s": 43.022,
+        "host_api_equivalent_cost_usd": 0.0639092,
+        "jev_input_list_cost_usd": 0.000161952,
+        "quality_pass": 1
+      }
+    },
+    "pairs": [
+      {
+        "task": "atomic-ledger",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": 23.056938224600934,
+        "delta": -29553,
+        "before": 128174,
+        "after": 98621
+      }
+    ],
+    "saving_pct": 23.056938224600934,
+    "provider_only_saving_pct": 23.810981750795634,
+    "paired_wins": 1,
+    "paired_losses": 0,
+    "median_paired_saving_pct": 23.056938224600934,
+    "task_aggregates": [
+      {
+        "task": "atomic-ledger",
+        "complete": true,
+        "saving_pct": 23.056938224600934,
+        "quality_both": true,
+        "before": 128174,
+        "after": 98621
+      }
+    ],
+    "off_reported_token_lower_bound": 128174,
+    "on_exact_tokens_for_lower_bound": 98621,
+    "saving_pct_lower_bound": 23.056938224600934,
+    "token_saving_lower_bound": 29553,
+    "host_failures": 0,
+    "unknown_usage_cells": 0,
+    "claim": "observed_savings_on_this_fixed_suite_only"
+  },
+  "routing_receipts": {
+    "before": {
+      "baseline_model": "gpt-6.1-sol",
+      "baseline_effort": "xhigh",
+      "selected_model": "gpt-6.1-sol",
+      "selected_effort": "high",
+      "cost_reason": "cost_unknown_hold",
+      "reasons": {
+        "model": "cost_unknown_hold",
+        "effort": "selected"
+      },
+      "selection": {
+        "direction": "downgrade",
+        "threshold": 0.6,
+        "probability": 0.94,
+        "effort_policy": "ordered_move",
+        "pair_valid": true,
+        "policy": "role",
+        "roles": [
+          {
+            "role": "fast",
+            "option": "mechanical",
+            "model": "gpt-6-luna"
+          },
+          {
+            "role": "standard",
+            "option": "routine",
+            "model": "gpt-6.1-terra"
+          },
+          {
+            "role": "deep",
+            "option": "complex",
+            "model": "gpt-6.1-sol"
+          }
+        ]
+      },
+      "answers": {
+        "capability": {
+          "type": "choice",
+          "choice": "routine",
+          "probabilities": {
+            "complex": 0.06,
+            "routine": 0.94,
+            "mechanical": 0,
+            "unclear": 0
+          },
+          "confidence": 0.92
+        },
+        "effort_0": {
+          "type": "score",
+          "probabilities": {
+            "0": 0,
+            "1": 0.01,
+            "2": 0.96,
+            "3": 0.03,
+            "4": 0
+          }
+        },
+        "effort_1": {
+          "type": "score",
+          "probabilities": {
+            "0": 0,
+            "1": 0.6,
+            "2": 0.34,
+            "3": 0.06,
+            "4": 0,
+            "5": 0
+          }
+        },
+        "effort_2": {
+          "type": "score",
+          "probabilities": {
+            "0": 0,
+            "1": 0.46,
+            "2": 0.44,
+            "3": 0.1,
+            "4": 0,
+            "5": 0
+          }
+        },
+        "control": {
+          "type": "choice",
+          "choice": "task_clear",
+          "probabilities": {
+            "task_clear": 1,
+            "model_lock": 0,
+            "effort_lock": 0,
+            "explicit_lock": 0,
+            "needs_context": 0,
+            "unclear": 0
+          },
+          "confidence": 1
+        },
+        "action_risk": {
+          "type": "choice",
+          "choice": "ordinary",
+          "probabilities": {
+            "ordinary": 1,
+            "consequential": 0,
+            "unclear": 0
+          },
+          "confidence": 1
+        }
+      }
+    },
+    "after": {
+      "baseline_model": "gpt-6.1-sol",
+      "baseline_effort": "xhigh",
+      "selected_model": "gpt-6.1-terra",
+      "selected_effort": "high",
+      "cost_reason": "diagnostic_only",
+      "reasons": {
+        "model": "selected",
+        "effort": "selected"
+      },
+      "selection": {
+        "direction": "downgrade",
+        "threshold": 0.6,
+        "probability": 0.92,
+        "effort_policy": "ordered_move",
+        "pair_valid": true,
+        "policy": "role",
+        "roles": [
+          {
+            "role": "fast",
+            "option": "mechanical",
+            "model": "gpt-6-luna"
+          },
+          {
+            "role": "standard",
+            "option": "routine",
+            "model": "gpt-6.1-terra"
+          },
+          {
+            "role": "deep",
+            "option": "complex",
+            "model": "gpt-6.1-sol"
+          }
+        ]
+      },
+      "answers": {
+        "capability": {
+          "type": "choice",
+          "choice": "routine",
+          "probabilities": {
+            "complex": 0.08,
+            "routine": 0.92,
+            "mechanical": 0,
+            "unclear": 0
+          },
+          "confidence": 0.89
+        },
+        "effort_0": {
+          "type": "score",
+          "probabilities": {
+            "0": 0,
+            "1": 0.01,
+            "2": 0.96,
+            "3": 0.03,
+            "4": 0
+          }
+        },
+        "effort_1": {
+          "type": "score",
+          "probabilities": {
+            "0": 0,
+            "1": 0.57,
+            "2": 0.35,
+            "3": 0.08,
+            "4": 0,
+            "5": 0
+          }
+        },
+        "effort_2": {
+          "type": "score",
+          "probabilities": {
+            "0": 0,
+            "1": 0.47,
+            "2": 0.43,
+            "3": 0.1,
+            "4": 0,
+            "5": 0
+          }
+        },
+        "control": {
+          "type": "choice",
+          "choice": "task_clear",
+          "probabilities": {
+            "task_clear": 1,
+            "model_lock": 0,
+            "effort_lock": 0,
+            "explicit_lock": 0,
+            "needs_context": 0,
+            "unclear": 0
+          },
+          "confidence": 1
+        },
+        "action_risk": {
+          "type": "choice",
+          "choice": "ordinary",
+          "probabilities": {
+            "ordinary": 1,
+            "consequential": 0,
+            "unclear": 0
+          },
+          "confidence": 1
+        }
+      }
+    }
+  },
+  "cells": [
+    {
+      "id": "codex-atomic-ledger-1-before",
+      "status": "finished",
+      "task": "atomic-ledger",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 24102,
+        "read": 96384,
+        "write": 0,
+        "output": 3629,
+        "thinking": 654
+      },
+      "provider_tokens": 124115,
+      "jev_tokens": 4059,
+      "total_tokens": 128174,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 7,
+        "results": 7,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 124115
+      },
+      "efforts_requests": {
+        "high": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-1-after",
+      "status": "finished",
+      "task": "atomic-ledger",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 51854,
+        "read": 40704,
+        "write": 0,
+        "output": 2004,
+        "thinking": 166
+      },
+      "provider_tokens": 94562,
+      "jev_tokens": 4059,
+      "total_tokens": 98621,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 3,
+        "results": 3,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-terra": 94562
+      },
+      "efforts_requests": {
+        "high": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "diagnostic_only": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    }
+  ]
+}

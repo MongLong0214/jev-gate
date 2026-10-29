@@ -20,6 +20,8 @@ describe('Codex routed execution guidance', () => {
     expect(JSON.stringify(input.at(-1))).toContain('required verification remain authoritative');
     expect(JSON.stringify(input.at(-1))).toContain('Keep dependent operations sequential');
     expect(JSON.stringify(input.at(-1))).toContain('original public signatures, input types');
+    expect(JSON.stringify(input.at(-1))).toContain('one native discovery call');
+    expect(JSON.stringify(input.at(-1))).toContain('make every check result observable');
     expect(JSON.stringify(input.at(-1))).toContain('recover the original source with native tools before implementing');
     expect(JSON.stringify(input.at(-1))).toContain('passing a smoke test or tests written around your implementation is not proof');
   });
@@ -30,6 +32,18 @@ describe('Codex routed execution guidance', () => {
     expect(routedExecution(original, first)).toBe(first);
     const later = { ...selected, input: [...(original.input as Obj[]), { type: 'function_call_output', call_id: 'native', output: 'Later result.' }] };
     expect((routedExecution(original, later).input as Obj[]).at(-1)).toEqual((first.input as Obj[]).at(-1));
+  });
+
+  it('accepts a verified pre-wire route without changing the native prefix', () => {
+    const selected = native(), snapshot = structuredClone(selected);
+    const result = routedExecution(selected, selected, true);
+    expect(selected).toEqual(snapshot);
+    expect((result.input as Obj[]).slice(0, -1)).toEqual(selected.input);
+    expect(JSON.stringify((result.input as Obj[]).at(-1))).toContain('Jev routed execution');
+    expect(routedExecution(result, result, true)).toBe(result);
+    for (const request of [{ ...selected, previous_response_id: 'opaque-server-context' }, { ...selected, input: 'native-input' }, { ...selected, instructions: {} }]) {
+      expect(routedExecution(request, request, true)).toBe(request);
+    }
   });
 
   it('supports full Responses requests and preserves their exact native instructions as the prefix', () => {

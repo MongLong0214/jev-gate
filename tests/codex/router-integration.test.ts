@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream';
+import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,9 +9,11 @@ import { loadActivity } from '../../src/activity.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import type { Obj } from '../../src/codex/source.js';
+import { routedExecution } from '../../src/codex/execution-efficiency.js';
+import { startCodexSession } from '../../src/codex/launch.js';
 const dir = mkdtempSync(join(tmpdir(), 'router-integration-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-// Documented roles make A -> B an upgrade: neither fixture has a published price, so any other switch is held for cost.
+// Documented roles make A -> B an upgrade. Unknown prices do not veto either direction.
 const catalog = [
   { model: 'fixture-A', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) },
   { model: 'fixture-B', description: 'Latest workhorse model for coding and everyday work.', supportedReasoningEfforts: ['low', 'high', 'max'].map(reasoningEffort => ({ reasoningEffort })) },
@@ -82,7 +85,88 @@ const rootContinuationFixture = async (wait?: Promise<void>) => {
     { type: 'function_call_output', call_id: 'check', output: 'private-results-canary' }] };
   return { ...f, first, next, signal };
 };
-describe('native Codex billing-aware model routing', () => {
+describe('native Codex model routing', () => {
+  it.each(['fixture-A', 'gpt-6.1-terra', 'gpt-6-luna'])('submits pre-applied %s and guidance through HTTP (#399)', async target => {
+    const f = await fixture(false, target, 'low'), root = mkdtempSync(join(tmpdir(), 'managed-guidance-'));
+    const baseline = target === 'fixture-A' ? target : 'gpt-6.1-sol';
+    const available = target === 'fixture-A' ? catalog : [baseline, 'gpt-6.1-terra', 'gpt-6-luna'].map(model => ({ model,
+      supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) }));
+    const forwarded: Obj[] = [];
+    const upstream = createServer(async (req, res) => {
+      let raw = ''; for await (const chunk of req) raw += String(chunk); forwarded.push(JSON.parse(raw));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ id: 'local-response', status: 'completed', model: target, output: [], usage: { input_tokens: 42, output_tokens: 3 } }));
+    });
+    await new Promise<void>(r => upstream.listen(0, '127.0.0.1', r));
+    writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport{createInterface}from'node:readline';createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n')});\n`, { mode: 0o755 });
+    const trace = join(root, 'trace');
+    const gateway = await startCodexSession({ cwd: root, fetchImpl: f.fetchImpl as typeof fetch, connection: { token: 'g'.repeat(64), port: 0 }, env: {
+      HOME: root, PATH: root, TYPESAFE_API_KEY: 'fixture-key', JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(upstream.address() as { port: number }).port}`,
+    } });
+    try {
+      gateway.policy.catalog = available; gateway.policy.catalogComplete = true;
+      await gateway.rpc.onResponse({ model: baseline, reasoningEffort: 'high', cwd: root, thread: { id: 'root' } }, 'thread/start', {});
+      const forward = vi.spyOn(gateway.rpc, 'forward').mockImplementation(() => {});
+      const start = { ...f.start, params: { ...f.start.params, model: baseline, collaborationMode: { mode: 'default', settings: { model: baseline, reasoning_effort: 'high' } } } };
+      await gateway.policy.client(start);
+      expect(forward.mock.calls[0]?.[0]).toMatchObject({ params: { model: target, effort: 'low', collaborationMode: { settings: { model: target, reasoning_effort: 'low' } } } });
+      gateway.rpc.onNotification({ method: 'thread/settings/updated', params: { threadId: 'root', threadSettings: { model: target, effort: 'low' } } });
+      const native = { ...f.request, model: target, reasoning: { effort: 'low' } };
+      const response = await fetch(gateway.url.replace('ws:', 'http:') + '/responses', { method: 'POST', headers: { 'x-jev-gate-session': gateway.token, 'session-id': 'root' }, body: JSON.stringify(native) });
+      expect(response.status).toBe(200); await response.text();
+      expect(forwarded).toHaveLength(1);
+      expect(forwarded[0]).toEqual({ ...native, input: [...native.input, expect.objectContaining({ role: 'developer' })] });
+      expect(JSON.stringify(forwarded[0])).toContain('Jev routed execution');
+      const rows = readdirSync(trace).map(name => JSON.parse(readFileSync(join(trace, name), 'utf8')));
+      expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_model_request', submitted_model: target, submitted_effort: 'low', input_change: expect.objectContaining({ execution_guidance_added: true }) }));
+      expect(f.fetchImpl).toHaveBeenCalledOnce();
+    } finally { f.rpc.close(); await gateway.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
+  });
+  it.each([['fixture-A', 'low', true], ['fixture-B', 'high', true], ['fixture-A', 'high', false]])('carries managed %s/%s routing to execution preparation', async (model, effort, expected) => {
+    const f = await fixture(false, model as string, effort as string);
+    try {
+      await f.policy.client(f.start);
+      const params = f.forward.mock.calls[0]![0].params as Obj;
+      // Native App Server publishes the applied turn settings before sending HTTP.
+      f.rpc.onNotification({ method: 'thread/settings/updated', params: { threadId: 'root', threadSettings: { model: params.model, effort: params.effort } } });
+      const native = { ...f.request, model: params.model, reasoning: { ...f.request.reasoning, effort: params.effort } };
+      const result = await f.policy.externalRequest('root', native, new AbortController().signal);
+      expect(result.request).toBe(native); expect(result.preRouted).toBe(expected);
+      const submitted = routedExecution(native, result.request, result.preRouted);
+      expect((submitted.input as Obj[]).slice(0, native.input.length)).toEqual(native.input);
+      expect(JSON.stringify(submitted).includes('Jev routed execution')).toBe(expected);
+      expect(f.fetchImpl).toHaveBeenCalledOnce(); // The wire stage must not classify again.
+    } finally { f.rpc.close(); }
+  });
+
+  it.each(['abort', 'terminal', 'prompt', 'settings', 'config', 'manual', 'disabled', 'catalog', 'native-update'])('does not use a managed route after %s', async change => {
+    const f = await fixture(false, 'fixture-A', 'low');
+    try {
+      await f.policy.client(f.start);
+      const session = f.policy.sessions.get('root')!, signal = new AbortController();
+      let native: Obj = { ...f.request, reasoning: { effort: 'low' } };
+      if (change === 'abort') signal.abort();
+      if (change === 'terminal') session.terminal = true;
+      if (change === 'prompt') session.prompt = 'new-prompt';
+      if (change === 'settings') await f.rpc.onResponse({}, 'thread/settings/update', { threadId: 'root', effort: 'low' });
+      if (change === 'config') saveConfig({ enabled: false });
+      if (change === 'manual') native = { ...native, reasoning: { effort: 'high' } };
+      if (change === 'disabled') session.eligible = false;
+      if (change === 'catalog') delete session.route;
+      if (change === 'native-update') native = { ...native, input: [{ type: 'configuration_update', reasoning: { effort: 'high' } }] };
+      const result = await f.policy.externalRequest('root', native, signal.signal);
+      expect(result.preRouted ?? false).toBe(false); expect(result.request).toBe(native);
+    } finally { f.rpc.close(); }
+  });
+
+  it('clears a previous managed route when the next turn cannot be routed', async () => {
+    const f = await fixture(false, 'fixture-A', 'low');
+    try {
+      await f.policy.client(f.start);
+      await f.policy.client({ ...f.start, params: { ...f.start.params, clientUserMessageId: 'next', input: [{ type: 'image', imageUrl: 'native-image' }] } });
+      const native = { ...f.request, reasoning: { effort: 'low' } };
+      expect((await f.policy.externalRequest('root', native, new AbortController().signal)).preRouted).toBe(false);
+    } finally { f.rpc.close(); }
+  });
   it.each(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])('routes Terra with account-supported %s through native turn settings', async effort => {
     const f = await fixture(false, 'gpt-6.1-terra', effort);
     f.policy.catalog = [catalog[0]!, {
@@ -243,7 +327,7 @@ describe('native Codex billing-aware model routing', () => {
     }
     f.rpc.close();
   });
-  it.each(['config', 'catalog', 'settings', 'billing', 'manual'] as const)('rejects a pending continuation and its retry when %s changes', async kind => {
+  it.each(['config', 'catalog', 'settings', 'manual'] as const)('rejects a pending continuation and its retry when %s changes', async kind => {
     let release!: () => void; const f = await rootContinuationFixture(new Promise<void>(resolve => { release = resolve; }));
     const pending = f.policy.externalRequest('root', f.next, f.signal.signal, 'codex-tui', 'chatgpt');
     await vi.waitFor(() => expect(f.sent).toHaveLength(2));
@@ -251,7 +335,7 @@ describe('native Codex billing-aware model routing', () => {
     if (kind === 'catalog') f.policy.catalog = f.policy.catalog.map(m => m.model === 'gpt-6.1-sol' ? { ...m, supportedReasoningEfforts: [{ reasoningEffort: 'high' }] } : m);
     if (kind === 'settings') await f.rpc.onResponse({}, 'thread/settings/update', { threadId: 'root', model: 'gpt-6.1-sol', effort: 'high' });
     const changed = kind === 'manual' ? { ...f.next, model: 'manual-model' } : f.next;
-    const retry = kind === 'billing' || kind === 'manual' ? f.policy.externalRequest('root', changed, f.signal.signal, 'codex-tui', kind === 'billing' ? 'api' : 'chatgpt') : null;
+    const retry = kind === 'manual' ? f.policy.externalRequest('root', changed, f.signal.signal, 'codex-tui', 'chatgpt') : null;
     release(); expect((await pending).request).toEqual(f.next);
     if (retry) expect((await retry).request).toEqual(changed);
     expect((await f.policy.externalRequest('root', changed, f.signal.signal, 'codex-tui', 'chatgpt')).request).toEqual(changed);
@@ -288,9 +372,9 @@ describe('native Codex billing-aware model routing', () => {
     expect(rows.filter(row => row.phase === 'codex_route_applied' && row.request_id === binding.requestId)).toHaveLength(0);
     expect(f.fetchImpl).toHaveBeenCalledTimes(2); f.rpc.close();
   });
-  it.each(['chatgpt', 'api', 'unknown'] as const)('preserves the native input and applies only an eligible pair for %s billing', async billing => {
+  it.each(['chatgpt', 'api', 'unknown'] as const)('preserves the native input and does not veto an eligible pair for %s billing', async billing => {
     const f = await nativeBillingFixture();
-    const expected = billing === 'chatgpt' ? 'gpt-6-luna' : f.request.model;
+    const expected = 'gpt-6-luna';
     for (let i = 0; i < 3; i++) {
       const request = i === 0 ? f.request : { ...f.request, input: [...f.request.input, { type: 'function_call', call_id: 'exact-tool', name: 'original', arguments: '{}' }, { type: 'function_call_output', call_id: 'exact-tool', output: 'ok' }] };
       const selected = (await f.policy.externalRequest('root', request, new AbortController().signal, 'codex-tui', billing)).request;
@@ -300,28 +384,46 @@ describe('native Codex billing-aware model routing', () => {
     expect(f.fetchImpl).toHaveBeenCalledOnce();
     const rows = readdirSync(join(dir, 'trace')).map(file => JSON.parse(readFileSync(join(dir, 'trace', file), 'utf8')));
     expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_router_result', selected_model: expected,
-      cost: expect.objectContaining({ basis: billing === 'chatgpt' ? 'codex_credit_rate_comparison' : billing === 'api' ? 'api_list_estimate' : 'unknown' }) }));
+      cost_reason: 'diagnostic_only', cost: expect.objectContaining({ authorization: 'diagnostic_only', basis: billing === 'chatgpt' ? 'codex_credit_rate_comparison' : billing === 'api' ? 'api_list_estimate' : 'unknown' }) }));
     f.rpc.close();
   });
-  it.each(['billing', 'tier'] as const)('invalidates a cached native pair after %s changes without another paid assessment', async change => {
+  it.each(['billing', 'tier', 'cache'] as const)('reuses a cached native pair after diagnostic %s changes without another paid assessment', async change => {
     const f = await nativeBillingFixture(), signal = new AbortController().signal;
     expect((await f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt')).request.model).toBe('gpt-6-luna');
-    const changed = change === 'tier' ? { ...f.request, service_tier: 'ultrafast' } : f.request;
-    expect((await f.policy.externalRequest('root', changed, signal, 'codex-tui', change === 'tier' ? 'chatgpt' : 'api')).request).toEqual(changed);
-    expect((await f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt')).request).toEqual(f.request);
+    const changed = change === 'tier' ? { ...f.request, service_tier: 'ultrafast' } : change === 'cache' ? { ...f.request, prompt_cache_retention: '24h' } : f.request;
+    expect((await f.policy.externalRequest('root', changed, signal, 'codex-tui', change === 'billing' ? 'api' : 'chatgpt')).request).toEqual({ ...changed, model: 'gpt-6-luna', reasoning: { ...changed.reasoning, effort: 'low' } });
+    expect((await f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt')).request.model).toBe('gpt-6-luna');
     expect(f.fetchImpl).toHaveBeenCalledOnce(); f.rpc.close();
   });
-  it('discards an in-flight decision when the actual billing basis changes, and reassesses only on a new prompt', async () => {
+  it('keeps an in-flight decision when diagnostic billing changes, and reassesses only on a new prompt', async () => {
     let release!: () => void; const f = await nativeBillingFixture(new Promise<void>(resolve => { release = resolve; }));
     const signal = new AbortController().signal;
     const first = f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt');
     await vi.waitFor(() => expect(f.sent).toHaveLength(1));
     const changed = f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'api'); release();
-    expect((await first).request).toEqual(f.request); expect((await changed).request).toEqual(f.request);
+    expect((await first).request.model).toBe('gpt-6-luna'); expect((await changed).request.model).toBe('gpt-6-luna');
     expect(f.fetchImpl).toHaveBeenCalledOnce();
     await f.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 'root', turn_id: 'new-billing-prompt', prompt: 'Add two numbers.' });
     expect((await f.policy.externalRequest('root', f.request, signal, 'codex-tui', 'chatgpt')).request.model).toBe('gpt-6-luna');
     expect(f.fetchImpl).toHaveBeenCalledTimes(2); f.rpc.close();
+  });
+  it.each(['root', 'child'] as const)('reuses a pending %s continuation across diagnostic changes and retries', async scope => {
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    const f = scope === 'root' ? await rootContinuationFixture(wait) : await ownedFixture(wait);
+    const id = 'child' in f ? f.child.id : 'root';
+    const before = f.sent.length;
+    try {
+      const pending = f.policy.externalRequest(id, f.next, f.signal.signal, 'codex-tui', 'chatgpt');
+      await vi.waitFor(() => expect(f.sent).toHaveLength(before + 1));
+      const changed = { ...f.next, service_tier: 'ultrafast', prompt_cache_retention: '24h' };
+      const retry = f.policy.externalRequest(id, changed, f.signal.signal, 'codex-tui', 'unknown');
+      release();
+      expect((await pending).request.reasoning).toMatchObject({ effort: 'low' });
+      expect((await retry).request).toMatchObject({ service_tier: 'ultrafast', prompt_cache_retention: '24h', reasoning: { effort: 'low' } });
+      expect((await f.policy.externalRequest(id, f.next, f.signal.signal, 'codex-tui', 'chatgpt')).request.reasoning).toMatchObject({ effort: 'low' });
+      expect(f.fetchImpl).toHaveBeenCalledTimes(before + 1);
+    } finally { release(); f.rpc.close(); }
   });
   it('does not bypass an explicit native execution pin for the cheaper credit rate', async () => {
     const f = await nativeBillingFixture();
@@ -508,7 +610,7 @@ describe('original Codex root execution boundaries', () => {
     for (phase = 0; phase < 3; phase++) {
       const baseline = phase === 0 || mode === 'default' ? 'fixture-A' : 'fixture-B';
       const effort = phase === 0 || mode === 'default' ? 'high' : 'max';
-      const routedModel = phase < 2 ? 'fixture-B' : baseline;
+      const routedModel = phase < 2 ? 'fixture-B' : 'fixture-A';
       if (external) {
         await f.policy.externalHook({ hook_event_name: 'UserPromptSubmit', session_id: 'root', turn_id: `turn-${phase}`, prompt: 'Continue the clear fixture.' });
         for (let step = 0; step < 2; step++) {
