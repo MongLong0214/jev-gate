@@ -1,5 +1,5 @@
 // @ts-expect-error The maintenance CLI is an ESM script, exercised here without network requests.
-import { parseClaude, hostRelease, synchronizeClaude, parseCodex, verifyCodex, verifyCodexCredits, fetchSource, replaceFacts } from '../scripts/model-sync.mjs';
+import { parseClaude, hostRelease, synchronizeClaude, parseCodex, verifyCodex, verifyCodexCredits, fetchSource, replaceFacts, priceMetadata } from '../scripts/model-sync.mjs';
 import { describe, expect, it } from 'vitest';
 import { MODEL_FACTS, type ModelFacts } from '../src/claude-models.js';
 import { normalizeCatalog, generalCodexModel } from '../src/codex/catalog.js';
@@ -50,6 +50,26 @@ describe('official model freshness CI', () => {
     expect(models.find(m => m.family === 'haiku')).toMatchObject({ ids: ['claude-haiku-5-5', 'anthropic.claude-haiku-5-5'],
       contextTokens: 1_000_000, maxOutputTokens: 128_000, defaultEffort: 'medium', unconditionalEffort: ['low', 'medium', 'high'], conditionalEffort: ['xhigh', 'max'] });
     expect(models.find(m => m.family === 'opus')?.unconditionalEffort).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+  });
+  it('reads linked model headings without borrowing adjacent model facts or accepting duplicate sections', () => {
+    const linked = effort.replace(/^### Recommended effort levels for (Claude .+)$/gm, '**[$1](https://example.test/model)** — *Model guidance*');
+    expect(parseClaude(overview, linked)).toEqual(parseClaude(overview, effort));
+    expect(() => parseClaude(overview, linked.replace('[Claude Fable 5.1]', '[Claude Mythos 5.1]'))).toThrow(/effort section/);
+    expect(() => parseClaude(overview, linked.replace('all five effort', 'all four effort'))).toThrow(/effort support/);
+    expect(() => parseClaude(overview, linked + '\n' + effort)).toThrow(/ambiguous effort section/);
+  });
+  it('retains API long-context surcharges across publisher wording and rejects unknown or duplicate surcharge rules', () => {
+    const page = (model: string) => `Model ID: \`${model}\`\nMaximum input tokens: 922,000\n| Input | $2 | 1M tokens |\n| Cached input | $0.1 | 1M tokens |\n| Cache writes | $2.5 | 1M tokens |\n| Output | $10 | 1M tokens |\n`;
+    const raw = Object.fromEntries(['sol', 'terra', 'luna', 'astra'].map(key => [key, page(`gpt-${key}`)]));
+    const rule = 'prompts with more than 272K input tokens are priced at 2x input and cache rates and 1.5x output for the full request.\n';
+    const expected = [{ input: 2, read: 0.1, write: 2.5, output: 10, maxPrompt: 272000 }, { input: 4, read: 0.2, write: 5, output: 15, maxPrompt: 922000 }];
+    for (const prefix of ['P', 'API p']) {
+      expect(priceMetadata({ ...raw, sol: raw.sol + prefix + rule.slice(1) }, [])[0].bands).toEqual(expected);
+    }
+    for (const surcharge of [rule.replace('2x', '3x'), rule + rule]) {
+      expect(() => priceMetadata({ ...raw, sol: raw.sol + surcharge }, [])).toThrow(/long-context price contract/);
+    }
+    expect(priceMetadata(raw, [])[0].bands).toEqual([{ input: 2, read: 0.1, write: 2.5, output: 10, maxPrompt: 922000 }]);
   });
   it.each([
     ['missing family', overview.replace(' | Claude Haiku 5.5', '')],

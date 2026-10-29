@@ -37,7 +37,7 @@ import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.t
 import type { RoutingCache } from '../../mods/router/hooks/context.ts';
 
 export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null; defaultCachePolicy: boolean; billing: CodexBilling; cacheInput?: RequestShape }
-export interface CodexRequestFailure { stage: 'connect' | 'stream' | 'http' | 'sse'; elapsed_ms: number; status?: number }
+export interface CodexRequestFailure { stage: 'connect' | 'stream' | 'http' | 'sse' | 'eof'; elapsed_ms: number; status?: number }
 interface WorkerDispatch {
   parent: Session; prompt: string; tool: string; input: Obj; signal: AbortSignal;
   worktree: WorkerWorktree | null; startedAt: number; attempted: boolean;
@@ -474,7 +474,7 @@ export class CodexPolicy {
   }
   observeRequestFailure(id: string, submitted: CodexSubmission | undefined, failure?: CodexRequestFailure): void {
     if (!submitted) return;
-    this.trace?.write('codex_model_failure', { host: 'codex', session_id: id, prompt_id: submitted.prompt, request_id: submitted.requestId, reason: 'host_request_failed', ...(failure ? { failure_stage: failure.stage, elapsed_ms: failure.elapsed_ms, ...(failure.status !== undefined ? { http_status: failure.status } : {}) } : {}) });
+    this.trace?.write('codex_model_failure', { host: 'codex', session_id: id, prompt_id: submitted.prompt, request_id: submitted.requestId, reason: failure?.stage === 'eof' ? 'response_terminal_not_observed' : 'host_request_failed', ...(failure?.stage === 'eof' ? { usage: null } : {}), ...(failure ? { failure_stage: failure.stage, elapsed_ms: failure.elapsed_ms, ...(failure.status !== undefined ? { http_status: failure.status } : {}) } : {}) });
   }
   observeRequestCancellation(id: string, submitted: CodexSubmission | undefined): void {
     if (!submitted) return;
@@ -764,7 +764,13 @@ export class CodexPolicy {
     }
     if (!this.bypassHookTrust) return {};
     // This grant is scoped to this process and only exists when the user explicitly passes Codex's trust bypass flag.
-    const state = Object.fromEntries(jev.filter(h => h['enabled'] === true && obj(inherited[String(h['key'])])?.['enabled'] !== false).map(h => [String(h['key']), { ...(obj(inherited[String(h['key'])]) ?? {}), trusted_hash: h['currentHash'] }]));
+    const state = Object.fromEntries(jev.filter(h => h['enabled'] === true && obj(inherited[String(h['key'])])?.['enabled'] !== false).map(h => {
+      // Native hooks/list now combines declaration/content hashes, but config
+      // still stores them separately. Older hosts return only the declaration.
+      const hash = h['currentHash'];
+      const hashes = typeof hash === 'string' && /^sha256:[a-f0-9]{64}\/sha256:[a-f0-9]{64}$/.test(hash) ? hash.split('/') : null;
+      return [String(h['key']), { ...(obj(inherited[String(h['key'])]) ?? {}), trusted_hash: hashes?.[0] ?? hash, ...(hashes ? { trusted_content_hash: hashes[1] } : {}) }];
+    }));
     return { 'hooks.state': { ...inherited, ...state } };
   }
   private async agent(p: Obj): Promise<string> {

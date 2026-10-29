@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.8.70 — 2026-10-29 — Record Codex responses that end without a terminal event
+
+- Settle a fully observed clean SSE EOF without a terminal response against its exact model request. Record `response_terminal_not_observed` at stage `eof`, with unknown usage; distinguish it from upstream transport failure, HTTP/SSE errors, client cancellation and normal completion (#404).
+- Keep unsupported encoding, malformed or oversized events, invalid UTF-8, incomplete events and decompression errors unobserved. Drain received compressed data before deciding the outcome so a pending terminal event is not overwritten.
+- Apply the same EOF accounting to native streamed compaction and show a readable terminal-event reason in the dashboard. Preserve native response bytes/headers, permissions and zero inference retries.
+- Add a real native Codex differential regression for six direct/proxied completion, reset, client-disconnect and clean-EOF conditions. Keep the known Claude same-turn effort limitation tracked in #392; Claude routing policy is unchanged.
+
+## v0.8.69 — 2026-10-29 — Remove redundant Codex credential preflight
+
+- Send credentials in the authenticated local hook/agent request when the connection helper advertises support. Native hooks run in separate processes, so the previous process-local cache repeated a credential POST with an independent 500ms deadline before each healthy endpoint. Keep the old protocol for already-running older helpers, existing total deadlines and zero retries (#395).
+- Support Codex's separate declaration/content hook trust hashes when the caller explicitly enables the native trust bypass. Preserve normal approval requirements, disabled hooks and persistent trust settings (#401).
+- Read the current official Claude effort headings and OpenAI API prompt pricing labels without changing model, effort or price facts (#403).
+- Document the difference between a continuation effort proposal and the value applied by Claude Code 2.1.312. Keep the existing Claude routing policy and the original failing native regression; do not force host internals or claim same-turn effort changes are supported (#392).
+- Claude's same-user-turn effort limitation on 2.1.312 remains unresolved in #392. The separate clean EOF terminal-recording defect remains open in #404. This release does not claim to identify the stage of the historical #395 timeout or prevent every timeout.
+
 ## v0.8.68 — 2026-10-28 — Account for cancelled Codex requests
 
 - Settle client-disconnected Codex model requests with a distinct cancellation receipt tied to the exact request. Keep consumption unknown and display the interruption without inventing an upstream failure. Drain already-received compressed terminal events before deciding cancellation; duplicate terminals do not duplicate usage (#396).

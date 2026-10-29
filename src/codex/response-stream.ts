@@ -4,10 +4,12 @@ import type { Transform } from 'node:stream';
 import * as zlib from 'node:zlib';
 import { obj, type Obj } from './source.js';
 
+export type ResponseStreamEnd = 'eof' | 'unobserved';
+
 /** A bounded observation branch; native response bytes and headers stay untouched. */
-export const observeResponseStream = (response: IncomingMessage, completed: (response: Obj) => void, failed?: (response: Obj) => void, ended?: () => void): void => {
-  let finished = false;
-  const finish = (): void => { if (finished) return; finished = true; try { ended?.(); } catch { /* Observation only. */ } };
+export const observeResponseStream = (response: IncomingMessage, completed: (response: Obj) => void, failed?: (response: Obj) => void, ended?: (outcome: ResponseStreamEnd) => void): void => {
+  let finished = false; let observable = true;
+  const finish = (eof = false): void => { if (finished) return; finished = true; try { ended?.(eof && observable ? 'eof' : 'unobserved'); } catch { /* Observation only. */ } };
   const encoding = String(response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
   let inflate: Transform | undefined;
   if (encoding === 'gzip') inflate = zlib.createGunzip();
@@ -15,24 +17,31 @@ export const observeResponseStream = (response: IncomingMessage, completed: (res
   else if (encoding === 'br') inflate = zlib.createBrotliDecompress();
   else if (encoding === 'zstd') {
     const create = (zlib as unknown as { createZstdDecompress?: () => Transform }).createZstdDecompress;
-    if (!create) { response.once('close', finish); return; }
+    if (!create) { response.once('close', () => finish()); return; }
     inflate = create();
-  } else if (encoding !== 'identity') { response.once('close', finish); return; }
+  } else if (encoding !== 'identity') { response.once('close', () => finish()); return; }
   const source = inflate ?? response;
-  source.once('end', finish); source.once('close', finish);
   const decoder = new StringDecoder('utf8');
   const limit = 4 * 1024 * 1024;
   let line = ''; let data: string[] = []; let size = 0; let discarded = false; let skipLf = false;
+  source.once('end', () => {
+    // A dropped or unterminated event could contain the terminal response. Only a
+    // fully observed, clean EOF establishes that no terminal event arrived.
+    if (decoder.end() || line || data.length || discarded) observable = false;
+    finish(response.complete !== false);
+  });
+  source.once('close', () => finish());
   const newline = (): void => {
-    if (!line && !discarded) {
+    if (!line && !discarded && data.length) {
       try {
         const event = obj(JSON.parse(data.join('\n')));
-        if (event?.['type'] === 'response.completed') {
-          const value = obj(event['response']); if (value) completed(value);
+        if (!event || typeof event['type'] !== 'string') observable = false;
+        else if (event['type'] === 'response.completed') {
+          const value = obj(event['response']); if (value) completed(value); else observable = false;
         } else if (event?.['type'] === 'response.failed' || event?.['type'] === 'response.incomplete') {
-          const value = obj(event['response']); if (value) failed?.(value);
+          const value = obj(event['response']); if (value) failed?.(value); else observable = false;
         }
-      } catch { /* Unknown events and observer errors never affect native inference. */ }
+      } catch { observable = false; /* Observation loss never establishes provider failure. */ }
     }
     if (!line) { data = []; size = 0; discarded = false; }
     else if (!discarded && line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
@@ -40,6 +49,7 @@ export const observeResponseStream = (response: IncomingMessage, completed: (res
   };
   source.on('data', chunk => {
     const text = decoder.write(Buffer.from(chunk));
+    if (text.includes('\uFFFD')) observable = false;
     let start = 0;
     if (skipLf && text.startsWith('\n')) start = 1;
     if (text.length) skipLf = false;
@@ -47,7 +57,7 @@ export const observeResponseStream = (response: IncomingMessage, completed: (res
     let match: RegExpExecArray | null;
     const append = (value: string): void => {
       size += Buffer.byteLength(value);
-      if (size > limit) { discarded = true; data = []; }
+      if (size > limit) { observable = false; discarded = true; data = []; }
       // Keep a nonempty sentinel until the next empty line, without retaining oversized payloads.
       line = discarded ? (line || (value.length ? '!' : '')) : line + value;
     };

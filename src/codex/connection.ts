@@ -15,7 +15,7 @@ export const PROVIDER = 'jev-gate-native';
 /** A local capability, not an upstream credential. Never forwarded or recorded in traces. */
 export const connectionBaseUrl = (connection: Pick<Connection, 'port' | 'token'>): string => `http://127.0.0.1:${connection.port}/native/${connection.token}`;
 /** `marker` is carried over only from versions with Codex Compact, whose still-running readers require it. */
-export interface Connection { version: 1; pid: number; port: number; token: string; marker?: string; root: string; original: Obj; installed: Obj }
+export interface Connection { version: 1; pid: number; port: number; token: string; marker?: string; credentialsInRequest?: true; root: string; original: Obj; installed: Obj }
 /** The compact_prompt that versions with Codex Compact wrote. No other value is ever treated as theirs. */
 const LEGACY_COMPACT_PROMPT = /^\[jev-gate compact [0-9a-f]{48}\] Produce a factual compaction summary of the preceding conversation\.$/;
 const home = codexHome;
@@ -114,8 +114,17 @@ export const helperRequest = async (url: string, token: string, input: Obj, sign
 };
 export const connectionRequest = async (env: Env, path: '/hook' | '/agent', input: Obj, signal?: AbortSignal): Promise<HelperReply> => {
   const state = read(env); if (!state) return { ok: false, reason: 'state_missing', stage: 'state' };
-  try { await provision(state, env, signal); } catch (e) { return { ok: false, reason: stopped(e, 'unreachable', signal), stage: 'credentials' }; }
-  return helperRequest(`http://127.0.0.1:${state.port}${path}`, state.token, input, signal);
+  let token = state.token;
+  if (state.credentialsInRequest === true) {
+    // Native hooks are fresh processes, so a module-local provision cache cannot
+    // avoid a credential round trip on each hook. Carry it in local auth instead.
+    const key = resolveApiKey(env);
+    if (key) token += `.${Buffer.from(key).toString('base64url')}`;
+  } else {
+    // A still-running older helper has not advertised support for request auth.
+    try { await provision(state, env, signal); } catch (e) { return { ok: false, reason: stopped(e, 'unreachable', signal), stage: 'credentials' }; }
+  }
+  return helperRequest(`http://127.0.0.1:${state.port}${path}`, token, input, signal);
 };
 /** #287: every unanswered helper call leaves one failure row named by its closed reason, never by its exception or reply body. */
 export const recordConnectionFailure = (trace: TraceWriter | undefined, reason: ConnectionFailure, fields: Obj): boolean =>
@@ -200,7 +209,7 @@ export const serveConnection = async (root: string, env: Env): Promise<void> => 
   }
   writeFileSync(join(lock, 'pid'), String(process.pid), { mode: 0o600, flag: 'wx' });
   const previous = read(env);
-  const state: Connection = { version: 1, pid: process.pid, port: previous?.port ?? 0, token: previous?.token ?? randomBytes(32).toString('hex'), ...(previous?.marker ? { marker: previous.marker } : {}), root, original: {}, installed: {} };
+  const state: Connection = { version: 1, pid: process.pid, port: previous?.port ?? 0, token: previous?.token ?? randomBytes(32).toString('hex'), ...(previous?.marker ? { marker: previous.marker } : {}), credentialsInRequest: true, root, original: {}, installed: {} };
   let session: Awaited<ReturnType<typeof startCodexSession>> | undefined;
   let timer: NodeJS.Timeout | undefined;
   let closing = false;

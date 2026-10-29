@@ -1,4 +1,4 @@
-import { observeResponseStream } from './response-stream.js';
+import { observeResponseStream, type ResponseStreamEnd } from './response-stream.js';
 import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { CodexRpc } from './rpc.js';
-import { CodexPolicy } from './policy.js';
+import { CodexPolicy, type CodexRequestFailure } from './policy.js';
 import { codexCallerWorkspace } from './workspace.js';
 import { obj, type Obj } from './source.js';
 import type { Env } from '../config.js';
@@ -65,6 +65,16 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
     if (equal(req.url?.slice(0, prefix.length), prefix) && req.url?.[prefix.length] === '/') return req.url.slice(prefix.length);
     return equal(req.headers['x-jev-gate-session'], token) ? req.url ?? null : null;
   };
+  const localAuth = (header: unknown): boolean => {
+    if (equal(header, `Bearer ${token}`)) return true;
+    const prefix = `Bearer ${token}.`;
+    if (!options.connection || typeof header !== 'string' || !equal(header.slice(0, prefix.length), prefix)) return false;
+    const encoded = header.slice(prefix.length);
+    const key = Buffer.from(encoded, 'base64url').toString('utf8');
+    if (!key || key.length > 8192 || /[\r\n\0]/.test(key) || Buffer.from(key).toString('base64url') !== encoded) return false;
+    policy?.supplyKey(key);
+    return true;
+  };
   const server = createServer(async (req, res) => {
     try {
       const path = req.url?.split('?')[0];
@@ -86,7 +96,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ready: options.connection.ready?.() ?? !!policy })); return;
       }
       if (options.connection && path === '/agent' && req.method === 'POST') {
-        if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        if (!localAuth(req.headers.authorization)) { res.writeHead(401); res.end(); return; }
         if (restarting) { res.writeHead(503); res.end(); return; }
         active++; res.once('close', () => { active--; });
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
@@ -96,7 +106,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ output })); return;
       }
       if (req.url === '/hook' && req.method === 'POST') {
-        if (!equal(req.headers.authorization, `Bearer ${token}`)) { res.writeHead(401); res.end(); return; }
+        if (!localAuth(req.headers.authorization)) { res.writeHead(401); res.end(); return; }
         if (restarting) { res.writeHead(503); res.end(); return; }
         active++; res.once('close', () => { active--; });
         const input = obj(JSON.parse((await body(req, 2 * 1024 * 1024)).toString('utf8')));
@@ -176,12 +186,17 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           policy?.recordCompact(sessionId, compact, 'result', { model_request_id: submitted?.requestId ?? null, outcome: 'cancelled', usage: null, total_token_saving: 'unmeasured' });
         }
       };
-      const recordFailure = (stage: 'connect' | 'stream' | 'http' | 'sse'): void => {
+      const recordFailure = (stage: CodexRequestFailure['stage']): void => {
         if (requestTerminal) return; requestTerminal = true;
         if (sessionId) {
           policy?.observeRequestFailure(sessionId, submitted, { stage, elapsed_ms: Math.max(0, Math.round(performance.now() - sentAt)), ...(upstreamStatus !== undefined ? { status: upstreamStatus } : {}) });
-          if (compact && (nativeCompact || compact.applied) && !compactTerminal) { compactTerminal = true; policy?.recordCompact(sessionId, compact, 'result', { model_request_id: submitted?.requestId ?? null, outcome: 'failed', usage: null, total_token_saving: 'unmeasured' }); }
+          if (compact && (nativeCompact || compact.applied) && !compactTerminal) { compactTerminal = true; policy?.recordCompact(sessionId, compact, 'result', { model_request_id: submitted?.requestId ?? null, outcome: 'failed', ...(stage === 'eof' ? { reason: 'response_terminal_not_observed' } : {}), usage: null, total_token_saving: 'unmeasured' }); }
         }
+      };
+      const recordStreamEnd = (outcome: ResponseStreamEnd): void => {
+        if (requestTerminal) return;
+        if (clientDisconnected) recordCancellation();
+        else if (outcome === 'eof') recordFailure('eof');
       };
       const fail = (): void => {
         if (res.destroyed) { if (!observing) recordCancellation(); return; }
@@ -208,7 +223,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
           if (contentType.includes('text/event-stream') || route === '/responses' && !contentType.includes('application/json')) {
             if (nativeCompact) observing = true;
-            observeResponseStream(response, observed, value => observed(value, true), nativeCompact ? recordCancellation : undefined);
+            observeResponseStream(response, observed, value => observed(value, true), nativeCompact ? recordStreamEnd : undefined);
           }
           else {
             const chunks: Buffer[] = []; let bytes = 0;
@@ -226,7 +241,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
             // A failed/incomplete SSE is a terminal response too, and may carry usage.
             if (requestTerminal) return;
             policy?.observeUsage(sessionId, value, submitted); recordFailure('sse');
-          }, recordCancellation);
+          }, recordStreamEnd);
         }
       });
       requests.add(upstream); upstream.once('close', () => requests.delete(upstream));
