@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { offerRoute, selectPair, keepModelPair, pairReceipt, type PairPatch, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
+import { offerRoute, selectPair, pairReceipt, type PairPatch, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
 import { routingContext, type RoutingCache } from '../../mods/router/hooks/context.ts';
 import { looksSecret } from '../../mods/router/hooks/secret.ts';
 import { MAX_REQUEST_TOKENS, estimateTokens } from '../../mods/router/hooks/client.ts';
 import { callJev } from '../jev.js';
-import { costHold } from '../route-cost.js';
 import { codexRouteCost, type CodexBilling } from './route-cost.js';
 import type { ModelCache } from '../cost.js';
 import type { Env } from '../config.js';
@@ -106,14 +105,13 @@ export const routeCodex = async (args: {
   const out = await callJev(request, { apiKey: env['TYPESAFE_API_KEY'], deadlineMs: config.router.timeoutMs, ...(signal ? { signal } : {}), ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}) });
   const decision = out.ok && out.response.model === config.gate.jevModel && !signal?.aborted ? selectPair(offer, out.response.answers) : { patch: {} as PairPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
   if (moved && !decision.patch.model) { decision.patch = { ...decision.patch, model: moved }; decision.reasons.model = 'superseded_baseline'; }
-  // A thread not yet observed still has a conversation the next turn may return to.
+  // Cost scenarios are diagnostics, not authorization. Unknown billing/cache economics used to veto
+  // valid model choices, permanently retaining Sol on the managed turn/start path (#399).
   const cost = decision.patch.model && decision.patch.model !== moved ? codexRouteCost(model, decision.patch.model, args.billing ?? 'unknown', args.serviceTier, args.modelCache, args.epoch ?? '', Date.now(), args.child ? 1 : estimateTokens(args.task), args.cachePolicy) : null;
-  const { hold, reason: costReason } = costHold(cost, offer.baselineCandidate?.rank, offer.candidates.find(c => c.id === decision.patch.model)?.rank);
-  if (hold && out.ok) { decision.patch = { ...keepModelPair(offer, out.response.answers).patch, ...native }; decision.reasons.model = costReason; }
   write('codex_router_result', { ...diagnostic, attempted: true, duration_ms: out.durationMs, ok: out.ok,
     reason: out.ok ? signal?.aborted ? 'aborted' : out.response.model !== config.gate.jevModel ? 'model_mismatch' : null : out.code,
     http: { duration_ms: out.durationMs, code: out.ok ? 'ok' : out.code }, jev: out.ok ? { model: out.response.model, usage: out.response.usage } : null,
     selected_model: decision.patch.model ?? args.model, selected_effort: decision.patch.effort ?? (decision.patch.effortEdit?.kind === 'omit' ? null : args.effort), effort_edit: decision.patch.effortEdit ?? { kind: 'keep' },
-    cost, cost_reason: costReason, reasons: decision.reasons, selection: decision.diagnostics, answers: out.ok ? pairReceipt(offer, out.response.answers) : {}, ...(out.ok ? { usage: out.response.usage, returned_model: out.response.model } : {}), applied: false });
+    cost: cost ? { ...cost, authorization: 'diagnostic_only' } : null, cost_reason: cost ? 'diagnostic_only' : 'not_checked', reasons: decision.reasons, selection: decision.diagnostics, answers: out.ok ? pairReceipt(offer, out.response.answers) : {}, ...(out.ok ? { usage: out.response.usage, returned_model: out.response.model } : {}), applied: false });
   return decision.patch;
 };

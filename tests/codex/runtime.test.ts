@@ -179,7 +179,7 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       router: { model: rootPair || ['routing-model-luna', 'routing-auto-model'].includes(scenario), ...(scenario === 'routing-auto-model' ? { allowAstra: true } : {}) },
     }));
     const profiles=Object.fromEntries(['worker-fast','worker','worker-deep','worker-frontier'].map(n=>[`jev-gate:${n}`,readFileSync(join(root,'agents',n+'.md'),'utf8').replace(/^---[\s\S]*?---\s*/, '')]));
-    const session = await startCodexSession({ cwd: workspace, env: { ...runtimeEnv, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), bypassHookTrust: true, nativeAuth: false, profiles,
+    const session = await startCodexSession({ cwd: workspace, env: { ...runtimeEnv, PATH:`${join(workspace,'.bin')}:${process.env['PATH'] ?? ''}`, JEV_CODEX_CONFIG:policyFile, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(tmp, `managed ${scenario} state`), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`, TYPESAFE_API_KEY: 'fixture-key' }, serverArgs: config.flatMap(c => ['-c', c]), nativeAuth: false, profiles,
       fetchImpl: (async (_url, init) => {
         const parsed=JSON.parse(String(init?.body)); const q = parsed.questions;
         const bounded = scenario === 'bounded-lookup' && JSON.stringify(parsed.state).includes('runtimeNeedle');
@@ -197,21 +197,25 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
       }
       await opened;
       await call('initialize', { clientInfo: {name:'jev-test',version:'1'}, capabilities: {experimentalApi:true} }); socket.send(JSON.stringify({method:'initialized'}));
+      const hookList=await call('hooks/list',{cwds:[workspace]});
+      // Codex 0.165 verifies plugin content hashes even with the legacy bypass flag.
+      // Trust only this disposable installation, using the native config operation.
+      const hooks = (hookList['data'] as Array<{ hooks: Rec[] }>).flatMap(v => v.hooks).filter(h => h['source'] === 'plugin');
+      await call('config/batchWrite', { edits: hooks.map(h => ({ keyPath: `hooks.state.${JSON.stringify(h['key'])}`, value: { trusted_hash: h['currentHash'] }, mergeStrategy: 'upsert' })) });
       const started=await call('thread/start',{cwd:workspace,model:baselineModel,approvalPolicy:'never',sandbox:scenario==='edit-after-check'?'workspace-write':'read-only',ephemeral:true});
       const id=String((started['thread'] as Rec)['id']);
-      const hookList=await call('hooks/list',{cwds:[workspace]});
       await call('turn/start',{threadId:id,collaborationMode:{mode:'default',settings:{model:baselineModel,reasoning_effort:baselineEffort,developer_instructions:null}},input:[{type:'text',text:'Explain the fixture. Preserve the userConstraintNeedle verbatim.',text_elements:[]}]});
       const until=Date.now()+20000; while(!messages.some(m=>m['method']==='turn/completed') && Date.now()<until) await new Promise(r=>setTimeout(r,20));
       expect(messages.some(m=>m['method']==='turn/completed'),JSON.stringify(messages)).toBe(true);
-      expect(requests.length).toBe(1);
+      expect(requests.length, JSON.stringify(messages.filter(m => ['error', 'hook/completed'].includes(String(m['method']))))).toBe(1);
       expect(JSON.stringify(requests[0])).toContain('jev_agent');
       expect(JSON.stringify(requests[0])).toContain('Jev Gate');
       const rows=readdirSync(trace).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(trace,f),'utf8')) as Rec);
       if (rootPair) {
-        // A downgrade on a thread with no observed usage is held: its prefix may cost more than the cheaper model saves.
+        // Native model selection must survive missing billing/cache estimates.
         const downgrade=scenario.endsWith('model') || scenario.endsWith('both');
-        expect(requests[0]!['model']).toBe(baselineModel);
-        expect(rows.some(r=>r['phase']==='codex_router_result' && r['cost_reason']===(downgrade?'cost_unknown_hold':'not_checked')),JSON.stringify(rows)).toBe(true);
+        expect(requests[0]!['model']).toBe(downgrade ? 'gpt-6-luna' : baselineModel);
+        expect(rows.some(r=>r['phase']==='codex_router_result' && r['cost_reason']===(downgrade?'diagnostic_only':'not_checked')),JSON.stringify(rows)).toBe(true);
         expect((requests[0]!['reasoning'] as Rec)['effort']).toBe(targetEffort);
         expect(session.policy.sessions.size).toBe(1);
         expect(rows.filter(r=>r['phase']==='codex_router_intent')).toHaveLength(1);
@@ -222,8 +226,8 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         const wireEffort = (requests[0]!['reasoning'] as Rec)['effort'];
         if (targetEffort === 'ultra') expect(['low', 'medium', 'high', 'xhigh', 'max']).toContain(wireEffort);
         else expect(wireEffort).toBe(targetEffort);
-        expect(requests[0]!['model']).toBe(scenario === 'routing-auto-model' ? 'gpt-6-astra' : baselineModel);
-        if (scenario === 'routing-model-luna') expect(rows.some(r => r['phase'] === 'codex_router_result' && r['cost_reason'] === 'cost_unknown_hold'), JSON.stringify(rows)).toBe(true);
+        expect(requests[0]!['model']).toBe(scenario === 'routing-auto-model' ? 'gpt-6-astra' : scenario === 'routing-model-luna' ? 'gpt-6-luna' : baselineModel);
+        if (scenario === 'routing-model-luna') expect(rows.some(r => r['phase'] === 'codex_router_result' && r['cost_reason'] === 'diagnostic_only'), JSON.stringify(rows)).toBe(true);
         expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === targetEffort && r['observed_host_effort'] === targetEffort && r['submitted_effort'] === wireEffort && r['observed_effort'] === 'unknown' && r['applied'] === true), JSON.stringify(rows)).toBe(true);
         return;
       }

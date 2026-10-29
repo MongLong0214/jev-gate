@@ -145,14 +145,14 @@ describe('Codex ordered routing and recorded application', () => {
       expect(fetchImpl).toHaveBeenCalledOnce();
     }
   });
-  it.each(['Fixture-E', 'Fixture-F'])('selects %s outside four role preferences, including an unknown baseline, and holds the unpriced switch', async target => {
+  it.each(['Fixture-E', 'Fixture-F'])('selects %s outside four role preferences without making unknown prices a veto', async target => {
     const native = ['Fixture-A', 'Fixture-B', 'Fixture-C', 'Fixture-D', 'Fixture-E', 'Fixture-F'].map(model => ({ model, description: 'General coding model', supportedReasoningEfforts: ['low', 'high', 'max'].map(reasoningEffort => ({ reasoningEffort })) }));
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => { const req = JSON.parse(String(init?.body)); expect(Object.keys(req.questions.model.criteria)).toContain(target); return response({ model: req.model, answers: answersFor(req, target, 'max') }); });
     const rows: Obj[] = [];
-    // No published price for either side: the switch's cost is unknown, so the model stays, with the effort it had (an unlisted model's levels are unknown).
+    // Prices are diagnostics. The accessible target's actual effort contract owns the selected pair.
     expect(await routeCodex({ model: 'outside-role-mapping', effort: 'high', task: 'task', session: 's', prompt: 'p', catalog: native, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl,
-      trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({});
-    expect(rows.at(-1)).toMatchObject({ answers: { model: { choice: target } }, cost: { basis: 'unknown', actual_bill: 'unknown', hold: true }, cost_reason: 'cost_unknown_hold', reasons: { model: 'cost_unknown_hold' } });
+      trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({ model: target, effort: 'max', effortEdit: { kind: 'set', value: 'max' } });
+    expect(rows.at(-1)).toMatchObject({ answers: { model: { choice: target } }, cost: { basis: 'unknown', actual_bill: 'unknown', authorization: 'diagnostic_only' }, cost_reason: 'diagnostic_only', selected_model: target });
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
   // Descriptions as this account's catalog lists them (~/.codex/models_cache.json, 2026-10-15).
@@ -218,9 +218,9 @@ describe('Codex ordered routing and recorded application', () => {
     expect(catalogTierModels('gpt-6-sol', listedFirst)).toEqual({ fast: 'gpt-6-luna', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6-astra' });
     const rows: Obj[] = [];
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => { const req = JSON.parse(String(init?.body)); return response({ model: req.model, answers: answersFor(req, 'mechanical') }); });
-    // An unobserved thread's prefix is unknown, and Luna's write (0.125/M) exceeds Sol's read (0.1/M) at any size: the picked downgrade is held.
-    expect(await routeCodex({ model: 'gpt-6.1-sol', effort: 'medium', task: 'Rename a symbol.', session: 's', prompt: 'p', catalog: account, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl, trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({ effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
-    expect(rows.at(-1)).toMatchObject({ excluded: { superseded: 3 }, selection: { roles: [{ option: 'mechanical', model: 'gpt-6-luna' }, { option: 'routine', model: 'gpt-6-luna' }, { option: 'complex', model: 'gpt-6.1-sol' }] }, cost_reason: 'cost_unknown_hold', reasons: { model: 'cost_unknown_hold' } });
+    // Unknown billing and cache residency do not undo a valid capability/effort decision.
+    expect(await routeCodex({ model: 'gpt-6.1-sol', effort: 'medium', task: 'Rename a symbol.', session: 's', prompt: 'p', catalog: account, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl, trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({ model: 'gpt-6-luna', effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
+    expect(rows.at(-1)).toMatchObject({ excluded: { superseded: 3 }, selection: { roles: [{ option: 'mechanical', model: 'gpt-6-luna' }, { option: 'routine', model: 'gpt-6-luna' }, { option: 'complex', model: 'gpt-6.1-sol' }] }, cost_reason: 'diagnostic_only', selected_model: 'gpt-6-luna' });
   });
   const superseded = async (model: string, kind: string, extra: Partial<Parameters<typeof routeCodex>[0]> = {}) => {
     const rows: Obj[] = [];
@@ -237,9 +237,9 @@ describe('Codex ordered routing and recorded application', () => {
     const kept = await superseded('gpt-6-sol', 'complex', extra);
     expect(kept.patch).toEqual({ model: 'gpt-6.1-sol', effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
     expect(kept.rows.at(-1)).toMatchObject({ scope: child ? 'child' : 'root', baseline_model: 'gpt-6-sol', superseded_baseline: { from: 'gpt-6-sol', to: 'gpt-6.1-sol' }, reasons: { model: 'superseded_baseline' } });
-    // A held downgrade still leaves the superseded baseline for its successor.
+    // A valid downgrade is not replaced by the deterministic successor.
     const held = await superseded('gpt-6-sol', 'mechanical', extra);
-    expect(held.patch).toMatchObject({ model: 'gpt-6.1-sol' }); expect(held.rows.at(-1)).toMatchObject({ cost_reason: 'cost_unknown_hold' });
+    expect(held.patch).toMatchObject({ model: 'gpt-6-luna' }); expect(held.rows.at(-1)).toMatchObject({ cost_reason: 'diagnostic_only' });
     expect((await superseded('gpt-5.6-sol', 'failed', extra)).patch).toEqual({ model: 'gpt-6.1-sol' });
     const missing = await superseded('gpt-6-sol', 'key_missing', extra);
     expect(missing.patch).toEqual({ model: 'gpt-6.1-sol' }); expect(missing.fetchImpl).not.toHaveBeenCalled();

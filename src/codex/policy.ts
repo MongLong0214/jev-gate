@@ -49,7 +49,7 @@ interface WorkerDispatch {
 }
 interface InferenceRoute {
   index: number; model: string; effort: string | null; patch: PairPatch;
-  billing?: string; config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void>;
+  config?: string; catalogEpoch?: number; settingsEpoch?: number; pending?: Promise<void>;
 }
 interface Session {
   id: string; settings: Obj; baseline: { model: string; effort: string | null }; policy: CodexPolicyConfig;
@@ -60,7 +60,6 @@ interface Session {
   requestKind?: 'root_response' | 'child_response';
   eligible?: boolean; terminal?: boolean;
   role?: string; parent?: string; done?: (turn: Obj) => void; route?: PairPatch; routePending?: Promise<void>; routeDeadline?: number; routeConfig?: string;
-  routeBilling?: string;
   managedRoute?: { prompt: string; config: string; catalogEpoch: number };
   previousReply?: string; completedReply?: string; turnReply?: string; lastSubmitted?: CodexSubmission;
   starting?: { prompt: string; controller: AbortController };
@@ -289,18 +288,13 @@ export class CodexPolicy {
     const model = request['model']; const effort = obj(request['reasoning'])?.['effort'];
     if (typeof model !== 'string') return { request };
     const cachePolicy = request['prompt_cache_options'] !== undefined || request['prompt_cache_retention'] !== undefined ? [request['prompt_cache_options'], request['prompt_cache_retention']] : undefined;
-    const billingKey = JSON.stringify([billing, request['service_tier'] ?? null, cachePolicy]);
     const key = createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex');
-    if ((session.routed === session.prompt || session.routePending) && session.routeBilling !== billingKey) {
-      session.routeBilling = 'changed'; delete session.route;
-    }
     if (session.routed !== session.prompt && !session.routePending) {
       session.baseline = { model, effort: typeof effort === 'string' ? effort : null };
       session.rootInput = key;
       session.rootRoutes = new Map([[key, { index: 0, ...session.baseline, patch: {} }]]);
       const prompt = session.prompt;
       session.routed = prompt;
-      session.routeBilling = billingKey;
       session.routeDeadline = Date.now() + session.policy.router.timeoutMs;
       const deadline = session.routeDeadline;
       const task = session.task; const previousReply = session.previousReply; const baseline = { ...session.baseline };
@@ -324,15 +318,14 @@ export class CodexPolicy {
           config: { ...config, router: { ...config.router, timeoutMs: remaining } }, env: this.env,
           ...(this.trace ? { trace: this.trace } : {}), signal: requestController ? AbortSignal.any([signal, requestController.signal]) : signal,
           ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
-        if (!signal.aborted && !requestController?.signal.aborted && session.prompt === prompt && this.catalogEpoch === epoch && session.routeBilling === billingKey) { session.route = patch; session.routed = prompt; }
+        if (!signal.aborted && !requestController?.signal.aborted && session.prompt === prompt && this.catalogEpoch === epoch) { session.route = patch; session.routed = prompt; }
       })().finally(() => { if (session.routePending === pending) delete session.routePending; });
       session.routePending = pending;
     }
     if (session.routePending) await session.routePending;
     if (signal.aborted || requestController?.signal.aborted || session.prompt !== requestPrompt) throw new Error('interrupted policy');
-    if (key !== session.rootInput) return this.rootContinuation(session, request, signal, originator, billing, billingKey, cachePolicy);
+    if (key !== session.rootInput) return this.rootContinuation(session, request, signal, originator, billing, cachePolicy);
     const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
-    if (session.routeBilling !== billingKey) delete session.route;
     if (session.routeConfig !== JSON.stringify(current.router)) delete session.route;
     const nativeEffort = typeof effort === 'string' ? effort : null;
     // A plugin-applied value is not a manual edit. A genuinely new native value wins for this turn.
@@ -361,7 +354,7 @@ export class CodexPolicy {
     }
     return model !== session.baseline.model || effort !== session.baseline.effort;
   }
-  private async rootContinuation(session: Session, request: Obj, signal: AbortSignal, originator: unknown, billing: CodexBilling, billingKey: string, cachePolicy: unknown): Promise<{ request: Obj }> {
+  private async rootContinuation(session: Session, request: Obj, signal: AbortSignal, originator: unknown, billing: CodexBilling, cachePolicy: unknown): Promise<{ request: Obj }> {
     const model = String(request['model']), effort = obj(request['reasoning'])?.['effort'];
     const nativeEffort = typeof effort === 'string' ? effort : null;
     const prompt = session.prompt!, controller = session.controller, sourceEpoch = session.epoch;
@@ -378,9 +371,9 @@ export class CodexPolicy {
         return { request };
       }
       const config = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog), epoch = this.catalogEpoch;
-      const compatible = !session.rootNativeChanged && session.routeBilling === billingKey && session.routeConfig === JSON.stringify(config.router);
+      const compatible = !session.rootNativeChanged && session.routeConfig === JSON.stringify(config.router);
       // The first decision covers the whole contract. Never carry a next-inference-only patch into another step.
-      step = { index: steps.size, model, effort: nativeEffort, patch: compatible ? session.route ?? {} : {}, billing: billingKey,
+      step = { index: steps.size, model, effort: nativeEffort, patch: compatible ? session.route ?? {} : {},
         config: JSON.stringify(config.router), catalogEpoch: epoch, settingsEpoch: session.settingsEpoch ?? 0 };
       steps.set(key, step);
       const context = !request['previous_response_id'] ? rootStepContext(request['input'], session.task!) : null;
@@ -400,13 +393,12 @@ export class CodexPolicy {
         })().catch(() => { owned.patch = {}; }).finally(() => { delete owned.pending; });
       } else this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: prompt, scope: 'root', index: step.index, reason: 'root_continuation_context_unavailable', known_not_sent: true });
     }
-    if (step.billing !== billingKey) { step.billing = 'changed'; step.patch = {}; }
     if (step.pending) await step.pending;
     if (signal.aborted || controller?.signal.aborted || session.prompt !== prompt || session.epoch !== sourceEpoch || this.sessions.get(session.id) !== session) throw new Error('interrupted policy');
     const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
     const target = step.patch.model ?? model, candidate = codexCandidates(this.catalog, current.router.allowAstra, model).find(c => c.id === target);
     const selectedEffort = step.patch.effortEdit?.kind === 'omit' ? null : step.patch.effort ?? nativeEffort;
-    const valid = !session.rootNativeChanged && (nativePair(step) || selectedPair(step)) && session.routeBilling === billingKey && step.billing === billingKey &&
+    const valid = !session.rootNativeChanged && (nativePair(step) || selectedPair(step)) &&
       this.env['JEV_CODEX_ENABLED'] !== '0' && current.router.enabled && step.config === JSON.stringify(current.router) &&
       step.catalogEpoch === this.catalogEpoch && step.settingsEpoch === (session.settingsEpoch ?? 0) && candidate &&
       (!step.patch.model || codexTargetAllowed(target, current.router.allowAstra) && this.catalog.some(m => m.model === target && generalCodexModel(m)) &&
@@ -423,7 +415,6 @@ export class CodexPolicy {
     const model = request['model'], effort = obj(request['reasoning'])?.['effort'];
     const nativeEffort = typeof effort === 'string' ? effort : null;
     const cachePolicy = request['prompt_cache_options'] !== undefined || request['prompt_cache_retention'] !== undefined ? [request['prompt_cache_options'], request['prompt_cache_retention']] : undefined;
-    const billingKey = JSON.stringify([billing, request['service_tier'] ?? null, cachePolicy]);
     const key = createHash('sha256').update(JSON.stringify([session.epoch, requestStepKey(request)])).digest('hex');
     const steps = session.stepRoutes ??= new Map();
     let step = steps.get(key);
@@ -433,7 +424,7 @@ export class CodexPolicy {
         this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: null, reason: 'child_step_limit', known_not_sent: true });
         return { request };
       }
-      step = { index: session.stepIndex === undefined ? 0 : session.stepIndex + 1, model, effort: nativeEffort, patch: {}, billing: billingKey }; steps.set(key, step); session.stepIndex = step.index;
+      step = { index: session.stepIndex === undefined ? 0 : session.stepIndex + 1, model, effort: nativeEffort, patch: {} }; steps.set(key, step); session.stepIndex = step.index;
       if (step.index > 0) {
         const context = workerStepContext(request['input']);
         const opaque = !!request['previous_response_id'] || Array.isArray(request['input']) && request['input'].some((raw: unknown) => { const item = obj(raw); return item?.['type'] === 'reasoning' && typeof item['encrypted_content'] === 'string'; });
@@ -453,16 +444,14 @@ export class CodexPolicy {
               ...(this.trace ? { trace: this.trace } : {}), signal: AbortSignal.any([signal, d.signal]), ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}) });
             // Exact owner, catalog and source epoch must still match after HTTP; permissions stay native.
             const target = patch.model;
-            if (!d.ended && !signal.aborted && !d.signal.aborted && owned.billing === billingKey && this.sessions.get(session.id) === session && this.catalogEpoch === epoch && session.epoch === sourceEpoch &&
+            if (!d.ended && !signal.aborted && !d.signal.aborted && this.sessions.get(session.id) === session && this.catalogEpoch === epoch && session.epoch === sourceEpoch &&
               (!target || providerContextLimit('codex', target) !== null && bound <= providerContextLimit('codex', target)! && this.catalog.some(m => m.model === target && generalCodexModel(m)) && codexTargetAllowed(target, config.router.allowAstra))) owned.patch = patch;
           })().catch(() => undefined).finally(() => { delete owned.pending; });
         } else this.trace?.write('codex_router_skipped', { host: 'codex', session_id: session.id, prompt_id: session.prompt, scope: 'child', agent_id: session.id, index: step.index, reason: 'child_context_unavailable', known_not_sent: true });
       }
     }
-    if (step.billing !== billingKey) { step.billing = 'changed'; step.patch = {}; }
     if (step.pending) await step.pending;
     if (signal.aborted || d.signal.aborted || d.ended || session.controller?.signal.aborted || this.sessions.get(session.id) !== session || model !== step.model || nativeEffort !== step.effort) return { request };
-    if (step.billing !== billingKey) { step.billing = 'changed'; step.patch = {}; }
     if (Object.keys(step.patch).length) {
       const current = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: model }, this.catalog);
       const target = step.patch.model ?? model;
