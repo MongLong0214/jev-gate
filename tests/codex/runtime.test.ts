@@ -228,7 +228,8 @@ describe.skipIf(!required)('real Codex native plugin runtime', () => {
         else expect(wireEffort).toBe(targetEffort);
         expect(requests[0]!['model']).toBe(scenario === 'routing-auto-model' ? 'gpt-6-astra' : scenario === 'routing-model-luna' ? 'gpt-6-luna' : baselineModel);
         if (scenario === 'routing-model-luna') expect(rows.some(r => r['phase'] === 'codex_router_result' && r['cost_reason'] === 'diagnostic_only'), JSON.stringify(rows)).toBe(true);
-        expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === targetEffort && r['observed_host_effort'] === targetEffort && r['submitted_effort'] === wireEffort && r['observed_effort'] === 'unknown' && r['applied'] === true), JSON.stringify(rows)).toBe(true);
+        const selectedEffort = scenario === 'routing-model-luna' ? 'max' : targetEffort;
+        expect(rows.some(r => r['phase'] === 'codex_route_applied' && r['selected_effort'] === selectedEffort && r['observed_host_effort'] === selectedEffort && r['submitted_effort'] === wireEffort && r['observed_effort'] === 'unknown' && r['applied'] === true), JSON.stringify(rows)).toBe(true);
         return;
       }
       expect((requests[0]!['reasoning'] as Rec)['effort'],JSON.stringify(rows)).toBe('low');
