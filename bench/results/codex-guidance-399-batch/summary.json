@@ -1,0 +1,1251 @@
+{
+  "scope": "Codex Router ON official v0.8.68 vs #399 with explicit native discovery/check batching; Gate/Compact OFF; six reused development tasks, two paired repetitions; not held-out; all planned outcomes retained",
+  "plan_sha256": "b77894b789de9a6d46fd9a835005617c714340b08c92eb269f349cbf4060c64e",
+  "sources": {
+    "before": "official v0.8.68 with export-only instrumentation",
+    "after": "#399 source plus explicit batching instructions",
+    "baseline_commit": "d2faa8f3a532de61a5b296de24c295bea7b0151f",
+    "sha256": {
+      "before.mjs": "70199c27ce2356b55ebec6f90ab11dbdb308826cb2988f98d6278d2f38d5e458",
+      "after.mjs": "613903fb1d4df9fa43bb6cdbeff7a989b35b9b7329a9777bb8adaeab6a258297",
+      "plan.json": "b77894b789de9a6d46fd9a835005617c714340b08c92eb269f349cbf4060c64e",
+      "candidate.patch": "ff1ab3bb6f0bd246ae8e34108352264cd10541c77f50fd8bdbd40ee4b9e2f604",
+      "run.mjs": "de2dd4fad90cb9071ebcf525ed277cac142ad99200b7c5cf32f835af97fc8e1b"
+    },
+    "candidate_commit": "2b836fa5c5fe7d9ea995f0b1b1ef78163d78df60"
+  },
+  "stop": {
+    "reason": "User requested minimal benchmarking and cancellation of repeated 24-cell runs",
+    "at": "2026-10-29T01:14:14.093750+00:00",
+    "unknown_usage_remains_unknown": true
+  },
+  "comparison": {
+    "planned": 24,
+    "finished": 20,
+    "complete_usage": 19,
+    "quality_pass": 19,
+    "arms": {
+      "before": {
+        "provider_tokens": null,
+        "jev_input": null,
+        "jev_output": null,
+        "jev_tokens": null,
+        "total_tokens": null,
+        "provider_requests": null,
+        "provider": {
+          "input": null,
+          "read": null,
+          "write": null,
+          "output": null,
+          "thinking": null
+        },
+        "tools": {
+          "calls": null,
+          "results": null,
+          "failures": null,
+          "unfinished": null
+        },
+        "wall_s": null,
+        "host_api_equivalent_cost_usd": null,
+        "jev_input_list_cost_usd": null,
+        "quality_pass": 10
+      },
+      "after": {
+        "provider_tokens": null,
+        "jev_input": null,
+        "jev_output": null,
+        "jev_tokens": null,
+        "total_tokens": null,
+        "provider_requests": null,
+        "provider": {
+          "input": null,
+          "read": null,
+          "write": null,
+          "output": null,
+          "thinking": null
+        },
+        "tools": {
+          "calls": null,
+          "results": null,
+          "failures": null,
+          "unfinished": null
+        },
+        "wall_s": null,
+        "host_api_equivalent_cost_usd": null,
+        "jev_input_list_cost_usd": null,
+        "quality_pass": 9
+      }
+    },
+    "pairs": [
+      {
+        "task": "atomic-ledger",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": 30.3678207464399,
+        "delta": -44996,
+        "before": 148170,
+        "after": 103174
+      },
+      {
+        "task": "atomic-ledger",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": 19.83597056044715,
+        "delta": -24984,
+        "before": 125953,
+        "after": 100969
+      },
+      {
+        "task": "bounded-map",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": 37.87075311671415,
+        "delta": -45991,
+        "before": 121442,
+        "after": 75451
+      },
+      {
+        "task": "bounded-map",
+        "rep": 2,
+        "complete": false,
+        "quality_both": false
+      },
+      {
+        "task": "csv-records",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -1.6674658157107192,
+        "delta": 2017,
+        "before": 120962,
+        "after": 122979
+      },
+      {
+        "task": "csv-records",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -26.910670104707123,
+        "delta": 25778,
+        "before": 95791,
+        "after": 121569
+      },
+      {
+        "task": "dependency-order",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": 18.89277141877439,
+        "delta": -23141,
+        "before": 122486,
+        "after": 99345
+      },
+      {
+        "task": "dependency-order",
+        "rep": 2,
+        "complete": false,
+        "quality_both": false
+      },
+      {
+        "task": "interval-subtract",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -2.4071455309237617,
+        "delta": 2315,
+        "before": 96172,
+        "after": 98487
+      },
+      {
+        "task": "interval-subtract",
+        "rep": 2,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -2.587222332252718,
+        "delta": 2482,
+        "before": 95933,
+        "after": 98415
+      },
+      {
+        "task": "lru-expiry",
+        "rep": 1,
+        "complete": true,
+        "quality_both": true,
+        "saving_pct": -1.4477585906157335,
+        "delta": 1826,
+        "before": 126126,
+        "after": 127952
+      },
+      {
+        "task": "lru-expiry",
+        "rep": 2,
+        "complete": false,
+        "quality_both": false
+      }
+    ],
+    "saving_pct": null,
+    "provider_only_saving_pct": null,
+    "paired_wins": 4,
+    "paired_losses": 5,
+    "median_paired_saving_pct": -1.4477585906157335,
+    "task_aggregates": [
+      {
+        "task": "atomic-ledger",
+        "complete": true,
+        "saving_pct": 25.528686027805037,
+        "quality_both": true,
+        "before": 274123,
+        "after": 204143
+      },
+      {
+        "task": "bounded-map",
+        "complete": false,
+        "saving_pct": null,
+        "quality_both": false,
+        "before": null,
+        "after": null
+      },
+      {
+        "task": "csv-records",
+        "complete": true,
+        "saving_pct": -12.8233519259249,
+        "quality_both": true,
+        "before": 216753,
+        "after": 244548
+      },
+      {
+        "task": "dependency-order",
+        "complete": false,
+        "saving_pct": null,
+        "quality_both": false,
+        "before": null,
+        "after": null
+      },
+      {
+        "task": "interval-subtract",
+        "complete": true,
+        "saving_pct": -2.497071913797142,
+        "quality_both": true,
+        "before": 192105,
+        "after": 196902
+      },
+      {
+        "task": "lru-expiry",
+        "complete": false,
+        "saving_pct": null,
+        "quality_both": false,
+        "before": null,
+        "after": null
+      }
+    ],
+    "off_reported_token_lower_bound": null,
+    "on_exact_tokens_for_lower_bound": null,
+    "saving_pct_lower_bound": null,
+    "token_saving_lower_bound": null,
+    "host_failures": 1,
+    "unknown_usage_cells": 1,
+    "claim": "stopped_by_user_no_full_plan_savings_claim"
+  },
+  "complete_pair_partial_subtotal": {
+    "pairs": 9,
+    "before": 1053035,
+    "after": 948341,
+    "saving_pct": 9.942119682631631,
+    "wins": 4,
+    "losses": 5,
+    "claim": "Descriptive partial subtotal only; the planned comparison is incomplete."
+  },
+  "cells": [
+    {
+      "id": "codex-interval-subtract-1-before",
+      "status": "finished",
+      "task": "interval-subtract",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 12008,
+        "read": 78080,
+        "write": 0,
+        "output": 2077,
+        "thinking": 152
+      },
+      "provider_tokens": 92165,
+      "reported_provider_tokens": 92165,
+      "jev_tokens": 4007,
+      "total_tokens": 96172,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 92165
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3804,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-interval-subtract-1-after",
+      "status": "finished",
+      "task": "interval-subtract",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 31206,
+        "read": 61056,
+        "write": 0,
+        "output": 2218,
+        "thinking": 119
+      },
+      "provider_tokens": 94480,
+      "reported_provider_tokens": 94480,
+      "jev_tokens": 4007,
+      "total_tokens": 98487,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 3,
+        "results": 3,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 94480
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3804,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-1-after",
+      "status": "finished",
+      "task": "atomic-ledger",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 34175,
+        "read": 61056,
+        "write": 0,
+        "output": 3884,
+        "thinking": 440
+      },
+      "provider_tokens": 99115,
+      "reported_provider_tokens": 99115,
+      "jev_tokens": 4059,
+      "total_tokens": 103174,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 99115
+      },
+      "efforts_requests": {
+        "high": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-1-before",
+      "status": "finished",
+      "task": "atomic-ledger",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 49156,
+        "read": 91520,
+        "write": 0,
+        "output": 3435,
+        "thinking": 742
+      },
+      "provider_tokens": 144111,
+      "reported_provider_tokens": 144111,
+      "jev_tokens": 4059,
+      "total_tokens": 148170,
+      "provider_requests": 6,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 6,
+        "results": 6,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 144111
+      },
+      "efforts_requests": {
+        "high": 6
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-dependency-order-1-before",
+      "status": "finished",
+      "task": "dependency-order",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23191,
+        "read": 92544,
+        "write": 0,
+        "output": 2699,
+        "thinking": 227
+      },
+      "provider_tokens": 118434,
+      "reported_provider_tokens": 118434,
+      "jev_tokens": 4052,
+      "total_tokens": 122486,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 118434
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3849,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-dependency-order-1-after",
+      "status": "finished",
+      "task": "dependency-order",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 31732,
+        "read": 61056,
+        "write": 0,
+        "output": 2505,
+        "thinking": 143
+      },
+      "provider_tokens": 95293,
+      "reported_provider_tokens": 95293,
+      "jev_tokens": 4052,
+      "total_tokens": 99345,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 3,
+        "results": 3,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 95293
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3849,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-csv-records-1-after",
+      "status": "finished",
+      "task": "csv-records",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 35450,
+        "read": 81408,
+        "write": 0,
+        "output": 2077,
+        "thinking": 110
+      },
+      "provider_tokens": 118935,
+      "reported_provider_tokens": 118935,
+      "jev_tokens": 4044,
+      "total_tokens": 122979,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 118935
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3841,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-csv-records-1-before",
+      "status": "finished",
+      "task": "csv-records",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23366,
+        "read": 94080,
+        "write": 0,
+        "output": 3516,
+        "thinking": 1320
+      },
+      "provider_tokens": 120962,
+      "reported_provider_tokens": 120962,
+      "jev_tokens": 0,
+      "total_tokens": 120962,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 7,
+        "results": 7,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 120962
+      },
+      "efforts_requests": {
+        "xhigh": 5
+      },
+      "jev_requests": 0,
+      "jev_input": 0,
+      "jev_output": 0,
+      "cost_holds": {},
+      "issues": [],
+      "warnings": [
+        "jev_explicit_known_not_sent:no_alternative",
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-bounded-map-1-before",
+      "status": "finished",
+      "task": "bounded-map",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23132,
+        "read": 91904,
+        "write": 0,
+        "output": 2384,
+        "thinking": 85
+      },
+      "provider_tokens": 117420,
+      "reported_provider_tokens": 117420,
+      "jev_tokens": 4022,
+      "total_tokens": 121442,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 117420
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3819,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-bounded-map-1-after",
+      "status": "finished",
+      "task": "bounded-map",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 17718,
+        "read": 51584,
+        "write": 0,
+        "output": 2127,
+        "thinking": 147
+      },
+      "provider_tokens": 71429,
+      "reported_provider_tokens": 71429,
+      "jev_tokens": 4022,
+      "total_tokens": 75451,
+      "provider_requests": 3,
+      "execution_guidance_requests": 3,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 71429
+      },
+      "efforts_requests": {
+        "medium": 3
+      },
+      "jev_requests": 1,
+      "jev_input": 3819,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-lru-expiry-1-after",
+      "status": "finished",
+      "task": "lru-expiry",
+      "rep": 1,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 27336,
+        "read": 92288,
+        "write": 0,
+        "output": 4270,
+        "thinking": 55
+      },
+      "provider_tokens": 123894,
+      "reported_provider_tokens": 123894,
+      "jev_tokens": 4058,
+      "total_tokens": 127952,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 123894
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3855,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-lru-expiry-1-before",
+      "status": "finished",
+      "task": "lru-expiry",
+      "rep": 1,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 45110,
+        "read": 72576,
+        "write": 0,
+        "output": 4382,
+        "thinking": 98
+      },
+      "provider_tokens": 122068,
+      "reported_provider_tokens": 122068,
+      "jev_tokens": 4058,
+      "total_tokens": 126126,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 122068
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3855,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-interval-subtract-2-after",
+      "status": "finished",
+      "task": "interval-subtract",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 20416,
+        "read": 71936,
+        "write": 0,
+        "output": 2056,
+        "thinking": 96
+      },
+      "provider_tokens": 94408,
+      "reported_provider_tokens": 94408,
+      "jev_tokens": 4007,
+      "total_tokens": 98415,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 94408
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3804,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-interval-subtract-2-before",
+      "status": "finished",
+      "task": "interval-subtract",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 22750,
+        "read": 67200,
+        "write": 0,
+        "output": 1976,
+        "thinking": 87
+      },
+      "provider_tokens": 91926,
+      "reported_provider_tokens": 91926,
+      "jev_tokens": 4007,
+      "total_tokens": 95933,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 91926
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3804,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-2-before",
+      "status": "finished",
+      "task": "atomic-ledger",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23276,
+        "read": 94848,
+        "write": 0,
+        "output": 3770,
+        "thinking": 908
+      },
+      "provider_tokens": 121894,
+      "reported_provider_tokens": 121894,
+      "jev_tokens": 4059,
+      "total_tokens": 125953,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 121894
+      },
+      "efforts_requests": {
+        "high": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-atomic-ledger-2-after",
+      "status": "finished",
+      "task": "atomic-ledger",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 52878,
+        "read": 40704,
+        "write": 0,
+        "output": 3328,
+        "thinking": 542
+      },
+      "provider_tokens": 96910,
+      "reported_provider_tokens": 96910,
+      "jev_tokens": 4059,
+      "total_tokens": 100969,
+      "provider_requests": 4,
+      "execution_guidance_requests": 4,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 1,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 96910
+      },
+      "efforts_requests": {
+        "high": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3856,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-dependency-order-2-after",
+      "status": "finished",
+      "task": "dependency-order",
+      "rep": 2,
+      "variant": "after",
+      "complete": false,
+      "quality": false,
+      "provider": {
+        "input": null,
+        "read": null,
+        "write": null,
+        "output": null,
+        "thinking": null
+      },
+      "provider_tokens": null,
+      "reported_provider_tokens": null,
+      "jev_tokens": 4052,
+      "total_tokens": null,
+      "provider_requests": 1,
+      "execution_guidance_requests": 1,
+      "tools": {
+        "calls": 0,
+        "results": 0,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 0
+      },
+      "efforts_requests": {
+        "medium": 1
+      },
+      "jev_requests": 1,
+      "jev_input": 3849,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [
+        "failed_provider_attempt_usage_unknown",
+        "provider_trace_usage_incomplete",
+        "host_terminal_not_success",
+        "unknown_provider_input",
+        "unknown_provider_read",
+        "unknown_provider_write",
+        "unknown_provider_output",
+        "host_exit_failure"
+      ],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-dependency-order-2-before",
+      "status": "finished",
+      "task": "dependency-order",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 23237,
+        "read": 92800,
+        "write": 0,
+        "output": 2676,
+        "thinking": 242
+      },
+      "provider_tokens": 118713,
+      "reported_provider_tokens": 118713,
+      "jev_tokens": 4052,
+      "total_tokens": 122765,
+      "provider_requests": 5,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 118713
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3849,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-csv-records-2-before",
+      "status": "finished",
+      "task": "csv-records",
+      "rep": 2,
+      "variant": "before",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 22983,
+        "read": 67072,
+        "write": 0,
+        "output": 1692,
+        "thinking": 162
+      },
+      "provider_tokens": 91747,
+      "reported_provider_tokens": 91747,
+      "jev_tokens": 4044,
+      "total_tokens": 95791,
+      "provider_requests": 4,
+      "execution_guidance_requests": 0,
+      "tools": {
+        "calls": 4,
+        "results": 4,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 91747
+      },
+      "efforts_requests": {
+        "medium": 4
+      },
+      "jev_requests": 1,
+      "jev_input": 3841,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-csv-records-2-after",
+      "status": "finished",
+      "task": "csv-records",
+      "rep": 2,
+      "variant": "after",
+      "complete": true,
+      "quality": true,
+      "provider": {
+        "input": 54670,
+        "read": 61056,
+        "write": 0,
+        "output": 1799,
+        "thinking": 180
+      },
+      "provider_tokens": 117525,
+      "reported_provider_tokens": 117525,
+      "jev_tokens": 4044,
+      "total_tokens": 121569,
+      "provider_requests": 5,
+      "execution_guidance_requests": 5,
+      "tools": {
+        "calls": 5,
+        "results": 5,
+        "failures": 0,
+        "unfinished": 0
+      },
+      "models_tokens": {
+        "gpt-6.1-sol": 117525
+      },
+      "efforts_requests": {
+        "medium": 5
+      },
+      "jev_requests": 1,
+      "jev_input": 3841,
+      "jev_output": 203,
+      "cost_holds": {
+        "cost_unknown_hold": 1
+      },
+      "issues": [],
+      "warnings": [
+        "post_turn_SessionEnd_bridge_closed"
+      ]
+    },
+    {
+      "id": "codex-bounded-map-2-after",
+      "status": "missing_result",
+      "task": "bounded-map",
+      "rep": 2,
+      "variant": "after",
+      "complete": false,
+      "quality": null,
+      "provider": null,
+      "provider_tokens": null,
+      "reported_provider_tokens": null,
+      "jev_tokens": null,
+      "total_tokens": null,
+      "provider_requests": null,
+      "execution_guidance_requests": 1,
+      "tools": null,
+      "models_tokens": null,
+      "efforts_requests": null,
+      "jev_requests": null,
+      "jev_input": null,
+      "jev_output": null,
+      "cost_holds": null,
+      "issues": null,
+      "warnings": null
+    },
+    {
+      "id": "codex-bounded-map-2-before",
+      "status": "missing_result",
+      "task": "bounded-map",
+      "rep": 2,
+      "variant": "before",
+      "complete": false,
+      "quality": null,
+      "provider": null,
+      "provider_tokens": null,
+      "reported_provider_tokens": null,
+      "jev_tokens": null,
+      "total_tokens": null,
+      "provider_requests": null,
+      "execution_guidance_requests": 0,
+      "tools": null,
+      "models_tokens": null,
+      "efforts_requests": null,
+      "jev_requests": null,
+      "jev_input": null,
+      "jev_output": null,
+      "cost_holds": null,
+      "issues": null,
+      "warnings": null
+    },
+    {
+      "id": "codex-lru-expiry-2-before",
+      "status": "missing_result",
+      "task": "lru-expiry",
+      "rep": 2,
+      "variant": "before",
+      "complete": false,
+      "quality": null,
+      "provider": null,
+      "provider_tokens": null,
+      "reported_provider_tokens": null,
+      "jev_tokens": null,
+      "total_tokens": null,
+      "provider_requests": null,
+      "execution_guidance_requests": 0,
+      "tools": null,
+      "models_tokens": null,
+      "efforts_requests": null,
+      "jev_requests": null,
+      "jev_input": null,
+      "jev_output": null,
+      "cost_holds": null,
+      "issues": null,
+      "warnings": null
+    },
+    {
+      "id": "codex-lru-expiry-2-after",
+      "status": "missing_result",
+      "task": "lru-expiry",
+      "rep": 2,
+      "variant": "after",
+      "complete": false,
+      "quality": null,
+      "provider": null,
+      "provider_tokens": null,
+      "reported_provider_tokens": null,
+      "jev_tokens": null,
+      "total_tokens": null,
+      "provider_requests": null,
+      "execution_guidance_requests": 0,
+      "tools": null,
+      "models_tokens": null,
+      "efforts_requests": null,
+      "jev_requests": null,
+      "jev_input": null,
+      "jev_output": null,
+      "cost_holds": null,
+      "issues": null,
+      "warnings": null
+    }
+  ]
+}

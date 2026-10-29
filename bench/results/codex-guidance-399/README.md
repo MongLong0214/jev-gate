@@ -25,6 +25,8 @@ Raw tokens include cached inputs and Jev classification usage. Reasoning is alre
 
 ## Accounting and limits
 
+An explicit whole-contract `known_not_sent:true` / `attempted:false` receipt with Gate/Compact OFF and full native lifecycle proves Jev nonconsumption. Missing intent alone remains unknown. The initial reporter omitted that positive evidence for Router ON; both candidates were rescored, and the prior report versions are retained in the raw-material directory. Quality checkers and raw outcomes were unchanged. Router nonapplication remains in the denominator.
+
 Failures and missing usage remain unknown, never zero. See [summary.json](summary.json) for all cells, cache/input/output splits, quality, failed tool calls and accounting issues. SessionEnd bridge-closure warnings are preserved separately from inference accounting.
 
 The before arm uses official v0.8.68 with export-only instrumentation. The after arm bundles the same source plus the Codex-only patch. Both use the same native Codex executable, baseline model/effort, prompts, independent checkers, permissions and native hooks; no trust bypass was added. The export/build wrappers differ, and this is not an installed-release claim.
