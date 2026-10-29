@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream';
+import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +9,8 @@ import { loadActivity } from '../../src/activity.js';
 import { CodexRpc } from '../../src/codex/rpc.js';
 import { CodexPolicy } from '../../src/codex/policy.js';
 import type { Obj } from '../../src/codex/source.js';
+import { routedExecution } from '../../src/codex/execution-efficiency.js';
+import { startCodexSession } from '../../src/codex/launch.js';
 const dir = mkdtempSync(join(tmpdir(), 'router-integration-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 // Documented roles make A -> B an upgrade: neither fixture has a published price, so any other switch is held for cost.
@@ -83,6 +86,81 @@ const rootContinuationFixture = async (wait?: Promise<void>) => {
   return { ...f, first, next, signal };
 };
 describe('native Codex billing-aware model routing', () => {
+  it('submits pre-applied App Server guidance through HTTP and records its input change (#399)', async () => {
+    const f = await fixture(false, 'fixture-A', 'low'), root = mkdtempSync(join(tmpdir(), 'managed-guidance-'));
+    const forwarded: Obj[] = [];
+    const upstream = createServer(async (req, res) => {
+      let raw = ''; for await (const chunk of req) raw += String(chunk); forwarded.push(JSON.parse(raw));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ id: 'local-response', status: 'completed', model: 'fixture-A', output: [], usage: { input_tokens: 42, output_tokens: 3 } }));
+    });
+    await new Promise<void>(r => upstream.listen(0, '127.0.0.1', r));
+    writeFileSync(join(root, 'codex'), `#!${process.execPath}\nimport{createInterface}from'node:readline';createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[],nextCursor:null}:{}})+'\\n')});\n`, { mode: 0o755 });
+    const trace = join(root, 'trace');
+    const gateway = await startCodexSession({ cwd: root, fetchImpl: f.fetchImpl as typeof fetch, connection: { token: 'g'.repeat(64), port: 0 }, env: {
+      HOME: root, PATH: root, TYPESAFE_API_KEY: 'fixture-key', JEV_CODEX_CONFIG: config, JEV_CODEX_TRACE_DIR: trace, JEV_GATE_STATE_DIR: join(root, 'state'), JEV_CODEX_UPSTREAM: `http://127.0.0.1:${(upstream.address() as { port: number }).port}`,
+    } });
+    try {
+      gateway.policy.catalog = catalog; gateway.policy.catalogComplete = true;
+      await gateway.rpc.onResponse({ model: 'fixture-A', reasoningEffort: 'high', cwd: root, thread: { id: 'root' } }, 'thread/start', {});
+      await gateway.policy.client(f.start);
+      gateway.rpc.onNotification({ method: 'thread/settings/updated', params: { threadId: 'root', threadSettings: { model: 'fixture-A', effort: 'low' } } });
+      const native = { ...f.request, reasoning: { effort: 'low' } };
+      const response = await fetch(gateway.url.replace('ws:', 'http:') + '/responses', { method: 'POST', headers: { 'x-jev-gate-session': gateway.token, 'session-id': 'root' }, body: JSON.stringify(native) });
+      expect(response.status).toBe(200); await response.text();
+      expect(forwarded).toHaveLength(1);
+      expect(forwarded[0]).toEqual({ ...native, input: [...native.input, expect.objectContaining({ role: 'developer' })] });
+      expect(JSON.stringify(forwarded[0])).toContain('Jev routed execution');
+      const rows = readdirSync(trace).map(name => JSON.parse(readFileSync(join(trace, name), 'utf8')));
+      expect(rows).toContainEqual(expect.objectContaining({ phase: 'codex_model_request', submitted_effort: 'low', input_change: expect.objectContaining({ execution_guidance_added: true }) }));
+      expect(f.fetchImpl).toHaveBeenCalledOnce();
+    } finally { f.rpc.close(); await gateway.close(); upstream.closeAllConnections(); await new Promise<void>(r => upstream.close(() => r())); rmSync(root, { recursive: true, force: true }); }
+  });
+  it.each([['fixture-A', 'low', true], ['fixture-B', 'high', true], ['fixture-A', 'high', false]])('carries managed %s/%s routing to execution preparation', async (model, effort, expected) => {
+    const f = await fixture(false, model as string, effort as string);
+    try {
+      await f.policy.client(f.start);
+      const params = f.forward.mock.calls[0]![0].params as Obj;
+      // Native App Server publishes the applied turn settings before sending HTTP.
+      f.rpc.onNotification({ method: 'thread/settings/updated', params: { threadId: 'root', threadSettings: { model: params.model, effort: params.effort } } });
+      const native = { ...f.request, model: params.model, reasoning: { ...f.request.reasoning, effort: params.effort } };
+      const result = await f.policy.externalRequest('root', native, new AbortController().signal);
+      expect(result.request).toBe(native); expect(result.preRouted).toBe(expected);
+      const submitted = routedExecution(native, result.request, result.preRouted);
+      expect((submitted.input as Obj[]).slice(0, native.input.length)).toEqual(native.input);
+      expect(JSON.stringify(submitted).includes('Jev routed execution')).toBe(expected);
+      expect(f.fetchImpl).toHaveBeenCalledOnce(); // The wire stage must not classify again.
+    } finally { f.rpc.close(); }
+  });
+
+  it.each(['abort', 'terminal', 'prompt', 'settings', 'config', 'manual', 'disabled', 'catalog', 'native-update'])('does not use a managed route after %s', async change => {
+    const f = await fixture(false, 'fixture-A', 'low');
+    try {
+      await f.policy.client(f.start);
+      const session = f.policy.sessions.get('root')!, signal = new AbortController();
+      let native: Obj = { ...f.request, reasoning: { effort: 'low' } };
+      if (change === 'abort') signal.abort();
+      if (change === 'terminal') session.terminal = true;
+      if (change === 'prompt') session.prompt = 'new-prompt';
+      if (change === 'settings') await f.rpc.onResponse({}, 'thread/settings/update', { threadId: 'root', effort: 'low' });
+      if (change === 'config') saveConfig({ enabled: false });
+      if (change === 'manual') native = { ...native, reasoning: { effort: 'high' } };
+      if (change === 'disabled') session.eligible = false;
+      if (change === 'catalog') delete session.route;
+      if (change === 'native-update') native = { ...native, input: [{ type: 'configuration_update', reasoning: { effort: 'high' } }] };
+      const result = await f.policy.externalRequest('root', native, signal.signal);
+      expect(result.preRouted ?? false).toBe(false); expect(result.request).toBe(native);
+    } finally { f.rpc.close(); }
+  });
+
+  it('clears a previous managed route when the next turn cannot be routed', async () => {
+    const f = await fixture(false, 'fixture-A', 'low');
+    try {
+      await f.policy.client(f.start);
+      await f.policy.client({ ...f.start, params: { ...f.start.params, clientUserMessageId: 'next', input: [{ type: 'image', imageUrl: 'native-image' }] } });
+      const native = { ...f.request, reasoning: { effort: 'low' } };
+      expect((await f.policy.externalRequest('root', native, new AbortController().signal)).preRouted).toBe(false);
+    } finally { f.rpc.close(); }
+  });
   it.each(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])('routes Terra with account-supported %s through native turn settings', async effort => {
     const f = await fixture(false, 'gpt-6.1-terra', effort);
     f.policy.catalog = [catalog[0]!, {

@@ -140,7 +140,7 @@ export const startCodexSession = async (options: CodexLaunchOptions): Promise<{ 
           if (route === '/responses' && !nativeCompact) {
             const selected = await policy.externalRequest(sessionId, parsed, cancelled.signal, req.headers['originator'], codexBilling(configured, account));
             routedInput = selected.request;
-            parsed = routedExecution(parsed, selected.request);
+            parsed = routedExecution(parsed, selected.request, selected.preRouted);
             guidance = parsed !== selected.request;
           }
           const prepared = await policy.compactRequest(sessionId, parsed, cancelled.signal, nativeCompact ? 'native' : 'inference', codexBilling(configured, account), nativeInput);

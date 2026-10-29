@@ -32,6 +32,18 @@ describe('Codex routed execution guidance', () => {
     expect((routedExecution(original, later).input as Obj[]).at(-1)).toEqual((first.input as Obj[]).at(-1));
   });
 
+  it('accepts a verified pre-wire route without changing the native prefix', () => {
+    const selected = native(), snapshot = structuredClone(selected);
+    const result = routedExecution(selected, selected, true);
+    expect(selected).toEqual(snapshot);
+    expect((result.input as Obj[]).slice(0, -1)).toEqual(selected.input);
+    expect(JSON.stringify((result.input as Obj[]).at(-1))).toContain('Jev routed execution');
+    expect(routedExecution(result, result, true)).toBe(result);
+    for (const request of [{ ...selected, previous_response_id: 'opaque-server-context' }, { ...selected, input: 'native-input' }, { ...selected, instructions: {} }]) {
+      expect(routedExecution(request, request, true)).toBe(request);
+    }
+  });
+
   it('supports full Responses requests and preserves their exact native instructions as the prefix', () => {
     const original: Obj = { ...native(), instructions: 'Exact native instructions.\n' }, selected: Obj = { ...original, model: 'routed' };
     const result = routedExecution(original, selected);

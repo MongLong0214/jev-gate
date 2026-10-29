@@ -61,6 +61,7 @@ interface Session {
   eligible?: boolean; terminal?: boolean;
   role?: string; parent?: string; done?: (turn: Obj) => void; route?: PairPatch; routePending?: Promise<void>; routeDeadline?: number; routeConfig?: string;
   routeBilling?: string;
+  managedRoute?: { prompt: string; config: string; catalogEpoch: number };
   previousReply?: string; completedReply?: string; turnReply?: string; lastSubmitted?: CodexSubmission;
   starting?: { prompt: string; controller: AbortController };
   external?: boolean; task?: string; routed?: string;
@@ -164,6 +165,7 @@ export class CodexPolicy {
     if (method === 'thread/settings/update') {
       const session = this.sessions.get(String(params['threadId']));
       if (session) {
+        delete session.managedRoute;
         session.settingsEpoch = (session.settingsEpoch ?? 0) + 1;
         if (typeof params['model'] === 'string') session.baseline.model = params['model'];
         if (typeof params['effort'] === 'string' || params['effort'] === null) session.baseline.effort = params['effort'] as string | null;
@@ -261,13 +263,15 @@ export class CodexPolicy {
   }
 
   /** The original contract is judged once; observable tool continuations may get their own bounded decision. */
-  async externalRequest(id: string, request: Obj, signal: AbortSignal, originator?: unknown, billing: CodexBilling = 'unknown'): Promise<{ request: Obj }> {
+  async externalRequest(id: string, request: Obj, signal: AbortSignal, originator?: unknown, billing: CodexBilling = 'unknown'): Promise<{ request: Obj; preRouted?: boolean }> {
     const session = this.sessions.get(id);
     if (requestedUpdateEffort(request).present) {
       this.trace?.write('codex_router_skipped', { host: 'codex', session_id: id, prompt_id: session?.prompt ?? null, reason: 'configuration_update_native_history', known_not_sent: true, effective_effort: 'unknown' });
       return { request }; // Preserve opaque native updates, their positions and top-level values.
     }
     if (session?.role && session.dispatch) return this.workerRequest(session, request, signal, billing);
+    // App Server has already applied this route in turn/start. A wire delta cannot prove it.
+    if (session && !session.external && !session.role) return { request, preRouted: this.managedExecution(session, request, signal) };
     if (!session?.external || !session.prompt || !session.task || !this.hooked.has(id)) return { request };
     const requestPrompt = session.prompt;
     session.requestKind = 'root_response';
@@ -340,6 +344,22 @@ export class CodexPolicy {
     const selected = { ...request, ...(session.route?.model ? { model: session.route.model } : {}), ...(session.route?.effortEdit && session.route.effortEdit.kind !== 'keep' ? { reasoning } : {}) };
     const first = session.rootRoutes?.get(key); if (first) first.patch = session.route ?? {};
     return { request: selected };
+  }
+  private managedExecution(session: Session, request: Obj, signal: AbortSignal): boolean {
+    const receipt = session.managedRoute, patch = session.route;
+    if (!receipt || !patch) return false;
+    const config = runtimeCodexPolicy({ ...this.env, JEV_CODEX_MODEL: session.baseline.model }, this.catalog);
+    const model = patch.model ?? session.baseline.model;
+    const effort = patch.effortEdit?.kind === 'omit' ? null : patch.effort ?? session.baseline.effort;
+    const nativeEffort = obj(request['reasoning'])?.['effort'] ?? null;
+    if (signal.aborted || session.controller?.signal.aborted || session.terminal || !session.eligible ||
+      this.env['JEV_CODEX_ENABLED'] === '0' || receipt.prompt !== session.prompt ||
+      receipt.catalogEpoch !== this.catalogEpoch ||
+      receipt.config !== JSON.stringify(config.router) || request['model'] !== model || nativeEffort !== effort) {
+      delete session.managedRoute;
+      return false;
+    }
+    return model !== session.baseline.model || effort !== session.baseline.effort;
   }
   private async rootContinuation(session: Session, request: Obj, signal: AbortSignal, originator: unknown, billing: CodexBilling, billingKey: string, cachePolicy: unknown): Promise<{ request: Obj }> {
     const model = String(request['model']), effort = obj(request['reasoning'])?.['effort'];
@@ -592,6 +612,7 @@ export class CodexPolicy {
       const starting = { prompt, controller }; session.starting = starting;
       try {
       session.prompt = prompt; session.terminal = false; delete session.turnReply; session.requestKind = 'root_response';
+      delete session.route; delete session.managedRoute;
       const deadline = Date.now() + session.policy.router.timeoutMs;
       const collaboration = obj(params['collaborationMode']);
       const modeSettings = obj(collaboration?.['settings']);
@@ -629,6 +650,7 @@ export class CodexPolicy {
       }
       if (this.catalogEpoch !== catalogEpoch || JSON.stringify(current.router) !== JSON.stringify(session.policy.router) || Date.now() >= deadline) { this.rpc.forward({ ...message, params: { ...params, clientUserMessageId: prompt } }); return; }
       session.route = patch;
+      session.managedRoute = { prompt, config: JSON.stringify(current.router), catalogEpoch };
       // The hook gets the exact submitted request later, from Codex itself. Its policy uses the assigned client id.
       const routedParams = applyEffort({ ...params, ...(patch.model ? { model: patch.model } : {}) }, patch.effortEdit);
       this.rpc.forward({ ...message, params: { ...routedParams,

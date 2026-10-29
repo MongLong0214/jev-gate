@@ -4,8 +4,8 @@ const GUIDANCE = 'Jev routed execution: Complete the exact user contract with fe
 
 /** A request-local tail hint: a changed route never rewrites the native reusable prefix.
  * This is not persisted history or a promise of server cache reuse. */
-export const routedExecution = (original: Obj, selected: Obj): Obj => {
-  if (original === selected || original['model'] === selected['model'] && obj(original['reasoning'])?.['effort'] === obj(selected['reasoning'])?.['effort']) return selected;
+export const routedExecution = (original: Obj, selected: Obj, preRouted = false): Obj => {
+  if (!preRouted && (original === selected || original['model'] === selected['model'] && obj(original['reasoning'])?.['effort'] === obj(selected['reasoning'])?.['effort'])) return selected;
   // Incremental contexts belong to the native server; do not reconstruct or prepend their history.
   if (selected['previous_response_id']) return selected;
   if (selected['instructions'] !== undefined && typeof selected['instructions'] !== 'string' || !Array.isArray(selected['input'])) return selected;
