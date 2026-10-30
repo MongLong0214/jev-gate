@@ -429,6 +429,8 @@ interface ChildRouting {
   step?: { index: number; model: string; effort: TurnStepEvent['effort']; pending: Promise<RoutingPatch | null> };
   /** #392: the child's one step assessment. The host keeps a turn's effort through its tool continuations. */
   carried?: RoutingPatch | null;
+  /** Assessments started for `carried`; a timeout may ask once more, then the turn stays native. */
+  asked?: number;
   controller: AbortController;
 }
 
@@ -1007,7 +1009,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const explicitEffort = e.effort === undefined || isSymbolicEffort(e.effort);
     const offer = offerRoute({ baseline: { model: resolveClaudeModel(e.model, aliases) ?? e.model, effort: e.effort ?? null }, candidates, prefer: preferred(aliases),
       // A step's model stays the spawn's: the child's cache is written by that model, and a switch re-reads it all.
-      scope: 'child', model: false,
+      scope: 'child_turn', model: false,
       effort: contract.effortEnabled && !pins.mainEffort && explicitEffort,
       upgrade: config.minUpgradeConfidence, downgrade: config.minDowngradeConfidence });
     if (!offer) return skip('no_alternative');
@@ -1057,8 +1059,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const live = linked(signal, c.controller.signal);
     try {
       if (c.step?.index === e.index && (c.step.model !== e.model || c.step.effort !== e.effort)) return null;
-      if (c.step?.index !== e.index) c.step = { index: e.index, model: e.model, effort: e.effort, pending: c.carried !== undefined ? Promise.resolve(c.carried)
-        : assessChildStep(engine, e, id, c, live.signal).catch(() => null).then(patch => { if (!live.signal.aborted) c.carried = patch; return patch; }) };
+      if (c.step?.index !== e.index) c.step = { index: e.index, model: e.model, effort: e.effort, pending: c.carried !== undefined || (c.asked ?? 0) >= 2 ? Promise.resolve(c.carried ?? null)
+        : (c.asked = (c.asked ?? 0) + 1, assessChildStep(engine, e, id, c, live.signal).catch(() => null).then(patch => { if (!live.signal.aborted) c.carried = patch; return patch; })) };
       let patch = await within(c.step!.pending, live.signal);
       if (!patch || c.stopped) return null;
       // Even a duplicate delivery of this exact step must respect settings changed since its assessment.

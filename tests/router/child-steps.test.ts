@@ -85,6 +85,9 @@ describe('native worker inference routing', () => {
     expect(f.logs.filter(r => r.event === 'child_result').at(-1)).toMatchObject({ requested: OPUS, observed: OPUS, confirmation: 'confirmed', observed_effort: 'unknown' });
     expect(JSON.stringify(f.logs)).not.toContain('preserve the public API');
     expect(f.sent[0]?.state).toMatchObject({ task: { source: 'child_contract' }, execution: { scope: 'child', step_index: 0, cache: { cross_model_reuse_proven: false } } });
+    // The answer is carried through the turn, so the question covers the whole contract, not the next inference.
+    const asked = JSON.stringify(f.sent[0]?.questions);
+    expect(asked).toContain('complete the ENTIRE requested outcome'); expect(asked).not.toContain('NEXT inference');
   });
 
   it.each(['failure', 'invalid', 'no_context'] as const)('keeps the whole child turn native on %s, without asking again', async mode => {
@@ -158,6 +161,19 @@ describe('native worker inference routing', () => {
     expect(n.calls).toEqual([step(0)]);
     expect(await later(s, 1)).toEqual([step(1, { effort: 'low' })]);
     expect(await later(s, 2)).toEqual([step(2, { effort: 'low' })]);
+    expect(s.f.sent).toHaveLength(2);
+  });
+
+  it('keeps the turn native after a second timeout, without a third request', async () => {
+    const wait = deferred<ReturnType<typeof reply>>();
+    const s = await setup({}, () => wait.promise, undefined, { first: false });
+    for (const index of [0, 1]) {
+      const n = streamNext<TurnStepEvent>(undefined, COUNTS), running = drain(s.router.turnStep(s.f.engine, step(index), n.next));
+      await new Promise(resolve => setTimeout(resolve, 0)); s.f.expire(); await running;
+      expect(n.calls).toEqual([step(index)]);
+    }
+    expect(await later(s, 2)).toEqual([step(2)]);
+    expect(await later(s, 3)).toEqual([step(3)]);
     expect(s.f.sent).toHaveLength(2);
   });
 
