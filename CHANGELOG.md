@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased — Assess a Claude worker's effort once per turn
+## v0.8.73 — 2026-10-30 — Assess a Claude worker's effort once per turn
 
 - Assess a Claude worker whose spawn kept its effort once, at its first inference step, and carry that effort through the rest of the turn without another Jev call. A Gate B or spawn effort is carried without any Jev call. Claude Code applies effort at a new human turn, so per-step proposals were mostly not honoured: over two days of traces, 1,947 child-step assessments (6.16M Jev input tokens, ~218 ms per step) produced 12 genuine mid-turn changes in both directions (#392).
-- A failed, invalid or unavailable judgment keeps the rest of the turn native without re-asking; a timeout may ask once more at the next step. Model choice, pins, secret screening and root routing are unchanged.
+- Ask a Claude worker about its whole turn rather than its next inference, since the answer is carried; Codex child steps keep their next-inference question. A failed, invalid or unavailable judgment keeps the rest of the turn native without re-asking; a timeout may ask once more at the next step, and a second timeout leaves the turn native. Model choice, pins, secret screening and root routing are unchanged.
 - Run the native `__keep__` effort regression in CI alongside the Haiku case; it previously was filtered out and now passes on Claude Code 2.1.314.
 
 ## v0.8.72 — 2026-10-30 — Explain why child steps keep the spawn model
