@@ -14,9 +14,9 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true, documentation: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high', allowFable: false, admission: true, documentation: true, childSteps: [
-      // A step chooses effort only: it stays on the model chosen at the spawn.
-      { selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'low' },
-      { selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'medium' },
+      // #392: the host applies an effort change only at a new turn, so later steps carry Gate B's pair without asking Jev.
+      { selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high' },
+      { selected: '__keep__', actual: 'claude-haiku-5-5', effort: 'high' },
     ] },
     { scope: 'worker', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false, adhoc: true },
     { scope: 'worker', selected: '__keep__', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false },
@@ -159,7 +159,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         traces = readTraces();
       }
       const diagnostic = JSON.stringify({ output, toolResults, workers: workerRequests.map(r => ({ model: r.model, effort: r.output_config?.effort, messageEfforts: ((r as any).messages ?? []).map((m: any) => ({ role: m.role, effort: m.effort, metadata: m.metadata, extra: Object.keys(m).filter(k => !['role','content'].includes(k)) })) })), traces: traces.filter(r => r.phase === 'mod_router' || r.phase === 'pre_result' || r.phase === 'admission_result' || r.phase.startsWith('background_')) });
-      expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.childSteps ? 3 : scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.documentation ? 3 : scenario.sequence ? scenario.sequence.length * 2 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
+      expect(code, diagnostic).toBe(0); expect(allocations, diagnostic).toHaveLength(scenario.sequence?.length ?? 1); expect(workerRequests, diagnostic).toHaveLength(scenario.documentation ? 3 : scenario.sequence ? scenario.sequence.length * 2 : scenario.scope === 'root' || scenario.admission ? 2 : 1);
       for (const [i, request] of workerRequests.entries()) { const expected = scenario.childSteps?.[i - 1] ?? scenario.sequence?.[Math.floor(i / 2)] ?? scenario; expect(request.model, diagnostic).toBe('cost' in expected && String(expected.cost).endsWith('_hold') ? 'claude-opus-5-5' : expected.actual); expect(request.output_config?.effort, diagnostic).toBe(expected.effort); }
       const observedResults = traces.filter(r => r.phase === 'mod_router' && ['root_result', 'child_result'].includes(r.event));
       expect(observedResults.length, diagnostic).toBeGreaterThan(0);
@@ -184,8 +184,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
         expect(job.ok && job.value?.current.receipts, diagnostic).toEqual([expect.objectContaining({ verdict: 'accept' })]);
       }
       if (scenario.childSteps) {
-        for (const payload of allocations.slice(1)) { expect(Object.keys((payload as { questions: object }).questions), diagnostic).not.toContain('capability'); expect(Object.keys((payload as { questions: object }).questions), diagnostic).not.toContain('model'); expect(JSON.stringify(payload), diagnostic).toContain('NEXT inference'); expect(JSON.stringify(payload), diagnostic).not.toContain('ENTIRE requested outcome'); }
-        expect(traces.filter(r => r.phase === 'mod_router' && r.event === 'child_route' && r.sent).length, diagnostic).toBe(2);
+        expect(traces.filter(r => r.phase === 'mod_router' && r.event === 'child_route').length, diagnostic).toBe(0);
         expect(new Set(traces.filter(r => r.phase === 'mod_router' && r.event === 'child_result').map(r => r.agent_id)).size, diagnostic).toBe(1);
       }
       if (scenario.adhoc) {

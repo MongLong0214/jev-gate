@@ -1155,11 +1155,12 @@ describe('spawn model', () => {
       expect(n.calls).toEqual([e]);
       expect(f.sent).toHaveLength(0);
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'explicit_restricted' }));
-      // Its first step had no question asked: kept, and recorded as not asked rather than an invalid answer.
+      // The spawn asked nothing: recorded as not asked rather than an invalid answer. Its first step keeps the named
+      // model and takes only the child's one effort assessment (#392).
       const first = childStep({ agentId: 'child', model: 'claude-fable-5-1' });
       const s = streamNext<TurnStepEvent>();
       await drain(router.turnStep(f.engine, first, s.next));
-      expect(s.calls).toEqual([first]);
+      expect(s.calls).toEqual([{ ...first, effort: 'high' }]);
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'child', agent_id: 'child', patch: null, reason: 'not_asked' }));
     }
   });
