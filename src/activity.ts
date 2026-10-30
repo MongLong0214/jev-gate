@@ -54,6 +54,7 @@ const REASON: Record<string, string> = {
   model_mismatch: '요청한 모델과 실제로 돈 모델이 다릅니다',
   model_unobserved: '끝난 뒤 모델을 확인하지 못했습니다',
   not_asked: '묻지 않았습니다',
+  child_step_model_fixed: '자식 단계는 생성 때 정한 모델을 유지합니다',
   applied: '적용했습니다',
 };
 

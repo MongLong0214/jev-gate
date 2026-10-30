@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.72 — 2026-10-30 — Explain why child steps keep the spawn model
+
+- Record `child_step_model_fixed` as the model reason (and `model_not_asked`) on Claude child-step routing records. A child step never asks the model question because the spawn's model owns the child's cache; the record previously said `not_asked` with no cause, so the dashboard showed "이 항목은 판단하지 않음" for every child step.
+- Show it as "자식 단계 · 생성 시 모델 유지" in the dashboard and activity summary. Routing policy, questions and patches are unchanged; earlier traces keep their old reason.
+
 ## v0.8.71 — 2026-10-29 — Apply valid native Codex model routes
 
 - Remove the speculative price, billing and cache veto that retained Sol after Jev selected an eligible Terra/Luna route. Cost scenarios remain trace diagnostics; billing/cache changes no longer invalidate valid model choices (#399).
