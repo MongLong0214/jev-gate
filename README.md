@@ -113,7 +113,7 @@ Both hosts share one private key and dashboard. Installing from source is for de
 | Feature | Behavior | Jev usage |
 | --- | --- | --- |
 | Gate | Chooses direct execution or one background worker. Code accepts only observed passing checks. | Eligible admission and allocation judgments |
-| Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | New root tasks are assessed once; eligible Codex tool continuations and mapped Claude workers can be assessed at subsequent inferences |
+| Router | Selects model and effort from supported candidates for the root or eligible agents. Explicit pins are respected. | New root tasks are assessed once; eligible Codex tool continuations can be assessed at subsequent inferences; mapped Claude workers are assessed once per turn |
 | Compact | Claude Code builds an extractive digest; Codex selects obsolete plaintext from older tool results, preserving native context and recent evidence. | Bounded judgments; missing context, timeout or invalid output preserves the native path |
 | Dashboard | Shows both hosts' recorded judgments, requests, and outcomes live. | Reads local metadata; makes no Jev requests |
 

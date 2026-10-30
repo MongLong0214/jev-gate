@@ -32,7 +32,7 @@ export interface PairOffer {
 type OfferArgs = {
   baseline: PairOffer['baseline']; candidates: readonly RouteCandidate[]; model: boolean; effort: boolean;
   upgrade: number; downgrade: number;
-  scope?: 'root' | 'child' | 'spawn' | 'continuation';
+  scope?: 'root' | 'child' | 'child_turn' | 'spawn' | 'continuation';
 };
 export interface PairDecision {
   patch: PairPatch;
@@ -94,16 +94,17 @@ export const pairValidFor = (c: RouteCandidate, edit: EffortEdit, current: strin
   return value === null ? c.omitEffort : typeof value === 'string' && c.efforts.includes(value);
 };
 
-/** The shared explicit-restriction and live-risk questions; a child decides only its next inference, a spawn a fresh worker. */
+/** The shared explicit-restriction and live-risk questions; a Codex child decides only its next inference, a Claude child its turn, a spawn a fresh worker. */
 const withControls = (questions: Record<string, Question>, scope: OfferArgs['scope']): Record<string, Question> => {
   questions['control'] = { type: 'choice', instructions: `${CONTEXT} Classify the current outcome and ONLY explicit restrictions on the model and reasoning effort. Do not interpret "do not edit", "read-only", "preserve the API", native permissions, mandatory checks or lack of already-discovered debugging evidence as a model/effort pin. A past completed task's restriction does not pin the whole session. An instruction about which model another tool, program or agent should use (for example running a CLI with a named model) is not a lock on the current caller's model or effort.`, criteria: CONTROLS };
   questions['action_risk'] = { type: 'choice', instructions: `${CONTEXT} Does the requested work itself operate a live system, transfer money or make an irreversible change? Writing/testing code about these is ordinary.`, criteria: {
     ordinary: 'The requested work itself makes no live or irreversible change.', consequential: 'The requested work itself makes a consequential live or irreversible change.', unclear: 'The supplied task and context do not establish the risk.',
   } };
-  if (scope === 'child') {
-    for (const question of Object.values(questions)) question.instructions = question.instructions
+  // A Claude child keeps one effort for its whole turn (#392), so it is asked about the whole contract, not the next inference.
+  if (scope === 'child' || scope === 'child_turn') {
+    for (const question of Object.values(questions)) question.instructions = (scope === 'child' ? question.instructions
       .replace('complete the ENTIRE requested outcome', 'perform the NEXT inference after the observed tool outcomes')
-      .replace('completing the entire task require', 'performing the NEXT inference require')
+      .replace('completing the entire task require', 'performing the NEXT inference require') : question.instructions)
       .replace('Prefer keeping a large cached root for short follow-ups whose isolated work can use a fresh worker.', 'Keep the original worker and its contract; this decision does not spawn another worker.')
       .replaceAll('current root', 'current worker');
   }

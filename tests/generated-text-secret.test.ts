@@ -103,7 +103,7 @@ it('N2: real plugin text producers pass both screens as whole strings and indivi
   if (!resolved.ok) throw Error(resolved.field);
   const router = createRouter(resolved.config, undefined, true), f = fakeEngine({ respond: () => ({ status: 503, text: '{}' }) });
   const model = 'claude-opus-5-5';
-  f.engine.dispatchPair = async () => ({ model, effort_edit: { kind: 'set', value: 'high' } });
+  f.engine.dispatchPair = async () => ({ model, effort_edit: { kind: 'keep' } });
   f.engine.childContext = async () => ({ messages: 8, coverage: 'available', tools: [{ name: 'Read', state: 'done' }] });
   await router.agentSpawn(f.engine, { tool_use_id: id, prompt: brief, description: request, subagentType: 'jev-gate:worker',
     provider: { plugin: 'jev-gate', tier: 'plugin' }, parentModel: model, fork: false },
