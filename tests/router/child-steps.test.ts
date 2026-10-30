@@ -85,7 +85,7 @@ describe('native worker inference routing', () => {
     expect(f.sent).toHaveLength(2);
     expect(f.sent.every(r => !('capability' in r.questions) && !('model' in r.questions))).toBe(true);
     expect(f.logs.filter(r => r.event === 'child_route')).toHaveLength(2);
-    expect(f.logs.find(r => r.event === 'child_route')).toMatchObject({ model_asked: false, effort_asked: true });
+    expect(f.logs.find(r => r.event === 'child_route')).toMatchObject({ model_asked: false, effort_asked: true, model_not_asked: 'child_step_model_fixed', reasons: { model: 'child_step_model_fixed' } });
     expect(f.logs.filter(r => r.event === 'child_result').at(-1)).toMatchObject({ requested: OPUS, observed: OPUS, confirmation: 'confirmed', observed_effort: 'unknown' });
     expect(JSON.stringify(f.logs)).not.toContain('preserve the public API');
     expect(f.sent[0]?.state).toMatchObject({ task: { source: 'child_contract' }, execution: { scope: 'child', step_index: 1, cache: { cross_model_reuse_proven: false } } });

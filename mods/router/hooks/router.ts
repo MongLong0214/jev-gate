@@ -1042,7 +1042,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage), model_pin: nowPins.subagentModel, effort_pin: nowPins.mainEffort,
       eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false, excluded,
       model_asked: offer.modelAsked, effort_asked: offer.effortQuestions.size > 0, allow_fable: allowFable,
-      proposed_patch: decision.patch, patch, reasons: decision.reasons, selection: decision.diagnostics,
+      model_not_asked: 'child_step_model_fixed',
+      proposed_patch: decision.patch, patch, reasons: { ...decision.reasons, model: 'child_step_model_fixed' }, selection: decision.diagnostics,
       answers: result.ok ? pairReceipt(offer, result.answers) : null,
       context_messages: context.messages, context_coverage: context.coverage, recent_tools: context.tools,
       ...(withheld ? { withheld: 'target_not_allowed' } : {}) });
