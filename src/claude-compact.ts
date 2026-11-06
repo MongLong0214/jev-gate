@@ -37,6 +37,8 @@ const INPUT_CHARS = 240;
 const CUT = ' […]';
 /** The most of the room left after the failures that the person's requests may take; the rest stays for the selection and files. */
 const REQUEST_SHARE = 2 / 3;
+/** What each request kept before #408 (its first 700 characters): every request gets this much before any runs on. */
+const REQUEST_FLOOR = 700;
 
 type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -142,16 +144,35 @@ export const RESTORE_HEADER = `${DIGEST_MARK} Exact details from before this com
  * engine keeps itself (its last exchange) and no log of steps: the summary carries the story.
  *
  * Room is handed out in a fixed order, so a long request can neither push out the failures nor starve the selection:
- * the failures first, then the requests newest first, whole when they fit, within `REQUEST_SHARE` of what is left, then
- * the selected results, then the files. Requests and failures are listed oldest first whatever order they were fitted in.
+ * the failures first, then the requests within `REQUEST_SHARE` of what is left (see `allotRequests`), then the selected
+ * results, then the files. Requests and failures are listed oldest first whatever order they were fitted in.
  */
+/**
+ * How many characters of each request fit in `room`, each charged 3 more for its line. Every request first gets up to
+ * `REQUEST_FLOOR`, newest first, so a long one cannot push out an older one; what is left then lets them run on, newest
+ * first, whole when it can. A length short of the request means it is cut there (" […]" included); 0 leaves it out.
+ */
+const allotRequests = (requests: readonly string[], room: number): number[] => {
+  const out = requests.map(() => 0);
+  for (let i = requests.length - 1; i >= 0; i--) {
+    const len = requests[i]!.length;
+    const give = Math.min(len, REQUEST_FLOOR, room - 3);
+    if (give === len || give > CUT.length) { out[i] = give; room -= give + 3; }
+  }
+  for (let i = requests.length - 1; i >= 0 && room > 0; i--) {
+    const more = out[i] ? Math.min(requests[i]!.length - out[i]!, room) : 0;
+    out[i] = out[i]! + more; room -= more;
+  }
+  return out;
+};
+
 export const buildRestore = (messages: readonly DigestMessage[], requests: readonly string[], priorities: ReadonlyArray<{ message: number; tool: number }>, budget: number): string | null => {
   // The section titles and separators are not in `take`'s accounting: 4 titles (<= 75 each) plus joins fit in 320.
   // Each item is charged its line's "▸ " mark and newline as well, so the parts add up to no more than the budget.
   let left = budget - RESTORE_HEADER.length - 320;
   const take = (text: string, cap: number): string => {
     const room = Math.min(cap, left - 3);
-    if (room <= CUT.length) return '';
+    if (room < text.length && room <= CUT.length) return '';
     const t = clip(text, room);
     left -= t.length + 3;
     return t;
@@ -163,8 +184,8 @@ export const buildRestore = (messages: readonly DigestMessage[], requests: reado
 
   const failures = head.flatMap((m) => (m.role === 'assistant' ? m.toolUses.filter((u) => u.isError === true) : [])).slice(-3).reverse()
     .map((u) => take(`[${toolInput(u)}]${u.text ? `\n${u.text.trim()}` : ''}`, FAILURE_CHARS + INPUT_CHARS)).filter(Boolean).reverse();
-  let requestRoom = Math.floor(Math.max(0, left) * REQUEST_SHARE);
-  const fitted = [...requests].reverse().map((r) => { const before = left; const t = take(r, requestRoom); requestRoom -= before - left; return t; }).filter(Boolean).reverse();
+  const allotted = allotRequests(requests, Math.floor(Math.max(0, left) * REQUEST_SHARE));
+  const fitted = requests.map((r, i) => (allotted[i] ? take(r, allotted[i]!) : '')).filter(Boolean);
   section('Latest requests (oldest first; excerpts, not the whole conversation)', fitted.map((t) => `▸ ${t}`));
   section('Latest failed calls (a later success does not show them fixed)', failures.map((t) => `▸ ${t}`));
   const seen = new Set<string>();

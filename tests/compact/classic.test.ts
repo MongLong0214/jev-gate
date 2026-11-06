@@ -392,7 +392,7 @@ describe('classic path: budget', () => {
     }
   });
 
-  it('#408: requests are fitted after the failures, newest first, and leave room for the selected results', () => {
+  it('#408: requests are fitted after the failures, each its start first, then newest first, and leave room for the selected results', () => {
     const recs = session(8, 3000);
     const failing = [...call(97, 'E1 ' + 'e'.repeat(2000), true), ...call(98, 'E2 ' + 'e'.repeat(2000), true)];
     const messages = transcriptMessages(heldRecords([...recs.slice(0, -2), ...failing, ...recs.slice(-2)]), 'x');
@@ -400,11 +400,15 @@ describe('classic path: budget', () => {
     const text = buildRestore(messages, ['OLDER ' + 'o'.repeat(20000), 'NEWEST ' + 'n'.repeat(20000)], [{ message: first, tool: 0 }], RESTORE_CAP)!;
     expect(text.length).toBeLessThanOrEqual(RESTORE_CAP);
     for (const shown of ['E1 ', 'E2 ', 'FAIL expected 1 got 2', 'NEWEST ', 'result 0 ']) expect(text).toContain(shown);
-    expect(text).not.toContain('OLDER ');
     const requests = text.slice(text.indexOf('## Latest requests'), text.indexOf('## Latest failed'));
-    expect(requests).toContain('[…]');
+    // The older one keeps what it always had; the newest takes the rest of the requests' room.
+    expect(requests).toContain(`▸ OLDER ${'o'.repeat(700 - 6 - 4)} […]\n▸ NEWEST `);
+    expect(/NEWEST n+ \[…\]/.exec(requests)![0].length).toBeGreaterThan(2000);
     const short = buildRestore(messages, ['First ask.', 'Then this.'], [], RESTORE_CAP)!;
     expect(short).toContain('▸ First ask.\n▸ Then this.');
+    // A long latest request never pushes out a short earlier one, down to two characters.
+    const kept = buildRestore(messages, ['ok', 'Keep the API. ' + 'k'.repeat(5000), 'NEWEST ' + 'n'.repeat(7000)], [], RESTORE_CAP)!;
+    expect(kept).toContain('▸ ok\n▸ Keep the API. ');
   });
 
   it('the steering text is short, carries the summary\'s share and promises no verbatim restore', () => {

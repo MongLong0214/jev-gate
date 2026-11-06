@@ -89,7 +89,8 @@ the same options as above (`compactEnabled`, `compactMode`, `compactBudgetChars`
 2. **`SessionStart` on `source: compact`** hands the saved restore to the model as additional context, once: the person's
    latest requests (up to three from the newest transcript chunk that has one), the latest failed calls, exact excerpts
    of the results Jev named, and the files read or changed. Room is given in that priority: the failures first, then the
-   requests newest first and whole when they fit, within two thirds of what is left, then Jev's results, then the files.
+   requests within two thirds of what is left (each its first 700 characters, newest first, then the rest of that room
+   newest first, whole when they fit), then Jev's results, then the files.
    Jev is sent only the latest request, cut at 2,000 characters. When the latest request looks like a secret, no request
    is restored or sent and no older one takes its place. The engine already keeps its last exchange, so none of that is
    restored.
