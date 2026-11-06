@@ -44,7 +44,9 @@ const fakeJev = (answers: (ids: string[]) => Record<string, string>): { transpor
       fetch: async (_url, init) => {
         calls.push(init.body);
         const questions = JSON.parse(init.body).questions as Record<string, unknown>;
-        return { status: 200, text: JSON.stringify({ choices: Object.fromEntries(Object.entries(answers(Object.keys(questions))).map(([k, v]) => [k, { choice: v }])), model: 'jev-1.14.0', usage: { input_tokens: 1, output_tokens: 1 } }) };
+        // The endpoint's reply shape: `answers`, each a full choice with its probabilities.
+        const answer = (choice: string) => ({ type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(['required', 'related', 'unrelated', 'unclear'].map((k) => [k, k === choice ? 1 : 0])) });
+        return { status: 200, text: JSON.stringify({ answers: Object.fromEntries(Object.entries(answers(Object.keys(questions))).map(([k, v]) => [k, answer(v)])), model: 'jev-1.14.0', usage: { input_tokens: 1, output_tokens: 1 } }) };
       },
     },
   };
@@ -272,7 +274,7 @@ describe('classic path: restore', () => {
 
   it('restores the results Jev names as this task\'s dependencies, newest candidates first', async () => {
     write(session(30, 400));
-    const { transport, calls } = fakeJev((ids) => Object.fromEntries(ids.map((id) => [id, id.endsWith('t0') ? 'required' : 'unrelated'])));
+    const { transport, calls } = fakeJev((ids) => Object.fromEntries(ids.map((id, i) => [id, i % 2 ? 'unrelated' : 'required'])));
     const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' };
     await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev, { transport, key: 'k'.repeat(16) });
     const body = JSON.parse(calls[0]!) as { state: { candidates: Array<{ id: string }> } };
@@ -280,7 +282,12 @@ describe('classic path: restore', () => {
     expect(body.state.candidates).toHaveLength(16);
     expect(body.state.candidates.map((c) => c.id)).not.toContain('m1t0');
     expect(Math.min(...body.state.candidates.map((c) => Number(/^m(\d+)t/.exec(c.id)![1])))).toBeGreaterThan(20);
-    expect((await runClassicCompact(input('SessionStart', { source: 'compact' }), jev))).toContain('"additionalContext"');
+    expect(traces().find((t) => t['stage'] === 'jev')).toMatchObject({ selection: 'current_dependencies', dependencies: 8 });
+    const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), jev);
+    // The 16 asked about are calls 14-29, oldest first; every other one is named.
+    expect(restored).toContain('## Results this task depends on (selected by Jev)');
+    for (const n of [14, 16, 28]) expect(restored).toContain(`→ result ${n} x`);
+    for (const n of [13, 15, 29]) expect(restored).not.toContain(`→ result ${n} x`);
   });
 
   it('#281: the current task is the person\'s last request, never a task notice or an earlier compact summary', async () => {
