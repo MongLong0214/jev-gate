@@ -57,7 +57,7 @@ describe('bounded current-task compaction dependency selection', () => {
     });
     expect(await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch, sleep })).toMatchObject({ reason: 'current_dependencies', priorities: [{ message: 5, tool: 0 }] });
   });
-  it.each(['null', 'array', 'missing', 'extra', 'replaced_id', 'choice', 'probabilities', 'tie', 'confidence'])('records only bounded validation metadata for %s, retaining usage and conservative fallback', async kind => {
+  it.each(['null', 'array', 'missing', 'extra', 'replaced_id', 'choice', 'probabilities', 'confidence'])('records only bounded validation metadata for %s, retaining usage and conservative fallback', async kind => {
     const s = setup();
     const fetch = vi.fn(async (_url: string, init: { body: string }) => {
       const body = JSON.parse(dependencyReply(init.body).text);
@@ -71,7 +71,6 @@ describe('bounded current-task compaction dependency selection', () => {
         const answer = body.answers[ids.at(-1)!];
         if (kind === 'choice') answer.choice = 'PRIVATE_INVALID_CHOICE';
         if (kind === 'probabilities') delete answer.probabilities.unclear;
-        if (kind === 'tie') { answer.choice = 'required'; answer.probabilities = { required: .5, related: .5, unrelated: 0, unclear: 0 }; }
         if (kind === 'confidence') answer.confidence = 2;
       }
       return { status: 200, text: JSON.stringify(body) };
@@ -85,10 +84,33 @@ describe('bounded current-task compaction dependency selection', () => {
       extra_count: shape ? null : kind === 'extra' || kind === 'replaced_id' ? 1 : 0,
       invalid_choice_count: shape || ['missing', 'extra', 'replaced_id'].includes(kind) ? null : 1,
     } });
-    const reason = { choice: 'label', probabilities: 'probability_labels', tie: 'tie', confidence: 'confidence' }[kind];
+    const reason = { choice: 'label', probabilities: 'probability_labels', confidence: 'confidence' }[kind];
     if (reason) expect(result.validation?.choice_failures).toEqual({ [reason]: 1 });
     expect(JSON.stringify(result)).not.toContain('PRIVATE');
     expect(fetch).toHaveBeenCalledOnce();
+  });
+  it('a tied answer leaves only that candidate undecided; the other answers stand', async () => {
+    const tie = { choice: 'required', probabilities: { required: .5, related: .5, unrelated: 0, unclear: 0 } };
+    const reply = (tied: (id: string) => boolean) => vi.fn(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(dependencyReply(init.body).text);
+      Object.keys(body.answers).forEach(id => { if (tied(id)) Object.assign(body.answers[id], tie); });
+      return { status: 200, text: JSON.stringify(body) };
+    });
+    const s = setup();
+    let others = 0;
+    const some = await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch: reply(id => id !== 'm5t0' && others++ < 3), sleep });
+    expect(some).toMatchObject({ reason: 'current_dependencies', priorities: [{ message: 5, tool: 0 }], ties: 3, candidates: 16 });
+    expect(some.validation).toBeUndefined();
+    const dependency = await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch: reply(id => id === 'm5t0'), sleep });
+    expect(dependency).toMatchObject({ reason: 'recency_kept', priorities: [], ties: 1 });
+    expect(dependency.validation).toBeUndefined();
+    const broken = vi.fn(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(dependencyReply(init.body).text), ids = Object.keys(body.answers);
+      Object.assign(body.answers[ids[0]!], tie); body.answers[ids[1]!].confidence = 2;
+      return { status: 200, text: JSON.stringify(body) };
+    });
+    expect(await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch: broken, sleep }))
+      .toMatchObject({ reason: 'invalid_answers', priorities: [], ties: 1, validation: { reason: 'choice', invalid_choice_count: 1, choice_failures: { confidence: 1 } } });
   });
   it('withholds full secret-bearing and interrupted evidence before excerpting', () => {
     const s = setup(); const m = s.messages[5]!; const u = m.toolUses[0]!;
