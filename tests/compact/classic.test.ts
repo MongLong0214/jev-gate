@@ -44,7 +44,9 @@ const fakeJev = (answers: (ids: string[]) => Record<string, string>): { transpor
       fetch: async (_url, init) => {
         calls.push(init.body);
         const questions = JSON.parse(init.body).questions as Record<string, unknown>;
-        return { status: 200, text: JSON.stringify({ choices: Object.fromEntries(Object.entries(answers(Object.keys(questions))).map(([k, v]) => [k, { choice: v }])), model: 'jev-1.14.0', usage: { input_tokens: 1, output_tokens: 1 } }) };
+        // The endpoint's reply shape: `answers`, each a full choice with its probabilities.
+        const answer = (choice: string) => ({ type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(['required', 'related', 'unrelated', 'unclear'].map((k) => [k, k === choice ? 1 : 0])) });
+        return { status: 200, text: JSON.stringify({ answers: Object.fromEntries(Object.entries(answers(Object.keys(questions))).map(([k, v]) => [k, answer(v)])), model: 'jev-1.14.0', usage: { input_tokens: 1, output_tokens: 1 } }) };
       },
     },
   };
@@ -168,7 +170,8 @@ describe('classic path: restore', () => {
       { ...user('Background job completed.'), promptSource: 'system', origin: { kind: 'task-notification' } },
       { ...user('Previous compaction summary.'), isCompactSummary: true }]);
     const out = await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
-    expect(out).toContain(`The current task: "${task}"`);
+    expect(out).toContain('jev-gate compact');
+    expect(out).not.toContain(task);
     const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), env);
     expect(restored).toContain(task);
     expect(restored).not.toContain('Background job completed.');
@@ -187,7 +190,7 @@ describe('classic path: restore', () => {
 
   it('still restores the human task when a single tool result fills even the 16 MiB message tail', async () => {
     write([user('Keep this human task.'), ...call(1, 'x'.repeat(17 * 1024 * 1024))]);
-    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env)).toContain('The current task: "Keep this human task."');
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env)).toContain('jev-gate compact');
     expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toContain('Keep this human task.');
   });
 
@@ -271,7 +274,7 @@ describe('classic path: restore', () => {
 
   it('restores the results Jev names as this task\'s dependencies, newest candidates first', async () => {
     write(session(30, 400));
-    const { transport, calls } = fakeJev((ids) => Object.fromEntries(ids.map((id) => [id, id.endsWith('t0') ? 'required' : 'unrelated'])));
+    const { transport, calls } = fakeJev((ids) => Object.fromEntries(ids.map((id, i) => [id, i % 2 ? 'unrelated' : 'required'])));
     const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' };
     await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev, { transport, key: 'k'.repeat(16) });
     const body = JSON.parse(calls[0]!) as { state: { candidates: Array<{ id: string }> } };
@@ -279,15 +282,57 @@ describe('classic path: restore', () => {
     expect(body.state.candidates).toHaveLength(16);
     expect(body.state.candidates.map((c) => c.id)).not.toContain('m1t0');
     expect(Math.min(...body.state.candidates.map((c) => Number(/^m(\d+)t/.exec(c.id)![1])))).toBeGreaterThan(20);
-    expect((await runClassicCompact(input('SessionStart', { source: 'compact' }), jev))).toContain('"additionalContext"');
+    expect(traces().find((t) => t['stage'] === 'jev')).toMatchObject({ selection: 'current_dependencies', dependencies: 8 });
+    const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), jev);
+    // The 16 asked about are calls 14-29, oldest first; every other one is named.
+    expect(restored).toContain('## Results this task depends on (selected by Jev)');
+    for (const n of [14, 16, 28]) expect(restored).toContain(`→ result ${n} x`);
+    for (const n of [13, 15, 29]) expect(restored).not.toContain(`→ result ${n} x`);
   });
 
   it('#281: the current task is the person\'s last request, never a task notice or an earlier compact summary', async () => {
     const notice = '<task-notification>\n<task-id>b6w41xrqn</task-id>\n<status>completed</status>\n<summary>Background command completed</summary>\n</task-notification>';
     write([...session(), { type: 'user', uuid: 'n1', promptSource: 'system', turnOrigin: 'task_notification', origin: { kind: 'task-notification', producer: 'session-task' }, message: { role: 'user', content: notice } },
       { type: 'user', uuid: 'c1', isCompactSummary: true, isVisibleInTranscriptOnly: true, turnOrigin: 'human', message: { role: 'user', content: 'This session is being continued from a previous conversation.' } }]);
-    const out = await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
-    expect(out).toContain('The current task: "Rename parseRow to readRow in src/rows.ts and keep the tests green."');
+    expect(await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env)).toContain('jev-gate compact');
+    const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), env);
+    expect(restored).toContain('▸ Rename parseRow to readRow in src/rows.ts and keep the tests green.');
+    expect(restored).not.toContain('b6w41xrqn');
+    expect(restored).not.toContain('This session is being continued');
+  });
+
+  it('#408: a request past 700 and 2,000 characters is restored whole, and Jev is sent it at the outbound bound', async () => {
+    const task = 'Port the parser. ' + 'a'.repeat(800) + ' Keep the public API. ' + 'b'.repeat(1400) + ' Never touch src/legacy.';
+    write([user('Earlier: write the tests first.'), user(task), ...session().slice(1)]);
+    const fake = fakeJev(ids => Object.fromEntries(ids.map(id => [id, 'related'])));
+    const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' };
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev, { transport: fake.transport, key: 'k'.repeat(16) });
+    const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), jev);
+    expect(restored).toContain(JSON.stringify(task).slice(1, -1));
+    expect(restored).toContain('▸ Earlier: write the tests first.');
+    expect(restored!.indexOf('Earlier: write')).toBeLessThan(restored!.indexOf('Port the parser.'));
+    expect(fake.calls).toHaveLength(1);
+    const sent = JSON.parse(fake.calls[0]!).state.current_task as string;
+    expect(sent.length).toBeLessThanOrEqual(2000 + ' […]'.length);
+    expect(sent.startsWith('Port the parser.')).toBe(true);
+    expect(sent).not.toContain('Never touch src/legacy.');
+  });
+
+  it('#408: a latest request that looks like a secret is restored, sent and steered nowhere, and no older one stands in', async () => {
+    const secret = 'Deploy it. ' + 'a'.repeat(3000) + ' password = correct-horse-battery-staple-0000';
+    write([user('An older request.'), user(secret), ...session().slice(1)]);
+    const fake = fakeJev(ids => Object.fromEntries(ids.map(id => [id, 'required'])));
+    const jev = { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' };
+    const out = await runClassicCompact(input('PreCompact', { trigger: 'auto' }), jev, { transport: fake.transport, key: 'k'.repeat(16) });
+    expect(fake.calls).toHaveLength(0);
+    expect(traces().find((t) => t['guided'] === true)).toMatchObject({ selection: 'input_secret' });
+    const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), jev);
+    for (const text of [out!, restored!, JSON.stringify(traces())]) {
+      expect(text).not.toContain('Deploy it.');
+      expect(text).not.toContain('correct-horse');
+      expect(text).not.toContain('An older request.');
+    }
+    expect(restored).toContain('FAIL expected 1 got 2');
   });
 
   it('a Jev that fails or answers wrongly costs the selection only: the guidance and the restore stand', async () => {
@@ -335,19 +380,43 @@ describe('classic path: budget', () => {
     expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), { ...env, CLAUDE_PLUGIN_OPTION_COMPACTBUDGETCHARS: '8000' })).toBeNull();
   });
 
-  it('buildRestore never returns more than its budget, down to nothing', () => {
-    const messages = transcriptMessages(heldRecords(session(20, 5000)), 'Fix it.');
-    for (const budget of [0, 100, 600, 3000, 9000]) {
-      const text = buildRestore(messages, ['Fix it. ' + 'q'.repeat(3000)], [], budget);
+  it('buildRestore never returns more than its budget, down to nothing, and never splits a surrogate pair', () => {
+    const recs = session(20, 5000);
+    const many = Array.from({ length: 80 }, (_, i) => call(200 + i, 'ok')).flat();
+    const messages = transcriptMessages(heldRecords([...recs.slice(0, -2), ...many, ...recs.slice(-2)]), 'Fix it.');
+    const priorities = messages.flatMap((m, message) => (m.role === 'assistant' ? [{ message, tool: 0 }] : [])).slice(0, 16);
+    for (const budget of [0, 100, 600, 3000, 4000, 9000]) {
+      const text = buildRestore(messages, ['Fix it. ' + '😀'.repeat(3000), 'q'.repeat(3000)], priorities, budget);
       expect(text === null || text.length <= budget).toBe(true);
+      expect(text === null || !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(text)).toBe(true);
     }
   });
 
-  it('the steering text is short and carries the summary\'s share', () => {
-    const text = buildSteering('Rename parseRow.', 2500);
+  it('#408: requests are fitted after the failures, each its start first, then newest first, and leave room for the selected results', () => {
+    const recs = session(8, 3000);
+    const failing = [...call(97, 'E1 ' + 'e'.repeat(2000), true), ...call(98, 'E2 ' + 'e'.repeat(2000), true)];
+    const messages = transcriptMessages(heldRecords([...recs.slice(0, -2), ...failing, ...recs.slice(-2)]), 'x');
+    const first = messages.findIndex((m) => m.role === 'assistant');
+    const text = buildRestore(messages, ['OLDER ' + 'o'.repeat(20000), 'NEWEST ' + 'n'.repeat(20000)], [{ message: first, tool: 0 }], RESTORE_CAP)!;
+    expect(text.length).toBeLessThanOrEqual(RESTORE_CAP);
+    for (const shown of ['E1 ', 'E2 ', 'FAIL expected 1 got 2', 'NEWEST ', 'result 0 ']) expect(text).toContain(shown);
+    const requests = text.slice(text.indexOf('## Latest requests'), text.indexOf('## Latest failed'));
+    // The older one keeps what it always had; the newest takes the rest of the requests' room.
+    expect(requests).toContain(`▸ OLDER ${'o'.repeat(700 - 6 - 4)} […]\n▸ NEWEST `);
+    expect(/NEWEST n+ \[…\]/.exec(requests)![0].length).toBeGreaterThan(2000);
+    const short = buildRestore(messages, ['First ask.', 'Then this.'], [], RESTORE_CAP)!;
+    expect(short).toContain('▸ First ask.\n▸ Then this.');
+    // A long latest request never pushes out a short earlier one, down to two characters.
+    const kept = buildRestore(messages, ['ok', 'Keep the API. ' + 'k'.repeat(5000), 'NEWEST ' + 'n'.repeat(7000)], [], RESTORE_CAP)!;
+    expect(kept).toContain('▸ ok\n▸ Keep the API. ');
+  });
+
+  it('the steering text is short, carries the summary\'s share and promises no verbatim restore', () => {
+    const text = buildSteering(2500);
     expect(text.length).toBeLessThan(1500);
     expect(text).toContain('under 2500 characters');
-    expect(text).toContain('Rename parseRow.');
+    expect(text).toContain('keep every requirement, constraint and correction');
+    expect(text).not.toMatch(/verbatim|Do not repeat|The current task:/);
   });
 });
 

@@ -95,40 +95,52 @@ const promptTexts = (text: string): string[] => {
   return found;
 };
 
+/** What classic Compact read: the person's latest typed requests, oldest first and whole, or why there are none. */
+export type CurrentTaskPrompts = { ok: true; requests: string[] } | { ok: false; reason: 'no_current_task' | 'input_secret' };
+
 /**
  * Compact needs the latest human task even when tool output has filled the tail. Read backwards in 2 MiB chunks
- * until a usable prompt is found or the file starts. Keep a split JSONL row as bytes until it is complete, including
+ * until a chunk holds a human request or the file starts. Keep a split JSONL row as bytes until it is complete, including
  * a split UTF-8 character. Only that row can exceed a chunk; no whole-transcript read or non-human fallback.
+ *
+ * The requests come back whole: the restore stays on this machine and fits them to its own budget, and an outbound
+ * caller clips with `clipPrompt`. The newest request is screened before anything older is kept: when it looks like a
+ * secret there is no current task (an older request is never promoted in its place), and an older one that does is left
+ * out without reading further back to replace it.
  */
-export const readCurrentTaskPrompts = (path: string | null | undefined): string[] => {
-  if (typeof path !== 'string' || path.length === 0) return [];
+export const readCurrentTaskPrompts = (path: string | null | undefined): CurrentTaskPrompts => {
+  const none: CurrentTaskPrompts = { ok: false, reason: 'no_current_task' };
+  if (typeof path !== 'string' || path.length === 0) return none;
   let fd: number;
-  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { return []; }
+  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { return none; }
   try {
-    const stat = fstatSync(fd); if (!stat.isFile()) return [];
+    const stat = fstatSync(fd); if (!stat.isFile()) return none;
     let end = stat.size;
     let fragment: Buffer = Buffer.alloc(0);
     while (end > 0) {
       const len = Math.min(end, TAIL_BYTES);
       const buf = Buffer.allocUnsafe(len);
       end -= len;
-      if (readSync(fd, buf, 0, len, end) !== len) return [];
+      if (readSync(fd, buf, 0, len, end) !== len) return none;
       const joined = fragment.length ? Buffer.concat([buf, fragment]) : buf;
       const newline = joined.indexOf(10);
       if (end > 0 && newline < 0) { fragment = joined; continue; }
       const start = end === 0 ? 0 : newline + 1;
-      const found = selectRecentPrompts(promptTexts(joined.subarray(start).toString('utf8')));
-      if (found.length) return found;
+      const found = promptTexts(joined.subarray(start).toString('utf8')).slice(-RECENT_PROMPTS_MAX);
+      if (found.length) return looksSecret(found.at(-1)!) ? { ok: false, reason: 'input_secret' } : { ok: true, requests: found.filter(t => !looksSecret(t)) };
       fragment = joined.subarray(0, start);
     }
-    return [];
-  } catch { return []; } finally {
+    return none;
+  } catch { return none; } finally {
     try { closeSync(fd); } catch { /* nothing to recover */ }
   }
 };
+
+/** The outbound bound on one request: its first `RECENT_PROMPT_MAX_CHARS`, never half a surrogate pair, marked when cut. */
+export const clipPrompt = (t: string): string => t.length > RECENT_PROMPT_MAX_CHARS ? `${t.slice(0, RECENT_PROMPT_MAX_CHARS).replace(/[\uD800-\uDBFF]$/, '')} […]` : t;
 
 /** Native adapters provide only observed human requests; the same bounds and secret filtering apply. */
 export const selectRecentPrompts = (requests: readonly string[], max = RECENT_PROMPTS_MAX): string[] => requests
   .filter(t => t.trim().length > 0 && !looksSecret(t) && !COMMAND_RECORD.test(t.trim()) && !INTERRUPTION.test(t.trim()))
   .slice(-max)
-  .map(t => t.length > RECENT_PROMPT_MAX_CHARS ? `${t.slice(0, RECENT_PROMPT_MAX_CHARS).replace(/[\uD800-\uDBFF]$/, '')} […]` : t);
+  .map(clipPrompt);

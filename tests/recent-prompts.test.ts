@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { humanInputText, readCurrentTaskPrompts, RECENT_PROMPT_MAX_CHARS, selectRecentPrompts } from '../src/recent-prompts.js';
+import { clipPrompt, humanInputText, readCurrentTaskPrompts, RECENT_PROMPT_MAX_CHARS, selectRecentPrompts } from '../src/recent-prompts.js';
 
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>();
@@ -47,6 +47,12 @@ describe('shared human input classification and selection', () => {
     expect(selected).toEqual(['old', 'two', `${'x'.repeat(RECENT_PROMPT_MAX_CHARS)} […]`]);
     expect(selectRecentPrompts(['a', 'b', 'c', 'd'], 2)).toEqual(['c', 'd']);
   });
+
+  it('clipPrompt never splits a surrogate pair and leaves a request within the bound as it was', () => {
+    const emoji = 'x'.repeat(RECENT_PROMPT_MAX_CHARS - 1) + '😀tail';
+    expect(clipPrompt(emoji)).toBe(`${'x'.repeat(RECENT_PROMPT_MAX_CHARS - 1)} […]`);
+    expect(clipPrompt('짧은 요청 […] as typed')).toBe('짧은 요청 […] as typed');
+  });
 });
 
 describe('readCurrentTaskPrompts (classic Compact)', () => {
@@ -59,26 +65,42 @@ describe('readCurrentTaskPrompts (classic Compact)', () => {
     const p = join(tmp, 'split-task.jsonl');
     writeFileSync(p, row + tail);
     vi.mocked(readSync).mockClear();
-    expect(readCurrentTaskPrompts(p)).toEqual([task]);
+    expect(readCurrentTaskPrompts(p)).toEqual({ ok: true, requests: [task] });
     expect(vi.mocked(readSync).mock.calls.map(c => Array.from(c)[3])).toEqual([2 * 1024 * 1024, split]);
   });
 
-  it('stops at the first chunk with a human task and applies shared secret filtering and clipping', () => {
-    const p = write([user('old task'), user([{ type: 'tool_result', content: 'x'.repeat(3 * 1024 * 1024) }]), user('latest task ' + 'a'.repeat(2500)), user('password = correct-horse-battery-staple-0000')]);
+  it('returns the latest three requests of the first chunk that has one, whole, without reading further back', () => {
+    const latest = 'latest task ' + 'a'.repeat(2500) + ' and keep the API';
+    const p = write([user('old task'), user([{ type: 'tool_result', content: 'x'.repeat(3 * 1024 * 1024) }]), user('one'), user('two'), user('three'), user(latest)]);
     vi.mocked(readSync).mockClear();
-    expect(readCurrentTaskPrompts(p)).toEqual(['latest task ' + 'a'.repeat(RECENT_PROMPT_MAX_CHARS - 12) + ' […]']);
+    expect(readCurrentTaskPrompts(p)).toEqual({ ok: true, requests: ['two', 'three', latest] });
     expect(vi.mocked(readSync).mock.calls).toHaveLength(1);
+    const alone = write([user('old task'), user([{ type: 'tool_result', content: 'x'.repeat(3 * 1024 * 1024) }]), user('only one')]);
+    expect(readCurrentTaskPrompts(alone)).toEqual({ ok: true, requests: ['only one'] });
+  });
+
+  it('a latest request that looks like a secret anywhere in it means no current task, never an older one in its place', () => {
+    const secret = 'Fix the deploy. ' + 'a'.repeat(9000) + ' password = correct-horse-battery-staple-0000';
+    const p = write([user('old task'), user([{ type: 'tool_result', content: 'x'.repeat(3 * 1024 * 1024) }]), user('earlier'), user(secret)]);
+    vi.mocked(readSync).mockClear();
+    expect(readCurrentTaskPrompts(p)).toEqual({ ok: false, reason: 'input_secret' });
+    expect(vi.mocked(readSync).mock.calls).toHaveLength(1);
+  });
+
+  it('an earlier request that looks like a secret is left out, not replaced by an older one', () => {
+    const p = write([user('oldest'), user('password = correct-horse-battery-staple-0000'), user('middle'), user('latest')]);
+    expect(readCurrentTaskPrompts(p)).toEqual({ ok: true, requests: ['middle', 'latest'] });
   });
 
   it('reaches the file start without treating tool output, notices, summaries, commands, meta or sidechain rows as a task', () => {
     const p = write([user('sidechain', { isSidechain: true }), user('meta', { isMeta: true }), user('<command-name>/compact</command-name>'),
       user('notice', { promptSource: 'system', origin: { kind: 'task-notification' } }), user('summary', { isCompactSummary: true }),
       user([{ type: 'tool_result', content: 'x'.repeat(3 * 1024 * 1024) }])]);
-    expect(readCurrentTaskPrompts(p)).toEqual([]);
+    expect(readCurrentTaskPrompts(p)).toEqual({ ok: false, reason: 'no_current_task' });
   });
 
   it('rejects missing paths, symlinks, directories and empty transcripts', () => {
     const target = write([user('private')]); const link = join(tmp, 'current-task-symlink.jsonl'); symlinkSync(target, link);
-    for (const p of [null, undefined, '', join(tmp, 'missing-current.jsonl'), link, tmp, write([])]) expect(readCurrentTaskPrompts(p)).toEqual([]);
+    for (const p of [null, undefined, '', join(tmp, 'missing-current.jsonl'), link, tmp, write([])]) expect(readCurrentTaskPrompts(p)).toEqual({ ok: false, reason: 'no_current_task' });
   });
 });
