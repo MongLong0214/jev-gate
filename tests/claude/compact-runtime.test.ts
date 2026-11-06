@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 // Exercise the transcript writer with a local fake model, without login or owner configuration.
 describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('Claude manual compaction', () => {
-  it.each([false, true])('keeps the default-on digest across compaction and native resume (Jev dependencies: %s)', async semantic => {
+  it.each([[false, false], [true, false], [true, true]])('keeps the default-on digest across compaction and native resume (Jev dependencies: %s, tied answers: %s)', async (semantic, ties) => {
     const temp = mkdtempSync(join(tmpdir(), 'jev-manual-compact-'));
     const home = join(temp, 'home'); const config = join(home, '.claude'); const cwd = join(temp, 'project');
     mkdirSync(config, { recursive: true }); mkdirSync(cwd);
@@ -28,9 +28,12 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('Claude manual compaction
         jevCalls++; const request = JSON.parse(bytes.toString());
         const response = dependencyReply(bytes.toString());
         const result = JSON.parse(response.text);
+        let tied = 0;
         for (const [id, answer] of Object.entries(result.answers) as Array<[string, { choice: string; probabilities: Record<string, number> }]>) {
           const choice = request.state.candidates.find((c: { id: string; result: string }) => c.id === id)?.result.includes(dependencyFact) ? 'required' : 'unrelated';
           answer.choice = choice; answer.probabilities = Object.fromEntries(Object.keys(answer.probabilities).map(k => [k, k === choice ? 1 : 0]));
+          // #410: two other candidates tie, as 26 of 163 owner compactions did; the dependency must still be applied.
+          if (ties && choice === 'unrelated' && tied++ < 2) answer.probabilities = { required: 0, related: .5, unrelated: .5, unclear: 0 };
         }
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(result)); return;
       }
