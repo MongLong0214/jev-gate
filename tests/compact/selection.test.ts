@@ -111,6 +111,20 @@ describe('bounded current-task compaction dependency selection', () => {
     });
     expect(await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch: broken, sleep }))
       .toMatchObject({ reason: 'invalid_answers', priorities: [], ties: 1, validation: { reason: 'choice', invalid_choice_count: 1, choice_failures: { confidence: 1 } } });
+    // A tied answer that fails any other check is malformed, not undecided: it voids the batch as before.
+    const malformedTies: Array<[Record<string, unknown>, string]> = [
+      [{ confidence: 2 }, 'confidence'], [{ confidence: -1 }, 'confidence'], [{ confidence: '0.5' }, 'confidence'],
+      [{ confidence: null }, 'confidence'], [{ confidence: undefined }, 'confidence'], [{ choice: 'unrelated' }, 'choice_not_maximum'],
+    ];
+    for (const [patch, failure] of malformedTies) {
+      const fetch = vi.fn(async (_url: string, init: { body: string }) => {
+        const body = JSON.parse(dependencyReply(init.body).text), ids = Object.keys(body.answers);
+        Object.assign(body.answers[ids.find(id => id !== 'm5t0')!], tie, patch);
+        return { status: 200, text: JSON.stringify(body) };
+      });
+      expect(await createCompactSelector(1000)(s.messages, s.baseline, 'key', { fetch, sleep }))
+        .toMatchObject({ reason: 'invalid_answers', priorities: [], ties: 0, validation: { invalid_choice_count: 1, choice_failures: { [failure]: 1 } } });
+    }
   });
   it('withholds full secret-bearing and interrupted evidence before excerpting', () => {
     const s = setup(); const m = s.messages[5]!; const u = m.toolUses[0]!;

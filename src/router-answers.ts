@@ -31,7 +31,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 /**
  * Exact label set, finite probabilities in [0,1] summing to 1 up to Jev's rounding, and a UNIQUE maximum within 1e-6
  * of the returned probabilities that is the stated choice. A tie is not an answer: nothing about it says which side to
- * take.
+ * take. `tie` is reported only for an answer that passes every other check, its stated choice among the tied labels, so
+ * a caller that reads a tie as "undecided" never lets a malformed answer through.
  */
 export type ChoiceFailure = 'type' | 'label' | 'probabilities_shape' | 'probability_labels' | 'probability_value' | 'probability_sum' | 'tie' | 'choice_not_maximum' | 'confidence';
 /** Closed metadata only; never returns provider strings or labels. Same validation path as validateChoice. */
@@ -48,10 +49,10 @@ export const inspectChoice = (value: unknown, keys: readonly string[]): { answer
   if (probabilities === null) return invalid('probability_sum');
   const max = Math.max(...keys.map((k) => probabilities[k] as number));
   const top = keys.filter((k) => (probabilities[k] as number) >= max - ARGMAX_TOLERANCE);
-  if (top.length !== 1) return invalid('tie');
-  if (top[0] !== choice) return invalid('choice_not_maximum');
+  if (!top.includes(choice)) return invalid('choice_not_maximum');
   const confidence = value['confidence'];
   if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return invalid('confidence');
+  if (top.length !== 1) return invalid('tie');
   return { answer: { choice, confidence, probabilities }, reason: null };
 };
 export const validateChoice = (value: unknown, keys: readonly string[]): ChoiceAnswer | null => inspectChoice(value, keys).answer;
