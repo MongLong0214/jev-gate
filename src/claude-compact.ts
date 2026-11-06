@@ -37,7 +37,7 @@ const INPUT_CHARS = 240;
 const CUT = ' […]';
 /** The most of the room left after the failures that the person's requests may take; the rest stays for the selection and files. */
 const REQUEST_SHARE = 2 / 3;
-/** What each request kept before #408 (its first 700 characters): every request gets this much before any runs on. */
+/** What each request kept before #408 (its first 700 characters): once one does not fit whole, it and every older one get this much before any runs on. */
 const REQUEST_FLOOR = 700;
 
 type Rec = Record<string, unknown>;
@@ -148,18 +148,21 @@ export const RESTORE_HEADER = `${DIGEST_MARK} Exact details from before this com
  * results, then the files. Requests and failures are listed oldest first whatever order they were fitted in.
  */
 /**
- * How many characters of each request fit in `room`, each charged 3 more for its line. Every request first gets up to
- * `REQUEST_FLOOR`, newest first, so a long one cannot push out an older one; what is left then lets them run on, newest
- * first, whole when it can. A length short of the request means it is cut there (" […]" included); 0 leaves it out.
+ * How many characters of each request fit in `room`, each charged 3 more for its line. Newest first, each is kept whole
+ * while it fits in what is left. The first that does not fit, and every older one, then get up to `REQUEST_FLOOR`,
+ * newest first, so a request too long for the room cannot push out an older one; what is left lets them run on, newest
+ * first. A length short of the request means it is cut there (" […]" included); 0 leaves it out.
  */
 const allotRequests = (requests: readonly string[], room: number): number[] => {
   const out = requests.map(() => 0);
-  for (let i = requests.length - 1; i >= 0; i--) {
+  let cut = requests.length - 1;
+  for (; cut >= 0 && requests[cut]!.length + 3 <= room; cut--) { out[cut] = requests[cut]!.length; room -= out[cut]! + 3; }
+  for (let i = cut; i >= 0; i--) {
     const len = requests[i]!.length;
     const give = Math.min(len, REQUEST_FLOOR, room - 3);
     if (give === len || give > CUT.length) { out[i] = give; room -= give + 3; }
   }
-  for (let i = requests.length - 1; i >= 0 && room > 0; i--) {
+  for (let i = cut; i >= 0 && room > 0; i--) {
     const more = out[i] ? Math.min(requests[i]!.length - out[i]!, room) : 0;
     out[i] = out[i]! + more; room -= more;
   }
