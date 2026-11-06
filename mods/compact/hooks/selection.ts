@@ -99,7 +99,8 @@ export const createCompactSelector = (timeoutMs: number): ((messages: readonly D
     const failures: Partial<Record<ChoiceFailure, number>> = {};
     for (const c of candidates) {
       const { answer, reason } = inspectChoice((raw as Record<string, unknown>)[c.id], labels);
-      // A tie is a well-formed answer that names no side, as Gate A reads it too: that candidate keeps its local order.
+      // A tie is an answer that passes every other check but names no side (inspectChoice reports it only then), as
+      // Gate A reads it too: that candidate keeps its local order.
       if (reason === 'tie') result.ties++;
       else if (!answer) { invalid++; failures[reason] = (failures[reason] ?? 0) + 1; }
       else if (answer.choice === 'required') result.priorities.push({ message: c.message, tool: c.tool });
