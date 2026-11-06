@@ -2,7 +2,7 @@ import { dependencyFact, dependencyReply } from '../fixtures/compact-dependencie
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { gunzipSync } from 'node:zlib';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -85,4 +85,89 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('Claude manual compaction
       rmSync(temp, { recursive: true, force: true });
     }
   }, 120_000);
+});
+
+// The classic path: no function hooks, so the host summarizes with the PreCompact steering and SessionStart restores.
+describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('Claude classic compaction (#408)', () => {
+  it('steers without a verbatim promise and restores a long request whole, past 700 and 2,000 characters', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'jev-classic-compact-'));
+    const home = join(temp, 'home'); const config = join(home, '.claude'); const cwd = join(temp, 'project');
+    mkdirSync(config, { recursive: true }); mkdirSync(cwd);
+    const count = 6;
+    for (let i = 0; i < count; i++) writeFileSync(join(cwd, `note${i}.txt`), `Fixture ${i}\n${'working data\n'.repeat(1600)}FIXTURE_OLD_END_${i}\n`);
+    const tail = 'CONSTRAINT_AFTER_2000: keep the public parseRow signature.';
+    const request = `Port the row parser to the new reader. ${'Background on the old reader and why it is being replaced. '.repeat(45)}Read the ${count} fixture notes and the missing note, then finish. ${tail}`;
+    expect(request.length).toBeGreaterThan(2500); expect(request.indexOf(tail)).toBeGreaterThan(2000);
+    let phase: 'prime' | 'compact' | 'resume' = 'prime'; let reads = 0;
+    const requests: Array<{ phase: string; body: string }> = [];
+    const api = createServer(async (req, res) => {
+      const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      let bytes = Buffer.concat(chunks); if (req.headers['content-encoding'] === 'gzip') bytes = gunzipSync(bytes);
+      const body = JSON.parse(bytes.toString() || '{}') as { tools?: Array<{ name: string }> };
+      if (req.url?.includes('count_tokens')) { res.setHeader('content-type', 'application/json'); res.end('{"input_tokens":100}'); return; }
+      if (!req.url?.includes('/v1/messages')) { res.setHeader('content-type', 'application/json'); res.end('{}'); return; }
+      requests.push({ phase, body: bytes.toString() });
+      res.setHeader('content-type', 'text/event-stream');
+      const event = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      const tool = phase === 'prime' && reads <= count && body.tools?.some(t => t.name === 'Read'); const index = reads++;
+      const file = index === count ? 'missing-note.txt' : `note${index}.txt`;
+      const text = phase === 'compact' ? '<summary>Porting the row parser; fixture notes read.</summary>' : 'fixture complete';
+      event('message_start', { type: 'message_start', message: { id: `msg_classic_${requests.length}`, type: 'message', role: 'assistant', model: 'claude-sonnet-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 0 } } });
+      event('content_block_start', { type: 'content_block_start', index: 0, content_block: tool ? { type: 'tool_use', id: `tool_classic_${index}`, name: 'Read', input: {} } : { type: 'text', text: '' } });
+      event('content_block_delta', { type: 'content_block_delta', index: 0, delta: tool ? { type: 'input_json_delta', partial_json: JSON.stringify({ file_path: join(cwd, file) }) } : { type: 'text_delta', text } });
+      event('content_block_stop', { type: 'content_block_stop', index: 0 });
+      event('message_delta', { type: 'message_delta', delta: { stop_reason: tool ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } });
+      event('message_stop', { type: 'message_stop' }); res.end();
+    });
+    try {
+      await new Promise<void>(resolve => api.listen(0, '127.0.0.1', resolve));
+      const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CLAUDE_|ANTHROPIC_|TYPESAFE_|JEV_|XDG_)/.test(name)));
+      Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: config, XDG_CONFIG_HOME: join(home, '.config'), ANTHROPIC_API_KEY: 'fake-native-key', ANTHROPIC_BASE_URL: `http://127.0.0.1:${(api.address() as { port: number }).port}`, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+        JEV_GATE_MODE: 'off', JEV_DASHBOARD_NO_OPEN: '1', JEV_GATE_ONBOARDING: '0', JEV_GATE_STATE_DIR: join(temp, 'state'), JEV_GATE_TRACE_DIR: join(temp, 'trace') });
+      const root = join(__dirname, '../..'); const plugin = join(temp, 'packed plugin'); mkdirSync(plugin);
+      const packed = spawnSync(process.execPath, [join(root, 'scripts/pack.mjs'), temp], { encoding: 'utf8' }); expect(packed.status, packed.stderr).toBe(0);
+      const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+      expect(spawnSync('unzip', ['-q', join(temp, `jev-gate-${version}.zip`), '-d', plugin]).status).toBe(0);
+      // As on a Team seat, where the host never hands session.compact to a person-installed plugin: no module, classic hooks only.
+      const hooks = JSON.parse(readFileSync(join(plugin, 'hooks/hooks.json'), 'utf8')) as Record<string, unknown>; delete hooks['modules'];
+      writeFileSync(join(plugin, 'hooks/hooks.json'), JSON.stringify(hooks));
+      writeFileSync(join(config, 'settings.json'), JSON.stringify({ model: 'claude-sonnet-5', permissions: { allow: ['Read'] }, pluginConfigs: { 'jev-gate@inline': { options: { compactBudgetChars: 40000, compactJevEnabled: false, routerEnabled: false } } } }));
+      const session = randomUUID();
+      const run = (extra: string[], prompt: string) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+        const child = spawn('claude', ['--plugin-dir', plugin, '--model', 'claude-sonnet-5', '--permission-mode', 'default', '--allowedTools', 'Read', ...extra, '-p', prompt], { cwd, env });
+        child.stdin.end(); let output = '';
+        child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
+        const timer = setTimeout(() => child.kill('SIGKILL'), 25_000);
+        child.on('error', error => { clearTimeout(timer); reject(error); });
+        child.on('close', code => { clearTimeout(timer); resolve({ code, output }); });
+      });
+      const prime = await run(['--session-id', session], 'Earlier: write the tests first.');
+      expect(prime.code, prime.output).toBe(0);
+      reads = 0;
+      const second = await run(['--resume', session], request);
+      expect(second.code, second.output).toBe(0);
+      phase = 'compact'; const compact = await run(['--resume', session], '/compact');
+      expect(compact.code, compact.output).toBe(0);
+      const summarize = requests.filter(r => r.phase === 'compact').map(r => r.body).join('\n');
+      // The host's own summary prompt says "verbatim" too; only the instructions this plugin added are checked.
+      const steering = /jev-gate compact: [^"]*?(?=\\n|")/.exec(summarize)?.[0] ?? '';
+      expect(steering).toContain('keep every requirement, constraint and correction');
+      expect(steering).not.toMatch(/verbatim|Do not repeat them|The current task:/);
+      phase = 'resume'; const resumed = await run(['--resume', session], 'Reply fixture complete.');
+      expect(resumed.code, resumed.output).toBe(0);
+      const after = requests.filter(r => r.phase === 'resume').at(-1)!.body;
+      expect(after).toContain('[jev-gate compact]');
+      expect(after).toContain(tail);
+      expect(after).toContain(JSON.stringify(request).slice(1, -1));
+      expect(after).toContain('Earlier: write the tests first.');
+      expect(after).toContain('missing-note.txt');
+      expect(after).not.toContain('FIXTURE_OLD_END_0');
+      const traces = readdirSync(join(temp, 'trace')).filter(n => n.startsWith('mod_compact-')).map(n => JSON.parse(readFileSync(join(temp, 'trace', n), 'utf8')) as Record<string, unknown>);
+      expect(traces.find(t => t['stage'] === 'pre' && t['guided'] === true)).toMatchObject({ path: 'classic', trigger: 'manual', selection: 'disabled' });
+      expect(traces.some(t => t['stage'] === 'restore')).toBe(true);
+    } finally {
+      api.closeAllConnections(); await new Promise<void>(resolve => api.close(() => resolve()));
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 150_000);
 });
