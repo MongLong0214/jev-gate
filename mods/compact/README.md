@@ -81,13 +81,20 @@ the same options as above (`compactEnabled`, `compactMode`, `compactBudgetChars`
 `compactJevTimeoutMs`) and no settings written anywhere.
 
 1. **`PreCompact`** reads the transcript tail, asks Jev (the same one-call dependency selection, newest candidates first)
-   which earlier results this task depends on, and prints custom instructions for the summarizer: say nothing the restore
-   will carry, write no `<analysis>` section, keep the summary under a share of the budget, and state the task, decisions,
-   constraints, open problems and next step. It saves the restore for the next step. The summarizer is a model: the steering
+   which earlier results this task depends on, and prints custom instructions for the summarizer: the restore is a set of
+   excerpts that can be cut, so keep every requirement, constraint and correction the person still holds and leave only
+   long logs and tool output to it; write no `<analysis>` section, keep the summary under a share of the budget, and state
+   the task, decisions, constraints, open problems and next step. It saves the restore for the next step. The summarizer is a model: the steering
    shortens its output, it does not bind it.
 2. **`SessionStart` on `source: compact`** hands the saved restore to the model as additional context, once: the person's
-   latest requests verbatim, the latest failed calls, exact excerpts of the results Jev named, and the files read or
-   changed. The engine already keeps its last exchange, so none of that is restored.
+   latest requests (up to three from the newest transcript chunk that has one), the latest failed calls, exact excerpts
+   of the results Jev named, and the files read or changed. Room is given in that priority: the failures first, then the
+   requests within two thirds of what is left (newest first, each whole while it fits; once one does not, it and every
+   older one get their first 700 characters, newest first, then the rest of that room newest first), then Jev's
+   results, then the files.
+   Jev is sent only the latest request, cut at 2,000 characters. When the latest request looks like a secret, no request
+   is restored or sent and no older one takes its place. The engine already keeps its last exchange, so none of that is
+   restored.
 3. **`PostCompact`** records the summary's size against the budget. It cannot change the context (the host shows its
    output to the person only, and at `SessionStart` time the summary is not yet in the transcript), so it is measurement.
 
