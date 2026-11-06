@@ -392,7 +392,7 @@ describe('classic path: budget', () => {
     }
   });
 
-  it('#408: requests are fitted after the failures, each its start first, then newest first, and leave room for the selected results', () => {
+  it('#408: requests are fitted after the failures, newest whole while it fits, else each its start first, and leave room for the selected results', () => {
     const recs = session(8, 3000);
     const failing = [...call(97, 'E1 ' + 'e'.repeat(2000), true), ...call(98, 'E2 ' + 'e'.repeat(2000), true)];
     const messages = transcriptMessages(heldRecords([...recs.slice(0, -2), ...failing, ...recs.slice(-2)]), 'x');
@@ -409,6 +409,13 @@ describe('classic path: budget', () => {
     // A long latest request never pushes out a short earlier one, down to two characters.
     const kept = buildRestore(messages, ['ok', 'Keep the API. ' + 'k'.repeat(5000), 'NEWEST ' + 'n'.repeat(7000)], [], RESTORE_CAP)!;
     expect(kept).toContain('▸ ok\n▸ Keep the API. ');
+    // A newest request that fits whole is kept whole, its last constraint included, before older ones get their start.
+    const plain = transcriptMessages(heldRecords(session(8, 3000)), 'x');
+    const latest = 'NEWEST ' + 'n'.repeat(4970) + ' NEVER TOUCH LEGACY';
+    const whole = buildRestore(plain, ['A'.repeat(906), 'B'.repeat(909), latest], [], RESTORE_CAP)!;
+    expect(whole.length).toBeLessThanOrEqual(RESTORE_CAP);
+    expect(whole).toMatch(new RegExp(`▸ ${latest}(\\n|$)`));
+    expect(whole).toMatch(/▸ B+ \[…\]\n▸ NEWEST /);
   });
 
   it('the steering text is short, carries the summary\'s share and promises no verbatim restore', () => {
