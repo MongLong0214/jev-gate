@@ -21,7 +21,7 @@ describe('resolveConfig', () => {
       routeMainEffort: true,
       routeMainModel: true,
       explicitKey: { kind: 'absent' },
-      tiers: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-1' },
+      tiers: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-2' },
       tierIssues: [],
       minUpgradeConfidence: 0.8,
       minDowngradeConfidence: 0.65,
@@ -66,24 +66,24 @@ describe('resolveConfig', () => {
       // Frontier exists only as an exact identifier; an alias cannot authorize it.
       { tier: 'frontier', reason: 'unknown_model' },
     ]);
-    expect(ok({ frontierModel: 'claude-fable-5-1' }).tiers.frontier).toBe('claude-fable-5-1');
+    expect(ok({ frontierModel: 'claude-fable-5-2' }).tiers.frontier).toBe('claude-fable-5-2');
     expect(ok({ frontierModel: '' }).tiers.frontier).toBeUndefined();
     expect(ok({ deepModel: 'claude-opus-5-5[1m]' }).tiers.deep).toBe('claude-opus-5-5[1m]');
     // Only a suffix the host lists for that model names a known variant.
-    for (const deepModel of ['claude-opus-5-5[bogus]', 'claude-fable-5-1[1m]']) {
+    for (const deepModel of ['claude-opus-5-5[bogus]', 'claude-fable-5-2[1m]']) {
       expect(ok({ deepModel }).tierIssues, deepModel).toEqual([{ tier: 'deep', reason: 'unknown_model' }]);
     }
   });
 
   it('keeps role preferences when multiple roles name one family', () => {
     const c = ok({ standardModel: 'opus' });
-    expect(c.tiers).toEqual({ fast: 'haiku', standard: 'opus', deep: 'opus', frontier: 'claude-fable-5-1' });
+    expect(c.tiers).toEqual({ fast: 'haiku', standard: 'opus', deep: 'opus', frontier: 'claude-fable-5-2' });
     expect(c.tierIssues).toEqual([]);
-    expect(ok({ deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-1' }).tiers).toEqual({
+    expect(ok({ deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-2' }).tiers).toEqual({
       fast: 'haiku',
       standard: 'sonnet',
       deep: 'claude-opus-5-5',
-      frontier: 'claude-fable-5-1',
+      frontier: 'claude-fable-5-2',
     });
   });
 });

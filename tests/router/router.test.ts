@@ -35,14 +35,14 @@ const configOf = (options: Record<string, string | number | boolean>) => {
 /** Each switch alone; the subagent-effort and named-model switches, on by default, get their own cases below. */
 const SUBAGENT_OFF = { routeSubagentEffort: false, routeExplicitSpawnModel: false };
 const EFFORT_ONLY = { routeMainEffort: true, routeMainModel: false, routeSubagentModel: false, ...SUBAGENT_OFF };
-const FULL_IDS = { fastModel: 'claude-haiku-5-5', standardModel: 'claude-sonnet-5-5', deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-1' };
+const FULL_IDS = { fastModel: 'claude-haiku-5-5', standardModel: 'claude-sonnet-5-5', deepModel: 'claude-opus-5-5', frontierModel: 'claude-fable-5-2' };
 const MODEL_ONLY = { routeMainEffort: false, routeMainModel: true, routeSubagentModel: false, ...SUBAGENT_OFF, ...FULL_IDS };
 const SPAWN_ONLY = { routeMainEffort: false, routeMainModel: false, routeSubagentModel: true, ...SUBAGENT_OFF, routeSubagentEffort: true };
 /** Explicit switch overrides used by tests that constrain the root-model path. */
 const SWITCHES = ([
   ['claude-sonnet-5-5', 'claude-opus-5-5'],
   ['claude-opus-5-5', 'claude-sonnet-5-5'],
-  ['claude-sonnet-5-5', 'claude-fable-5-1'],
+  ['claude-sonnet-5-5', 'claude-fable-5-2'],
   ['claude-sonnet-5-5', 'claude-haiku-5-5'],
 ] as const).map(([from, to]) => ({ from, to }));
 
@@ -646,7 +646,7 @@ describe('root model', () => {
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5-5' }), n.next));
     expect(n.calls).toEqual([step({ model: 'claude-opus-5-5' })]);
     // Current Haiku has the same 1M window, so it is a valid alternative too.
-    expect(f.logs.find(l => l.event === 'root')?.['selection']).toMatchObject({ roles: [{ role: 'fast', model: 'claude-haiku-5-5' }, { role: 'standard', model: 'claude-sonnet-5-5' }, { role: 'deep', model: 'claude-opus-5-5' }, { role: 'frontier', model: 'claude-fable-5-1' }] });
+    expect(f.logs.find(l => l.event === 'root')?.['selection']).toMatchObject({ roles: [{ role: 'fast', model: 'claude-haiku-5-5' }, { role: 'standard', model: 'claude-sonnet-5-5' }, { role: 'deep', model: 'claude-opus-5-5' }, { role: 'frontier', model: 'claude-fable-5-2' }] });
     expect(JSON.stringify(f.sent[0]?.questions['capability'])).not.toMatch(/claude|haiku|sonnet|opus|fable/i);
   });
 
@@ -709,7 +709,7 @@ describe('root model', () => {
     const next = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ model: 'claude-opus-5-5', index: 1 }), next.next));
     expect(next.calls[0]!.model).toBe('claude-opus-5-5');
-    const manual = step({ model: 'claude-fable-5-1', index: 2 });
+    const manual = step({ model: 'claude-fable-5-2', index: 2 });
     await drain(router.turnStep(f.engine, manual, next.next));
     expect(next.calls.at(-1)).toEqual(manual);
     expect(f.sent).toHaveLength(1);
@@ -796,7 +796,7 @@ describe('root model', () => {
     router.turnStart({ turnId: 't1', text: TEXT });
     const n = streamNext<TurnStepEvent>();
     await drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5-5' }), n.next));
-    expect(n.calls).toEqual([step({ model: 'claude-fable-5-1' })]);
+    expect(n.calls).toEqual([step({ model: 'claude-fable-5-2' })]);
     expect(f.sent).toHaveLength(1);
   });
 });
@@ -851,7 +851,7 @@ describe('spawn model', () => {
       ['host_unverified', spawn(), { hostBase: '2.2.0' }, true],
       ['host_unverified', spawn(), { hostBase: '2.1.283-dev' }, true],
       ['host_unverified', spawn(), { hostBase: undefined }, true],
-      ['baseline_unknown', spawn({ subagentType: 'Explore', parentModel: 'claude-fable-5-1' }), {}, true],
+      ['baseline_unknown', spawn({ subagentType: 'Explore', parentModel: 'claude-fable-5-2' }), {}, true],
       ['gate_routed', spawn({ subagentType: 'jev-gate:worker' }), {}, true],
       ['gate_routed', spawn({ subagentType: 'jev-gate:planner' }), {}, true],
       ['gate_routed', spawn({ prompt: 'Fix it.\n\n[Jev Gate route note] Tier: fast. Precedence: ...' }), {}, true],
@@ -1128,36 +1128,36 @@ describe('spawn model', () => {
     };
     for (const key of [FAKE_KEY, undefined]) {
       // Under a Fable parent the child runs on its Haiku default, which may still be sent.
-      const kept = await run('claude-fable-5-1', 'haiku', key);
+      const kept = await run('claude-fable-5-2', 'haiku', key);
       expect(kept.out).toEqual({ model: 'claude-haiku-5-5', agentId: 'child' });
       expect(kept.calls).toEqual([kept.e]);
       expect(kept.f.sent).toHaveLength(key ? 1 : 0);
     }
     // Under an Opus parent the child would run on its Fable default, which may not.
-    const refused = await run('claude-opus-5-5', 'claude-fable-5-1', undefined);
+    const refused = await run('claude-opus-5-5', 'claude-fable-5-2', undefined);
     expect(refused.out).toEqual({ deny: 'Restricted automatic child disabled; continue in the main session.' });
     expect(refused.calls).toEqual([]);
     expect(refused.f.logs).toContainEqual(expect.objectContaining({ event: 'spawn_denied', reason: 'restricted_baseline' }));
   });
 
   it('runs a restricted model the call names as named, neither replaced nor denied, without asking Jev', async () => {
-    for (const model of ['fable', 'claude-fable-5-1']) {
+    for (const model of ['fable', 'claude-fable-5-2']) {
       const router = createRouter(configOf({ ...SPAWN_ONLY, allowFable: false }));
       // A clear move to Opus, which the shipped bug applied silently to `model: "fable"`.
       const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['high', 0.95] }) });
       // As the host resolves them.
-      f.engine.modelAliases = async () => ({ opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5', fable: 'claude-fable-5-1' });
+      f.engine.modelAliases = async () => ({ opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5', fable: 'claude-fable-5-2' });
       f.engine.childContext = async () => ({ messages: 0, coverage: 'available', tools: [] });
       router.agentOffer(OFFER_BUILT_IN('general-purpose'));
       const e = spawn({ subagentType: 'general-purpose', model });
-      const n = spawnNext(() => ({ model: 'claude-fable-5-1', agentId: 'child' }));
-      expect(await router.agentSpawn(f.engine, e, n.next)).toEqual({ model: 'claude-fable-5-1', agentId: 'child' });
+      const n = spawnNext(() => ({ model: 'claude-fable-5-2', agentId: 'child' }));
+      expect(await router.agentSpawn(f.engine, e, n.next)).toEqual({ model: 'claude-fable-5-2', agentId: 'child' });
       expect(n.calls).toEqual([e]);
       expect(f.sent).toHaveLength(0);
       expect(f.logs).toContainEqual(expect.objectContaining({ event: 'spawn', skipped: 'explicit_restricted' }));
       // The spawn asked nothing: recorded as not asked rather than an invalid answer. Its first step keeps the named
       // model and takes only the child's one effort assessment (#392).
-      const first = childStep({ agentId: 'child', model: 'claude-fable-5-1' });
+      const first = childStep({ agentId: 'child', model: 'claude-fable-5-2' });
       const s = streamNext<TurnStepEvent>();
       await drain(router.turnStep(f.engine, first, s.next));
       expect(s.calls).toEqual([{ ...first, effort: 'high' }]);
@@ -1170,16 +1170,16 @@ describe('spawn model', () => {
     const router = createRouter(configOf({ enabled: false, allowFable: false }), undefined, true);
     const f = fakeEngine({});
     router.agentOffer(OFFER_BUILT_IN('general-purpose'));
-    const e = spawn({ subagentType: 'general-purpose', parentModel: 'claude-fable-5-1' });
-    const n = spawnNext(() => ({ model: 'claude-fable-5-1', agentId: 'child' }));
-    expect(await router.agentSpawn(f.engine, e, n.next)).toEqual({ model: 'claude-fable-5-1', agentId: 'child' });
+    const e = spawn({ subagentType: 'general-purpose', parentModel: 'claude-fable-5-2' });
+    const n = spawnNext(() => ({ model: 'claude-fable-5-2', agentId: 'child' }));
+    expect(await router.agentSpawn(f.engine, e, n.next)).toEqual({ model: 'claude-fable-5-2', agentId: 'child' });
     expect(n.calls).toEqual([e]);
     expect(f.logs.some(l => l.event === 'spawn_denied')).toBe(false);
   });
 
   it.each(['general-purpose', 'claude'].flatMap(type => ['project', 'plugin'].map(kind => [type, kind] as const)))("%s: a %s agent of that name is not the built-in, so the host's default does not apply to it", async (type, kind) => {
     const router = createRouter(configOf({ ...SPAWN_ONLY, routeSubagentEffort: false, allowFable: false }));
-    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }), pins: { subagentDefault: 'claude-fable-5-1' } });
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }), pins: { subagentDefault: 'claude-fable-5-2' } });
     f.engine.agentModel = async () => 'opus';
     // A project's file is listed under its own source; a plugin's is a built-in listing served by another provider.
     router.agentOffer(kind === 'project' ? { agent: type, source: 'projectSettings', provider: { plugin: 'engine', tier: 'core' } } : OFFER_BUILT_IN(type));
@@ -2415,7 +2415,7 @@ describe('#42 and #43: handler cases the issues list', () => {
 
   it('#42: a known model that no profile names is still placed by its documented role and routed to a reachable target', async () => {
     // Opus is an exact model the table knows, so its efforts and role are known; no configured profile needs to name it.
-    const router = createRouter(configOf({ routeMainEffort: true, routeMainModel: true, routeSubagentModel: false, fastModel: 'claude-haiku-5-5', standardModel: 'claude-sonnet-5-5', deepModel: 'claude-fable-5-1' }), SWITCHES);
+    const router = createRouter(configOf({ routeMainEffort: true, routeMainModel: true, routeSubagentModel: false, fastModel: 'claude-haiku-5-5', standardModel: 'claude-sonnet-5-5', deepModel: 'claude-fable-5-2' }), SWITCHES);
     const f = fakeEngine({ respond: answering({ ...CLEAR, effort: ['low', 0.95], tier: ['fast', 0.99] }) });
     await warmRoot(router, f, 'claude-sonnet-5-5', 'high');
     router.turnStart({ turnId: 't1', text: TEXT });
@@ -2993,7 +2993,7 @@ it('rechecks the common frontier switch before delivering a prepared Fable root 
   let reads=0;f.engine.frontierEnabled=async()=>++reads===1;
   router.turnStart({turnId:'t1',text:TEXT});const n=streamNext<TurnStepEvent>();
   await drain(router.turnStep(f.engine,step({model:'claude-sonnet-5-5'}),n.next));
-  expect(f.sent[0]?.questions.capability?.criteria).toHaveProperty('open_problem');
+  expect(f.sent[0]?.questions.capability?.criteria).toHaveProperty('open_ended');
   expect(n.calls[0]?.model).toBe('claude-sonnet-5-5');
   expect(f.logs).toContainEqual(expect.objectContaining({event:'root_stop',reason:'model_not_allowed'}));
 });
@@ -3275,7 +3275,7 @@ describe('root baseline across a resume', () => {
     ['Fable is off', { allowFable: false }, undefined],
     ['Fable is not in the allowlist', {}, ['claude-opus-5-5']],
   ] as const)('never restores a stored native model that may not be sent: %s', async (_, extra, available) => {
-    const store = new Map<string, unknown>([['session', { native: { model: 'claude-fable-5-1', effort: 'high' }, routed: { model: 'claude-opus-5-5', effort: 'high' }, drift: null, origin: 'turn.step' }]]);
+    const store = new Map<string, unknown>([['session', { native: { model: 'claude-fable-5-2', effort: 'high' }, routed: { model: 'claude-opus-5-5', effort: 'high' }, drift: null, origin: 'turn.step' }]]);
     const resumed = processOf(store, FAIL, undefined, extra);
     resumed.f.allowed.models = available;
     expect(await turn(resumed, 't1', 'claude-opus-5-5', 'high', 40)).toEqual([['claude-opus-5-5', 'high'], ['claude-opus-5-5', 'high']]);
@@ -3283,7 +3283,7 @@ describe('root baseline across a resume', () => {
 
   it.each([
     ['the allowlist names only Haiku', 'claude-opus-5-5', KEEP],
-    ['Fable is turned off while Jev answers', 'claude-fable-5-1', answering({ ...CLEAR, tier: ['frontier', 0.99], effort: ['xhigh', 0.99] })],
+    ['Fable is turned off while Jev answers', 'claude-fable-5-2', answering({ ...CLEAR, tier: ['frontier', 0.99], effort: ['xhigh', 0.99] })],
   ] as const)('never starts a main-loop subagent on a native model that may not be sent: %s', async (_, native, answer) => {
     const store = new Map<string, unknown>([['session', { native: { model: native, effort: 'xhigh' }, routed: { model: 'claude-haiku-5-5', effort: 'low' }, drift: null, origin: 'turn.step' }]]);
     let spawning = false;

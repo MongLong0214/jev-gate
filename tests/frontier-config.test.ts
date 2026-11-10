@@ -41,7 +41,7 @@ describe('shared frontier routing opt-in', () => {
     expect(DEFAULT_CONFIG.frontierEnabled).toBe(false);
     expect(frontierRoutingEnabled(f.env)).toBe(false);
     expect(loadCodexPolicy(f.env, catalog).router.allowAstra).toBe(false);
-    expect(claudeAllocation(f.env).allowed('claude-fable-5-1')).toBe(false);
+    expect(claudeAllocation(f.env).allowed('claude-fable-5-2')).toBe(false);
     expect(validateConfig({ version: 5, frontierEnabled: 'on' })).toMatchObject({ ok: false });
   });
   it('changes both hosts and owned dispatches with one file, including OFF over legacy opt-ins', () => {
@@ -52,8 +52,8 @@ describe('shared frontier routing opt-in', () => {
       f.write(value);
       expect(frontierRoutingEnabled(env, true)).toBe(value);
       expect(loadCodexPolicy(env, catalog).router.allowAstra).toBe(value);
-      expect(claudeAllocation(env).allowed('claude-fable-5-1')).toBe(value);
-      expect(claudeAllocation(env).candidates('claude-opus-5-5').some(c => c.id === 'claude-fable-5-1')).toBe(value);
+      expect(claudeAllocation(env).allowed('claude-fable-5-2')).toBe(value);
+      expect(claudeAllocation(env).candidates('claude-opus-5-5').some(c => c.id === 'claude-fable-5-2')).toBe(value);
       expect(validateConfig({ version: 5, frontierEnabled: value })).toMatchObject({ ok: true, config: { frontierEnabled: value } });
     }
   });
@@ -61,20 +61,20 @@ describe('shared frontier routing opt-in', () => {
     const f = fixture(); f.write(value);
     expect(frontierRoutingEnabled(f.env, true)).toBe(false);
     expect(loadCodexPolicy(f.env, catalog).router.allowAstra).toBe(false);
-    expect(claudeAllocation(f.env).allowed('claude-fable-5-1')).toBe(false);
+    expect(claudeAllocation(f.env).allowed('claude-fable-5-2')).toBe(false);
   });
   it('rejects malformed and symlinked config and honors the same custom path for both hosts', () => {
     const f = fixture(); writeFileSync(f.path, '{'); expect(frontierRoutingEnabled(f.env, true)).toBe(false);
     const override = join(f.env.HOME, 'owner-config.json'); writeFileSync(override, JSON.stringify({ version: 5, frontierEnabled: true }));
     const env = { ...f.env, JEV_GATE_CONFIG: override };
     expect(loadCodexPolicy(env, catalog).router.allowAstra).toBe(true);
-    expect(claudeAllocation(env).allowed('claude-fable-5-1')).toBe(true);
+    expect(claudeAllocation(env).allowed('claude-fable-5-2')).toBe(true);
     rmSync(f.path); symlinkSync(override, f.path); expect(frontierRoutingEnabled(f.env, true)).toBe(false);
   });
   it.each(['low', 'medium', 'high', 'xhigh', 'max'])('selects frontier models at their own supported effort: %s', effort => {
     const f = fixture(); f.write(true);
     for (const [baseline, target, candidates] of [
-      ['claude-opus-5-5', 'claude-fable-5-1', claudeCandidates({ baseline: 'claude-opus-5-5', aliases: {}, allowFable: frontierRoutingEnabled(f.env) })],
+      ['claude-opus-5-5', 'claude-fable-5-2', claudeCandidates({ baseline: 'claude-opus-5-5', aliases: {}, allowFable: frontierRoutingEnabled(f.env) })],
       ['gpt-6.1-sol', 'gpt-6-astra', codexCandidates(catalog, loadCodexPolicy(f.env, catalog).router.allowAstra)],
     ] as const) {
       const offer = offerPairs({ baseline: { model: baseline, effort: 'high' }, candidates, model: true, effort: true, upgrade: .8, downgrade: .6 })!;

@@ -7,8 +7,8 @@ import { catalogTierModels } from '../src/codex/config.js';
 import { codexCandidates } from '../src/codex/router.js';
 
 // Minimal synthetic publisher documents: no live API, credential or copied documentation snapshot.
-const names = ['Fable 5.1', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'];
-const ids = ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+const names = ['Fable 5.2', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'];
+const ids = ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
 const defaults = ['high', 'medium', 'high', 'medium'];
 const row = (label: string, values: string[]) => `| ${label} | ${values.join(' | ')} |`;
 const overview = [row('Feature', names.map(n => `Claude ${n}`)), row('---', names.map(() => '---')),
@@ -54,7 +54,12 @@ describe('official model freshness CI', () => {
   it('reads linked model headings without borrowing adjacent model facts or accepting duplicate sections', () => {
     const linked = effort.replace(/^### Recommended effort levels for (Claude .+)$/gm, '**[$1](https://example.test/model)** — *Model guidance*');
     expect(parseClaude(overview, linked)).toEqual(parseClaude(overview, effort));
-    expect(() => parseClaude(overview, linked.replace('[Claude Fable 5.1]', '[Claude Mythos 5.1]'))).toThrow(/effort section/);
+    // Fable 5.2's section (2026-11) states its default as "The API default is `high`."
+    const apiDefault = linked.replace(/and `(\w+)` is the default\./g, 'The API default is `$1`.');
+    expect(apiDefault).not.toEqual(linked);
+    expect(parseClaude(overview, apiDefault)).toEqual(parseClaude(overview, effort));
+    expect(() => parseClaude(overview, apiDefault.replace('The API default is `high`', 'The API default is `low`'))).toThrow(/default disagreement/);
+    expect(() => parseClaude(overview, linked.replace('[Claude Fable 5.2]', '[Claude Mythos 5.2]'))).toThrow(/effort section/);
     expect(() => parseClaude(overview, linked.replace('all five effort', 'all four effort'))).toThrow(/effort support/);
     expect(() => parseClaude(overview, linked + '\n' + effort)).toThrow(/ambiguous effort section/);
   });

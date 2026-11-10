@@ -31,7 +31,7 @@ const EFFORT: Record<string, string | null> = {
   'jev-gate:worker-fast': 'low',
   'jev-gate:worker': null,
   'jev-gate:worker-deep': 'high',
-  'jev-gate:worker-frontier': 'xhigh',
+  'jev-gate:worker-frontier': 'high',
 };
 
 const WORKER_DISALLOWED = ['Agent', 'SendMessage', 'Skill', 'Artifact', 'ArtifactComments', 'ArtifactData'];

@@ -1585,7 +1585,7 @@ describe('traces', () => {
     expect(r).toMatchObject({ kind: 'skip', code: 'no_state' });
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
     const post = records.find((rec) => rec['phase'] === 'post' && rec['job_state'] === 'absent');
-    expect(post).toMatchObject({ matched: false, subagent_type: 'jev-gate:worker-frontier', requested_model: 'claude-fable-5-1', resolved_model: 'fable' });
+    expect(post).toMatchObject({ matched: false, subagent_type: 'jev-gate:worker-frontier', requested_model: 'claude-fable-5-2', resolved_model: 'fable' });
   });
 
   /** #48 P0-2 review: an unpatched call runs on the frontmatter, so the owner's own model table is not what it requested. */
@@ -1603,7 +1603,7 @@ describe('traces', () => {
     const env = makeEnv({ JEV_GATE_TRACE_DIR: dir, JEV_GATE_CONFIG: cfg });
     await run(env, workerPost('toolu_native', workerReply(), { tool_input: { subagent_type: 'jev-gate:worker-frontier' }, tool_response: { status: 'completed', resolvedModel: 'opus', content: [] } }));
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
-    expect(records.find((rec) => rec['phase'] === 'post')).toMatchObject({ requested_model: 'claude-fable-5-1', resolved_model: 'opus' });
+    expect(records.find((rec) => rec['phase'] === 'post')).toMatchObject({ requested_model: 'claude-fable-5-2', resolved_model: 'opus' });
   });
 
   it('records the same fields for a PostToolUseFailure with no job state', async () => {
@@ -1612,7 +1612,7 @@ describe('traces', () => {
     await run(env, { hook_event_name: 'PostToolUseFailure', session_id: 's1', tool_name: 'Agent', tool_use_id: 'toolu_x', tool_input: { subagent_type: 'jev-gate:worker-frontier' }, error: 'boom' });
     const records = readdirSync(dir).map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>);
     const failure = records.find((rec) => rec['phase'] === 'failure');
-    expect(failure).toMatchObject({ subagent_type: 'jev-gate:worker-frontier', requested_model: 'claude-fable-5-1', resolved_model: null });
+    expect(failure).toMatchObject({ subagent_type: 'jev-gate:worker-frontier', requested_model: 'claude-fable-5-2', resolved_model: null });
   });
 
   it('#233: records only a closed Codex failure category and stage, never an invented one', async () => {

@@ -4,7 +4,7 @@ Measures the installed plugin against itself switched off, on the same tasks, in
 kind of number the README may call a saving: a within-session "direct estimate" is not one (#130).
 
 ```
-node dist/bench/ab.js run    --tasks bench/ab/tasks.example.json --out ~/.jev-gate/bench/2026-09-30 --model claude-fable-5-1 [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000]
+node dist/bench/ab.js run    --tasks bench/ab/tasks.example.json --out ~/.jev-gate/bench/2026-09-30 --model claude-fable-5-2 [--reps 3] [--only S,M] [--conds A,B,C,D] [--timeout-ms 3600000]
 node dist/bench/ab.js report --out ~/.jev-gate/bench/2026-09-30 [--trace ~/.jev-gate/trace]
 ```
 

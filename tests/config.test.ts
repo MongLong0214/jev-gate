@@ -56,7 +56,7 @@ describe('validateConfig', () => {
     if (!partial.ok) return;
     expect(partial.config).toMatchObject({
       mode: 'native',
-      models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'claude-fable-5-1' },
+      models: { fast: 'haiku', standard: 'sonnet', deep: 'claude-opus-5', frontier: 'claude-fable-5-2' },
     });
     // #48 P0-1: absent (and an explicit null) derive the floor from the host's own compaction window instead of a
     // fixed absolute number; 0 is still accepted and still turns the floor off outright.

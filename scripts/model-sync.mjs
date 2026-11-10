@@ -62,7 +62,8 @@ export function parseClaude(overview, effort) {
     requireFact(sections.length === 1, `Missing or ambiguous effort section: ${id}`);
     const section = sections[0];
     requireFact(/supports all five effort levels/.test(section), `Unrecognized effort support: ${id}`);
-    requireFact(EFFORTS.includes(defaults[i]) && new RegExp('`' + defaults[i] + '`(?:\\*\\*)?[,]? (?:(?:is )?the )?default').test(section), `Effort default disagreement: ${id}`);
+    // Publisher wording varies: "`high` is the default" or "The API default is `high`".
+    requireFact(EFFORTS.includes(defaults[i]) && new RegExp('`' + defaults[i] + '`(?:\\*\\*)?[,]? (?:(?:is )?the )?default|default is `' + defaults[i] + '`').test(section), `Effort default disagreement: ${id}`);
     let unconditionalEffort, conditionalEffort;
     if (thinking[i] === 'Adaptive (always on)') {
       unconditionalEffort = [...EFFORTS]; conditionalEffort = [];

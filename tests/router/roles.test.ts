@@ -4,7 +4,7 @@ import { claudeCandidates } from '../../mods/router/hooks/candidates.ts';
 import { DISPATCH_FLOORS, prepareDispatchAllocation } from '../../src/dispatch-allocation.ts';
 import { codexCandidates } from '../../src/codex/router.ts';
 
-const HAIKU = 'claude-haiku-5-5', SONNET = 'claude-sonnet-5-5', OPUS = 'claude-opus-5-5', FABLE = 'claude-fable-5-1';
+const HAIKU = 'claude-haiku-5-5', SONNET = 'claude-sonnet-5-5', OPUS = 'claude-opus-5-5', FABLE = 'claude-fable-5-2';
 const offer = (baseline = OPUS, effort: string | null = 'high', over: Partial<Parameters<typeof offerRoute>[0]> & { allowFable?: boolean; available?: string[] } = {}) => {
   const { allowFable = false, available, ...rest } = over;
   return offerRoute({ baseline: { model: baseline, effort }, candidates: claudeCandidates({ baseline, aliases: {}, allowFable, ...(available ? { available } : {}) }), model: true, effort: true, upgrade: .8, downgrade: .6, ...rest })!;
@@ -30,10 +30,34 @@ describe('capability offer', () => {
     expect(o.questions['effort_2']!.instructions).toContain('do not use max effort as a substitute for missing model capability');
   });
   it('offers frontier only with a frontier candidate and serves missing lower tiers upward', () => {
-    expect(Object.keys(offer(OPUS, 'high', { allowFable: true }).questions['capability']!.criteria)).toEqual(['open_problem', 'complex', 'routine', 'mechanical', 'unclear']);
+    expect(Object.keys(offer(OPUS, 'high', { allowFable: true }).questions['capability']!.criteria)).toEqual(['open_ended', 'complex', 'routine', 'mechanical', 'unclear']);
     const noHaiku = offer(OPUS, 'high', { available: [SONNET, OPUS] });
     expect(Object.keys(noHaiku.questions['capability']!.criteria)).toEqual(['complex', 'routine', 'mechanical', 'unclear']);
     expect(selectPair(noHaiku, answers(noHaiku, { mechanical: 1 })).patch.model).toBe(SONNET);
+  });
+  it('words an opted-in Fable role after Anthropic model guidance, and leaves the shared frontier wording to Codex', () => {
+    const o = offer(OPUS, 'high', { allowFable: true });
+    const frontier = (o.questions['capability']!.criteria as Record<string, unknown>)['open_ended'];
+    expect(JSON.stringify(frontier)).toMatch(/major refactor or migration/);
+    expect(JSON.stringify(frontier)).toMatch(/long unattended run/);
+    expect(JSON.stringify(frontier)).not.toMatch(/claude|haiku|sonnet|opus|fable|fast|standard|deep|frontier|effort level/i);
+    expect(o.roles!.at(-1)).toEqual({ option: 'open_ended', rank: 3, model: FABLE });
+    expect(o.questions['effort_3']!.instructions).toContain('The most ambitious, open-ended technical work');
+    expect(selectPair(o, answers(o, { open_ended: .8, complex: .2 }, 2)).patch).toEqual({ model: FABLE });
+    expect(selectPair(o, answers(o, { open_ended: .79, complex: .21 }, 2)).patch.model).toBeUndefined();
+    const astra = { model: 'gpt-6-astra', description: 'Frontier intelligence for the most demanding work.', supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) };
+    const sol = { model: 'gpt-6.1-sol', description: 'Latest workhorse model for coding and everyday work.', supportedReasoningEfforts: ['low', 'high'].map(reasoningEffort => ({ reasoningEffort })) };
+    const codex = offerRoute({ baseline: { model: 'gpt-6.1-sol', effort: 'high' }, candidates: codexCandidates([sol, astra], true), model: true, effort: true, upgrade: .8, downgrade: .6 })!;
+    expect((codex.questions['capability']!.criteria as Record<string, unknown>)['open_problem']).toEqual(CAPABILITY.find(c => c.option === 'open_problem')!.situation);
+    expect(codex.questions['capability']!.criteria).not.toHaveProperty('open_ended');
+  });
+  it('targets Fable 5.2 and never the superseded Fable 5.1, which still keeps its own root', () => {
+    expect(claudeCandidates({ baseline: OPUS, aliases: {}, allowFable: true }).map(c => c.id)).toEqual([OPUS, 'claude-sonnet-5-5', 'claude-haiku-5-5', FABLE]);
+    // A Fable 5.1 root is the person's own choice: it serves its role, and only other roles are targets.
+    const kept = offer('claude-fable-5-1', 'high', { allowFable: true });
+    expect(kept.roles!.at(-1)).toEqual({ option: 'open_ended', rank: 3, model: 'claude-fable-5-1' });
+    expect(claudeCandidates({ baseline: OPUS, aliases: {}, allowFable: true }).map(c => c.id)).not.toContain('claude-fable-5-1');
+    expect(claudeCandidates({ baseline: OPUS, aliases: {}, allowFable: true, hostBase: '2.1.320' }).map(c => c.id)).not.toContain(FABLE);
   });
   it('serves a role by the baseline, else the preferred model, and asks no capability when the model is not routed', () => {
     const twins: RouteCandidate[] = [

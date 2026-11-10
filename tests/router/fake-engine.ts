@@ -3,7 +3,6 @@ import { JEV_MODEL } from '../../mods/router/hooks/client.ts';
 import type { SymbolicEffort } from '../../mods/router/hooks/models.ts';
 import type { ModelTier } from '../../mods/router/hooks/policy.ts';
 import { TIER_LEVELS } from '../../mods/router/hooks/policy.ts';
-import { CAPABILITY } from '../../mods/router/hooks/selection.ts';
 import type { HostPins, Router, RouterEngine } from '../../mods/router/hooks/router.ts';
 
 /** Shaped like a key and matching nothing real. */
@@ -81,7 +80,7 @@ export const fakeEngine = (o: FakeEngineOptions = {}) => {
       return allowed.models;
     },
     currentEffort: async () => 'high',
-    hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.293'),
+    hostBase: async () => ('hostBase' in o ? o.hostBase : '2.1.321'),
     now: () => clock.ms,
     log: (line) => {
       if (!line.startsWith('jev-router ')) throw new Error(`unprefixed log line: ${line}`);
@@ -142,12 +141,14 @@ export const answering =
           if (name === 'capability' && !Array.isArray(q.criteria)) {
             // A role the offer lacks reads as the least capable offered option above it, as a sufficient answer would.
             const rank = ({ fast: 0, standard: 1, deep: 2, frontier: 3 } as Record<string, number>)[pick[0]];
-            const option = rank === undefined ? pick[0] : CAPABILITY.slice(rank).find(c => c.option in q.criteria)?.option ?? CAPABILITY.findLast(c => c.option in q.criteria)!.option;
+            // Options are offered from the cheapest role up, most capable first; a host may word the top one itself.
+            const offered = Object.keys(q.criteria).filter(k => k !== 'unclear').reverse();
+            const option = rank === undefined ? pick[0] : offered[Math.min(rank, offered.length - 1)]!;
             return [[name, choice(Object.keys(q.criteria), [option, pick[1]])]];
           }
           if (name === 'model' && !Array.isArray(q.criteria)) {
             const family = ({ fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'fable' } as Record<string, string>)[pick[0]];
-            const preferred = ({ fast: 'claude-haiku-5-5', standard: 'claude-sonnet-5-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-1' } as Record<string, string>)[pick[0]];
+            const preferred = ({ fast: 'claude-haiku-5-5', standard: 'claude-sonnet-5-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-2' } as Record<string, string>)[pick[0]];
             const id = preferred && preferred in q.criteria ? preferred : Object.keys(q.criteria).find(id => id.startsWith(preferred + '[')) ?? '__keep__';
             return [[name, choice(Object.keys(q.criteria), [id, pick[1]])]];
           }

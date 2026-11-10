@@ -10,6 +10,8 @@ export interface RouteCandidate {
   efforts: readonly string[];
   omitEffort: boolean;
   rank?: number;
+  /** A host's own wording for the capability this candidate's rank serves; the shared CAPABILITY entry otherwise. */
+  capability?: { option: string; situation: Situation };
 }
 export type EffortEdit = { kind: 'keep' } | { kind: 'set'; value: string } | { kind: 'omit' };
 export interface PairPatch { model?: string; effort?: string; effortEdit?: EffortEdit }
@@ -74,14 +76,14 @@ const ROLE_NAMES = ['fast', 'standard', 'deep', 'frontier'];
  */
 export const CAPABILITY: readonly { option: string; situation: Situation }[] = [
   { option: 'mechanical', situation: { what: 'Retrieval, or a small mechanical action whose correct result is obvious and easy to check, with nothing to decide.',
-    examples: ['find where a symbol is defined', 'list or count files, or show a value', 'run a named command and report its output', 'rename a symbol, fix a typo or bump a version', 'change a constant or config value, or add a missing import', 'apply a change the request spells out exactly'],
+    examples: ['find where a symbol is defined', 'list or count files, or show a value', 'run a named command and report its output', 'rename a symbol, fix a typo or bump a version', 'change a constant or config value, or add a missing import', 'apply a change the request spells out exactly', 'classify, tag or extract fields from supplied records into a given format'],
     not_for: 'Writing new logic, explaining how code behaves, choosing between approaches, or finding a cause the request does not state.' } },
   { option: 'routine', situation: { what: 'Development whose requirements the request makes clear and checkable, from a short change in one place to new modules built to a detailed specification.',
     examples: ['write a small helper or a straightforward test', 'explain what a function or file does', 'fix a bug whose cause the request already states', 'add a feature or endpoint across a few files', 'trace a reported, reproducible error to its cause', 'a behavior-preserving refactor', 'fix a concurrency, ordering or error-handling bug whose symptom and required behavior the request spells out', 'implement modules whose behavior a detailed specification fully determines, with tests', 'version a local file format and still read the old one'],
-    not_for: 'Failures whose cause must be found from intermittent or sparse evidence, changes that live clients or stored data depend on, permission or money logic, reviewing for hidden defects, or design choices the request leaves open between competing constraints.' } },
+    not_for: 'Failures whose cause must be found from intermittent or sparse evidence, changes that live clients or stored data depend on, permission or money logic, migrating to a new framework or breaking major version, reviewing for hidden defects, or design choices the request leaves open between competing constraints.' } },
   { option: 'complex', situation: { what: 'Work where an uncertain cause, constraints the request does not settle, or a subtle mistake that would do serious harm and be easy to miss demands careful analysis.',
-    examples: ['find why a test fails intermittently', 'find the cause of a concurrency or caching bug from its symptoms', 'change a schema or API that live clients or stored data depend on', 'a production data migration, or permission or money handling logic', 'review a large change for hidden defects', 'design an algorithm whose approach the request leaves open, such as convergence or consistency under concurrent edits, or root-cause a failure from sparse evidence', 'an architecture decision with long-range consequences'],
-    not_for: 'Implementation whose cause, required behavior and checks the request already spells out, however many modules it touches or whether it involves concurrency, caching or a format change.' } },
+    examples: ['find why a test fails intermittently', 'find the cause of a concurrency or caching bug from its symptoms', 'change a schema or API that live clients or stored data depend on', 'a production data migration, or permission or money handling logic', 'migrate code to a new framework or a breaking major version, even following an upgrade guide', 'review a large change for hidden defects', 'design an algorithm whose approach the request leaves open, such as convergence or consistency under concurrent edits, or root-cause a failure from sparse evidence', 'an architecture decision with long-range consequences'],
+    not_for: 'Implementation whose cause, required behavior and checks the request already spells out, however many modules it touches or whether it involves concurrency, caching or a local format change.' } },
   { option: 'open_problem', situation: { what: 'An open foundational problem with no known approach, where the result must be discovered rather than applied and then independently verified.',
     examples: ['devise a novel algorithm or formal proof with no established method', 'settle a research-level question experts have not settled'],
     not_for: 'Hard engineering with a known approach, however large or risky.' } },
@@ -138,18 +140,19 @@ const offerRoles = (args: RouteArgs): PairOffer | null => {
   const offered = args.model && served.length > 1 ? served : [base];
   // Missing model tiers do not remove task classes from the question. A missing class is served upward by the
   // least capable available model, including retrieval when the lightest available model serves ordinary coding.
-  const roles = CAPABILITY.slice(0, offered.at(-1)!.rank! + 1).map((capability, rank) => ({
-    option: capability.option, rank, model: offered.find(c => c.rank! >= rank)!.id,
+  const capabilityAt = (rank: number) => offered.find(c => c.rank === rank)?.capability ?? CAPABILITY[rank]!;
+  const roles = CAPABILITY.slice(0, offered.at(-1)!.rank! + 1).map((_, rank) => ({
+    option: capabilityAt(rank).option, rank, model: offered.find(c => c.rank! >= rank)!.id,
   }));
   const questions: Record<string, Question> = {};
   if (offered.length > 1) questions['capability'] = { type: 'choice', instructions: `${CONTEXT} ${CAPABILITY_INSTRUCTIONS}`,
     // Most capable first: Jev leans toward the first option, and this order put less mass below the label on the dev split (bench:router).
-    criteria: Object.fromEntries([...[...roles].reverse().map(r => [r.option, CAPABILITY[r.rank]!.situation]), ['unclear', UNCLEAR]]) };
+    criteria: Object.fromEntries([...[...roles].reverse().map(r => [r.option, capabilityAt(r.rank).situation]), ['unclear', UNCLEAR]]) };
   const effortQuestions = new Map<string, { name: string; values: readonly string[] }>();
   if (args.effort) for (const [i, c] of offered.entries()) {
     if (c.efforts.length <= 1) continue;
     const name = `effort_${i}`;
-    questions[name] = { type: 'score', instructions: `${CONTEXT} Assume the work runs on the model assigned to this capability: ${CAPABILITY[c.rank!]!.situation.what} Choose the lowest supported reasoning effort sufficient for this model to complete the ENTIRE requested outcome. The capability is a routing assumption, not a measured performance guarantee. A stronger model does not automatically need more effort; more files or output alone do not need deeper reasoning; do not use max effort as a substitute for missing model capability. The ordered levels describe required effort, not competing options.`,
+    questions[name] = { type: 'score', instructions: `${CONTEXT} Assume the work runs on the model assigned to this capability: ${capabilityAt(c.rank!).situation.what} Choose the lowest supported reasoning effort sufficient for this model to complete the ENTIRE requested outcome. The capability is a routing assumption, not a measured performance guarantee. A stronger model does not automatically need more effort; more files or output alone do not need deeper reasoning; do not use max effort as a substitute for missing model capability. The ordered levels describe required effort, not competing options.`,
       criteria: c.efforts.map(e => EFFORT_TEXT[e] ?? `The host-supported reasoning effort ${e}.`) };
     effortQuestions.set(c.id, { name, values: c.efforts });
   }

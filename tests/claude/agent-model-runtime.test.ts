@@ -28,7 +28,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     { scope: 'worker', selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'high', allowFable: false },
     { scope: 'worker', selected: 'claude-opus-5-5', actual: 'claude-opus-5-5', effort: 'max', allowFable: false },
     { scope: 'worker', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false },
-    { scope: 'worker', selected: 'claude-fable-5-1', actual: 'claude-fable-5-1', effort: 'max', allowFable: true },
+    { scope: 'worker', selected: 'claude-fable-5-2', actual: 'claude-fable-5-2', effort: 'max', allowFable: true },
     // `actual` is the role Jev picks; `cost` is the switch cost guard's call on it, and a held switch runs on Opus. A
     // session's first turn has no observed prefix, so its downgrade is held; a later move over this tiny prefix repays its
     // cache write within a turn's requests (#271).
@@ -108,7 +108,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
           if (name === 'tool_calls') return [name, { type: 'score', score: 1, confidence: 1, probabilities: Object.fromEntries(q.criteria.map((_: string, i: number) => [i, i === 1 ? 1 : 0])) }];
           // A capability answer names the role of the model the scenario expects to run.
           if (name === 'capability') {
-            const option = Object.entries({ haiku: 'mechanical', sonnet: 'routine', opus: 'complex', fable: 'open_problem' }).find(([family]) => selection.actual.includes(family))![1];
+            const option = Object.entries({ haiku: 'mechanical', sonnet: 'routine', opus: 'complex', fable: 'open_ended' }).find(([family]) => selection.actual.includes(family))![1];
             return [name, choice(Object.keys(q.criteria), [option, scenario.probability ?? .99])];
           }
           if (q.type === 'choice') return [name, choice(Object.keys(q.criteria), [name === 'model' ? selection.selected in q.criteria ? selection.selected : '__keep__' : name === 'control' ? 'task_clear' : name === 'action_risk' ? 'ordinary' : Object.keys(q.criteria)[0]!, name === 'model' ? scenario.probability ?? .99 : .99])];

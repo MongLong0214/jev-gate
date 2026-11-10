@@ -26,7 +26,7 @@ const cwd = process.cwd();
 const prompt = process.env.FAKE_CLAUDE_PRIMED_HANG === '1' || process.env.FAKE_CLAUDE_EPISODE === '1' ? '' : readFileSync(0, 'utf8');
 const sid = randomUUID();
 const promptId = randomUUID();
-const modelId = model === 'fable' ? 'claude-fable-5-1' : model === 'opus' ? 'claude-opus-5' : 'claude-sonnet-5';
+const modelId = model === 'fable' ? 'claude-fable-5-2' : model === 'opus' ? 'claude-opus-5' : 'claude-sonnet-5';
 const hierarchy = Boolean(pluginDir) && (mode === 'native' || mode === 'auto');
 const arm = !hierarchy ? (model === 'fable' ? 'frontier_native' : 'sonnet_native')
   : mode === 'auto' ? (forced ? 'jev_forced_orchestration' : 'jev_hierarchy')
