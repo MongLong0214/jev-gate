@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.75 — 2026-11-10 — Route Claude work after Anthropic's model guidance
+
+- Make Fable 5.2 (Claude Code 2.1.321 or later) the current Fable; Fable 5.1 is legacy. Defaults (`routerFrontierModel`, `models.frontier`) move to `claude-fable-5-2`, and prices are regenerated. A `fable` root resolved to an unknown model before, so routing stayed native for it. Model sync now reads the new "default is `high`" effort wording.
+- Word an opted-in Fable's capability option (`open_ended`) after [Anthropic's model selection guidance](https://claude.dev/blog/which-claude-model-should-you-build-with/): major refactors or migrations across a large codebase, large-system architecture, leading many workers, long unattended runs, in-depth research and scientific or quantitative analysis; everyday hard engineering stays on Opus. Fable stays opt-in (`routerAllowFable`, default off). Codex keeps `open_problem`.
+- Shared rubric (Claude and Codex): classifying or extracting fields from supplied records is mechanical; migrating to a new framework or breaking major version is complex even with an upgrade guide.
+- Run the frontier worker at `high` instead of `xhigh`, as the Fable 5.2 documentation advises.
+- Router bench: ten dev requests and an 11-request `frontier` split (`--frontier`), labelled before any run. One run with `jev-1.14.0`: dev 94.7% → 97.9% exact with 0% under, frozen test unchanged at 98.4% with 0 of 20 probes moved, spawn 17/17. On the frontier split one of five open-ended requests reached Fable; the other four were held by the 0.8 `task_clear` upgrade floor, left unchanged (`bench/results/router-blog-2026-11-10`). These are label agreement, not measured savings.
+
 ## v0.8.74 — 2026-11-06 — Restore classic compaction requests whole
 
 - Classic Compact (the `PreCompact`/`SessionStart` path without `modules`) now restores the person's latest requests whole when they fit (#408). Within two thirds of the room left after the failed calls, the last three requests are kept whole newest first while each fits; once one does not, it and every older one get their first 700 characters, newest first, and then the rest of that room, newest first. Before, every request was cut at 700 characters while the summarizer was told they were restored verbatim. The steering no longer promises verbatim requests or quotes the task; it asks the summary to keep every requirement, constraint and correction the person still holds. Jev is still sent only the latest request, cut at 2,000 characters. When the latest request looks like a secret, no request is restored or sent and no older one takes its place.
