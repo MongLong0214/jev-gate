@@ -1,8 +1,8 @@
 ---
 name: worker-frontier
 description: Complete one Jev Gate outcome, run its checks, and return a WorkerReply.
-model: claude-fable-5-1
-effort: xhigh
+model: claude-fable-5-2
+effort: high
 background: false
 disallowedTools: Agent, SendMessage, Skill, Artifact, ArtifactComments, ArtifactData
 omitClaudeMd: true

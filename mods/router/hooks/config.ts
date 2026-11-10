@@ -90,7 +90,7 @@ export const resolveConfig = (options: Options): ConfigResult => {
   for (const tier of TIER_ORDER) {
     const v = options[TIER_FIELDS[tier]];
     // Frontier is enabled by default; an explicitly blank value disables that tier.
-    const value = tier === 'frontier' ? (typeof v === 'string' && v.trim() === '' ? undefined : v ?? 'claude-fable-5-1') : (v ?? DEFAULT_TIERS[tier]);
+    const value = tier === 'frontier' ? (typeof v === 'string' && v.trim() === '' ? undefined : v ?? 'claude-fable-5-2') : (v ?? DEFAULT_TIERS[tier]);
     if (value === undefined) continue;
     if (typeof value !== 'string' || !MODEL_VALUE.test(value)) {
       tierIssues.push({ tier, reason: 'invalid' });

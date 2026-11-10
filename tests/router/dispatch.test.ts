@@ -28,7 +28,7 @@ describe('shared automatic child eligibility and ownership', () => {
       updateJob(env,'root',()=>{const state=newGeneration(null,'root','prompt','orchestrated').state;return {...state,current:reserve(state.current,'tool',{role:profile.role,taskId:null,contractHash:null,rev:null,tier:profile.tier,attempt:1,deliverables:[]})};});
       expect(dispatchPolicy('root','tool','fable',false,env,agent)).toMatchObject({deny:expect.stringContaining('main session')});
       const job=readJob(env,'root'); expect(job.ok&&job.value?.current).toMatchObject({active:{},root_fallback:true});
-      expect(dispatchPolicy('root','tool','fable',true,env,agent)).toMatchObject({model:'claude-fable-5-1'});
+      expect(dispatchPolicy('root','tool','fable',true,env,agent)).toMatchObject({model:'claude-fable-5-2'});
     } finally {rmSync(dir,{recursive:true,force:true});}
   });
   it.each(['codex','background','launch-pending'] as const)('preserves %s reservations without a confirmed unstarted boundary',kind=>{

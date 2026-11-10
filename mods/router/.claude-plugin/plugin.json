@@ -1,6 +1,6 @@
 {
   "name": "jev-gate-router",
-  "version": "0.8.74",
+  "version": "0.8.75",
   "license": "MIT",
   "description": "Routes the main thread's effort and each subagent's model and effort with one TypeSafe Jev assessment; on by default, native on any doubt.",
   "author": {
@@ -79,7 +79,7 @@
       "title": "Frontier profile model",
       "description": "Exact model ID for the frontier profile. Blank leaves the profile unconfigured.",
       "type": "string",
-      "default": "claude-fable-5-1"
+      "default": "claude-fable-5-2"
     },
     "minUpgradeConfidence": {
       "title": "Upgrade confidence floor",

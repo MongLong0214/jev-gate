@@ -1,6 +1,6 @@
 {
   "name": "jev-gate",
-  "version": "0.8.74",
+  "version": "0.8.75",
   "license": "MIT",
   "description": "Jev Gate in one plugin: the orchestration gate, the extractive compactor and the Jev effort and model router. Every part is on by default; each has its own on/off option.",
   "author": {
@@ -126,7 +126,7 @@
       "title": "Router: Frontier profile model",
       "description": "Exact model ID for the frontier profile. Blank leaves the profile unconfigured.",
       "type": "string",
-      "default": "claude-fable-5-1"
+      "default": "claude-fable-5-2"
     },
     "routerMinUpgradeConfidence": {
       "title": "Router: Upgrade confidence floor",

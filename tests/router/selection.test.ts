@@ -232,8 +232,8 @@ describe('bounded context and truthful discovery', () => {
   });
   it('filters restricted families exactly and preserves a manually selected root', () => {
     expect(isAstra('gpt-6.1-astra')).toBe(true); expect(isAstra('fake-gpt-6-astra-copy')).toBe(false);
-    const cs = claudeCandidates({ baseline: 'claude-fable-5-1', aliases: {}, allowFable: false });
-    expect(cs.map(c => c.id)).toContain('claude-fable-5-1'); expect(cs.map(c => c.id)).not.toContain('claude-fable-5');
+    const cs = claudeCandidates({ baseline: 'claude-fable-5-2', aliases: {}, allowFable: false });
+    expect(cs.map(c => c.id)).toContain('claude-fable-5-2'); expect(cs.map(c => c.id)).not.toContain('claude-fable-5');
     expect(cs.map(c => c.id)).toContain('claude-opus-5-5');
     expect(claudeCandidates({ baseline: 'claude-opus-5-5', aliases: {}, allowFable: false }).some(c => c.id.startsWith('claude-fable'))).toBe(false);
   });

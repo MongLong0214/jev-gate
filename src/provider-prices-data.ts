@@ -2,17 +2,17 @@
 export default [
   {
     "host": "claude",
-    "model": "claude-fable-5-1",
+    "model": "claude-fable-5-2",
     "source": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
-    "revision": "a498a608cb5954d4",
+    "revision": "6f11cb1d41450937",
     "bands": [
       {
         "maxPrompt": 1000000,
-        "input": 10,
-        "write5m": 12.5,
-        "write1h": 20,
-        "read": 0.25,
-        "output": 50
+        "input": 8,
+        "write5m": 10,
+        "write1h": 16,
+        "read": 0.2,
+        "output": 40
       }
     ]
   },

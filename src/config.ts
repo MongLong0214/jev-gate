@@ -15,7 +15,7 @@ export const DEFAULT_CONFIG: ConfigV5 = {
   admissionConfidenceFloor: 0.8,
   routeConfidenceFloor: 0.8,
   // The owner requested all routing tiers enabled, including the known frontier profile.
-  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-1' },
+  models: { fast: 'haiku', standard: 'sonnet', deep: 'opus', frontier: 'claude-fable-5-2' },
   workerIsolation: 'none',
   // Atomic since 0.4.0: the composite question's 0.8 confidence floor never cleared in real use (0.78, 0.35), so Gate B
   // was asked and then ignored. The atomic path composes read-off facts in code with no floor, so its tier is applied.
@@ -106,7 +106,7 @@ export const MIGRATION_SAMPLE = `{
   "requestDeadlineMs": 3000,
   "admissionConfidenceFloor": 0.8,
   "routeConfidenceFloor": 0.8,
-  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "claude-fable-5-1" }
+  "models": { "fast": "haiku", "standard": "sonnet", "deep": "opus", "frontier": "claude-fable-5-2" }
 }`;
 
 export type Env = Record<string, string | undefined>;

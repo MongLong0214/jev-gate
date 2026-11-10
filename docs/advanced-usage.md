@@ -69,14 +69,14 @@ A V3 or V4 file is rejected with a sample. The plugin does not rewrite it. A key
     "fast": "haiku",
     "standard": "sonnet",
     "deep": "opus",
-    "frontier": "claude-fable-5-1"
+    "frontier": "claude-fable-5-2"
   }
 }
 ```
 
 `admissionQuestionShape` and `routeQuestionShape` default to `atomic`: the judgement is composed in this plugin, and the matching composite confidence floor is not consulted. Atomic Gate A requires a uniquely self-contained answer with at least .8 probability, a valid five-bin Score, positive rounded point saving and at least .8 normalized distribution support for positive-saving bins. This support is a policy heuristic, not a probability of actual savings. It asks four facts in one HTTP batch. Atomic Gate B asks six task facts, with candidate-local model/effort allocation questions added to the same bounded HTTP batch: yes is at least .6, no at most .4, and the middle preserves the called tier. Specific difficulty upgrades fast/standard to deep; deep/frontier are retained. Fast needs fully specified or repetitive work, fixed interfaces and stated checks, with both difficulty facts negative. `composite` is the single choice question.
 
-On Claude Code, the frontier preference is `claude-fable-5-1`, but automatic Fable is disabled unless `routerAllowFable` is boolean true. A role mapping does not authorize a restricted family. Codex derives its default frontier ID from the account's live model catalog. Gate tier configuration does not change the root session's model; the independent Router controls that.
+On Claude Code, the frontier preference is `claude-fable-5-2`, but automatic Fable is disabled unless `routerAllowFable` is boolean true. A role mapping does not authorize a restricted family. Codex derives its default frontier ID from the account's live model catalog. Gate tier configuration does not change the root session's model; the independent Router controls that.
 
 ## Depth floor
 

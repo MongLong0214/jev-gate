@@ -133,7 +133,7 @@ describe('questions and state', () => {
   });
 });
 
-const FULL: PolicyOptions['tiers'] = { fast: 'claude-haiku-4-5', standard: 'claude-sonnet-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-1' };
+const FULL: PolicyOptions['tiers'] = { fast: 'claude-haiku-4-5', standard: 'claude-sonnet-5', deep: 'claude-opus-5-5', frontier: 'claude-fable-5-2' };
 const ALIASES: PolicyOptions['tiers'] = { fast: 'haiku', standard: 'sonnet', deep: 'opus' };
 const opts = (over: Partial<PolicyOptions> = {}): PolicyOptions => ({ scope: 'root', tiers: FULL, minUpgradeConfidence: 0.8, minDowngradeConfidence: 0.9, ...over });
 /** Root switches a test declares verified; the shipped list is empty. */
@@ -182,7 +182,7 @@ describe('what is offered', () => {
 
   it('knows only the variants the host lists for each model', () => {
     expect(rankOf('claude-opus-5-5[bogus]', FULL)).toBeNull();
-    expect(rankOf('claude-fable-5-1[1m]', FULL)).toBeNull();
+    expect(rankOf('claude-fable-5-2[1m]', FULL)).toBeNull();
     expect(rankOf('claude-sonnet-5[1m]', FULL)).toBe('standard');
     expect(offerableTiers({ model: 'claude-opus-5-5[bogus]' }, opts({ scope: 'spawn' }))).toEqual({ reason: 'rank_unknown' });
   });
@@ -272,13 +272,13 @@ describe('choosePatch', () => {
   it('routes compatible root models by default and honors explicit switch restrictions', () => {
     const up = { ...CLEAR, tier: tier('frontier') };
     const sonnet: Baseline = { model: 'claude-sonnet-5' };
-    expect(choosePatch(up, sonnet, modelOnly, opts()).patch).toEqual({ model: 'claude-fable-5-1' });
+    expect(choosePatch(up, sonnet, modelOnly, opts()).patch).toEqual({ model: 'claude-fable-5-2' });
     expect(choosePatch(up, sonnet, modelOnly, opts({ rootSwitches: [] })).model).toBe('controls_unverified');
-    expect(choosePatch(up, sonnet, modelOnly, opts(switches(['claude-sonnet-5', 'claude-fable-5-1']))).patch).toEqual({ model: 'claude-fable-5-1' });
+    expect(choosePatch(up, sonnet, modelOnly, opts(switches(['claude-sonnet-5', 'claude-fable-5-2']))).patch).toEqual({ model: 'claude-fable-5-2' });
     // A verified pair is exact: another variant of the same baseline is a different request.
-    expect(choosePatch(up, { model: 'claude-sonnet-5[1m]' }, modelOnly, opts(switches(['claude-sonnet-5', 'claude-fable-5-1']))).model).toBe('controls_unverified');
+    expect(choosePatch(up, { model: 'claude-sonnet-5[1m]' }, modelOnly, opts(switches(['claude-sonnet-5', 'claude-fable-5-2']))).model).toBe('controls_unverified');
     // A spawn starts a fresh request: the retained controls are not carried over.
-    expect(choosePatch(up, sonnet, modelOnly, opts({ scope: 'spawn' })).patch).toEqual({ model: 'claude-fable-5-1' });
+    expect(choosePatch(up, sonnet, modelOnly, opts({ scope: 'spawn' })).patch).toEqual({ model: 'claude-fable-5-2' });
   });
 
   it('refuses a smaller context window at the root, but not for a spawn', () => {

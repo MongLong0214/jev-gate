@@ -10,8 +10,11 @@
  * labels and the pinned Jev version only; thresholds need refitting when `jevModel` changes. Price weights are list
  * input prices relative to the baseline, an estimate that ignores token counts and effort.
  *
+ * The `frontier` split, and any split run with `--frontier`, offers the opted-in frontier candidate as well, to measure how
+ * often the frontier role is chosen and whether it takes work from the deep role.
+ *
  * Usage:
- *   node dist/bench/router.js run    --split dev|test|spawn --out FILE [--concurrency 3] [--deadline-ms 30000] [--golden FILE]
+ *   node dist/bench/router.js run    --split dev|test|spawn|frontier --out FILE [--frontier] [--concurrency 3] [--deadline-ms 30000] [--golden FILE]
  *   node dist/bench/router.js report --out FILE
  */
 import { createHash } from 'node:crypto';
@@ -35,7 +38,7 @@ export const OPTIONS = ['mechanical', 'routine', 'complex', 'open_problem'] as c
 const ARMS = ['cheapest_first', 'capable_first', 'pair'] as const;
 type Arm = (typeof ARMS)[number];
 
-export interface Item { id: string; split: 'dev' | 'test' | 'spawn'; label: string; effort: [string, string]; text: string; pair_of?: string; tags?: string[] }
+export interface Item { id: string; split: 'dev' | 'test' | 'spawn' | 'frontier'; label: string; effort: [string, string]; text: string; pair_of?: string; tags?: string[] }
 export interface Route { model: string; rank: number; effort: string; reasons: { model: string; effort: string } }
 export interface ArmRecord { ok: boolean; code?: string; duration_ms: number; jev_model?: string | null; usage?: unknown; answers?: Record<string, unknown>; top?: string | null; ordered: Route; accept?: Route }
 export interface ItemRecord { id: string; split: string; label: string; effort_range: [string, string]; pair_of?: string; tags?: string[]; arms: Partial<Record<Arm, ArmRecord>> }
@@ -43,8 +46,10 @@ export interface ItemRecord { id: string; split: string; label: string; effort_r
 const defaultGolden = (): string => join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bench', 'router', 'golden.json');
 export const testHash = (items: readonly Item[]): string => createHash('sha256').update(JSON.stringify(items.filter(i => i.split === 'test'))).digest('hex');
 
-const candidates = () => claudeCandidates({ baseline: BASELINE.model, aliases: {}, allowFable: false });
-const rankOf = (model: string): number => candidates().find(c => c.id === model)?.rank ?? -1;
+const candidates = (allowFable = false) => claudeCandidates({ baseline: BASELINE.model, aliases: {}, allowFable });
+const rankOf = (model: string): number => candidates(true).find(c => c.id === model)?.rank ?? -1;
+/** The Claude frontier option's key differs from the shared one; both label the frontier rank. */
+const optionLabel = (option: string | null): string | null => option === 'open_ended' ? 'open_problem' : option;
 const routeOf = (d: PairDecision): Route => {
   const model = d.patch.model ?? BASELINE.model;
   return { model, rank: rankOf(model), effort: d.patch.effort ?? BASELINE.effort, reasons: d.reasons };
@@ -87,7 +92,7 @@ const ask = async (offer: PairOffer, text: string, apiKey: string, deadlineMs: n
   const answers = outcome.response.answers;
   const cap = offer.questions['capability'];
   const top = cap?.type === 'choice' ? validateChoice(answers['capability'], Object.keys(cap.criteria))?.choice ?? null : null;
-  return { ok: true, duration_ms: outcome.durationMs, jev_model: outcome.response.model, usage: outcome.response.usage, answers: pairReceipt(offer, answers), top,
+  return { ok: true, duration_ms: outcome.durationMs, jev_model: outcome.response.model, usage: outcome.response.usage, answers: pairReceipt(offer, answers), top: optionLabel(top),
     ordered: routeOf(selectPair(offer, answers)), ...(rules ? { accept: routeOf(acceptDecision(offer, answers)) } : {}) };
 };
 
@@ -162,14 +167,15 @@ const readRecords = (file: string): ItemRecord[] => readFileSync(file, 'utf8').s
 
 const run = async (argv: string[]): Promise<void> => {
   const split = flag(argv, '--split'), out = flag(argv, '--out');
-  if ((split !== 'dev' && split !== 'test' && split !== 'spawn') || !out) throw new Error('run needs --split dev|test|spawn and --out FILE');
+  if ((split !== 'dev' && split !== 'test' && split !== 'spawn' && split !== 'frontier') || !out) throw new Error('run needs --split dev|test|spawn|frontier and --out FILE');
   if (existsSync(out)) throw new Error(`refusing to overwrite ${out}`);
   const golden = JSON.parse(readFileSync(resolve(flag(argv, '--golden') ?? defaultGolden()), 'utf8')) as { frozen_test_sha256: string; items: Item[] };
   if (split === 'test' && golden.frozen_test_sha256 !== testHash(golden.items)) throw new Error('the test split changed since it was frozen');
   const apiKey = resolveApiKey(process.env);
   if (!apiKey) throw new Error('no Jev API key');
   const deadlineMs = Number(flag(argv, '--deadline-ms') ?? 30000), concurrency = Number(flag(argv, '--concurrency') ?? 3);
-  const args = { baseline: { ...BASELINE }, candidates: candidates(), model: true, effort: true, upgrade: 0.8, downgrade: 0.6, scope: split === 'spawn' ? 'spawn' as const : 'root' as const };
+  const frontier = split === 'frontier' || argv.includes('--frontier');
+  const args = { baseline: { ...BASELINE }, candidates: candidates(frontier), model: true, effort: true, upgrade: 0.8, downgrade: 0.6, scope: split === 'spawn' ? 'spawn' as const : 'root' as const };
   const role = offerRoute(args), pair = offerPairs(args);
   if (!role?.roles || !pair) throw new Error('no role offer for the baseline');
   const offers: Record<Arm, PairOffer> = { cheapest_first: ordered(role, false), capable_first: ordered(role, true), pair };
@@ -187,7 +193,7 @@ const run = async (argv: string[]): Promise<void> => {
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
-  process.stdout.write(JSON.stringify({ split, items: items.length, jev_model: DEFAULT_CONFIG.jevModel, test_sha256: testHash(golden.items), ...summarize(records) }, null, 2) + '\n');
+  process.stdout.write(JSON.stringify({ split, frontier, items: items.length, jev_model: DEFAULT_CONFIG.jevModel, test_sha256: testHash(golden.items), ...summarize(records) }, null, 2) + '\n');
 };
 
 const isMainModule = (): boolean => typeof process.argv[1] === 'string' && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -195,6 +201,6 @@ if (isMainModule()) {
   const argv = process.argv.slice(2);
   const main = argv[0] === 'run' ? run(argv.slice(1))
     : argv[0] === 'report' && flag(argv, '--out') ? Promise.resolve(void process.stdout.write(JSON.stringify(summarize(readRecords(flag(argv, '--out')!)), null, 2) + '\n'))
-    : Promise.resolve(void (process.stdout.write('usage: node dist/bench/router.js run --split dev|test|spawn --out FILE [--concurrency 3] [--deadline-ms 30000] [--golden FILE]\n       node dist/bench/router.js report --out FILE\n'), process.exitCode = 2));
+    : Promise.resolve(void (process.stdout.write('usage: node dist/bench/router.js run --split dev|test|spawn|frontier --out FILE [--frontier] [--concurrency 3] [--deadline-ms 30000] [--golden FILE]\n       node dist/bench/router.js report --out FILE\n'), process.exitCode = 2));
   main.catch((err: unknown) => { process.stderr.write(`bench router: ${err instanceof Error ? err.message : String(err)}\n`); process.exitCode = 1; });
 }

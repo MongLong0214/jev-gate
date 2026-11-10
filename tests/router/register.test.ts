@@ -34,7 +34,7 @@ const fakeHost = (world: World = {}) => {
   const requests: Array<{ url: string; headers: Record<string, string> }> = [];
   const logs: string[] = [];
   // The full version differs from its release base, so reading the wrong field cannot pass.
-  const version = world.version ?? { version: '2.1.293+build.7f3c', base: '2.1.293' };
+  const version = world.version ?? { version: '2.1.321+build.7f3c', base: '2.1.321' };
   const $ = {
     fs: {
       exists: async (path: string) => path in (world.files ?? {}),
@@ -160,7 +160,7 @@ describe('register', () => {
     let offered=false;
     const fetch=host.$.http.fetch;
     host.$.http.fetch=async (url, init) => {
-      offered=init.body.includes('"open_problem"');
+      offered=init.body.includes('"open_ended"');
       return fetch(url,init);
     };
     await spawnThrough(await registered({enabled:true,allowFable:!enabled}),host);
@@ -375,7 +375,7 @@ describe('owned dispatch through the packaged policy process (#211)', () => {
       return { ...s, current: { ...current, background_job: true, active: { [TOOL]: { ...current.active[TOOL]!, allocation_pair: { model: o.pair ?? 'claude-haiku-5-5', effort_edit: { kind: 'set', value: 'medium' } },
         background_execution: { token: TOKEN, agent_id: null, subagent_type: agent, resolved_model: null } } } } };
     });
-    const host = fakeHost({ env: { HOME: '/owner', ...o.env }, files: { [root + '/dist/dispatch-policy.js']: '', ...o.files }, version: { version: '2.1.296', base: '2.1.296' } });
+    const host = fakeHost({ env: { HOME: '/owner', ...o.env }, files: { [root + '/dist/dispatch-policy.js']: '', ...o.files }, version: { version: '2.1.321', base: '2.1.321' } });
     const runs: boolean[] = [];
     Object.assign(host.$.session, { id: async () => 'root' });
     Object.assign(host.$, { plugin: { root }, process: { run: async (argv: string[]) => {
@@ -414,7 +414,7 @@ describe('owned dispatch through the packaged policy process (#211)', () => {
 
   it.each([
     ['past the spawn budget', { options: { timeoutMs: 50 }, delayMs: 80 }],
-    ['over a restricted parent baseline', { event: { ...OWNED, model: undefined, parentModel: 'claude-fable-5-1' } }],
+    ['over a restricted parent baseline', { event: { ...OWNED, model: undefined, parentModel: 'claude-fable-5-2' } }],
   ])('keeps a concrete policy denial %s', async (_, o) => {
     const r = await dispatch({ ...o, fail: eligible => eligible ? { deny: PROTECTED } : undefined });
     expect(r.out).toEqual({ deny: PROTECTED });
@@ -438,9 +438,9 @@ describe('owned dispatch through the packaged policy process (#211)', () => {
   });
 
   it.each([false, true])('keeps the frontier opt-in for an owned frontier pair: %s', async enabled => {
-    const r = await dispatch({ agent: 'jev-gate:worker-frontier', pair: 'claude-fable-5-1', event: { ...OWNED, subagentType: 'jev-gate:worker-frontier', model: undefined },
+    const r = await dispatch({ agent: 'jev-gate:worker-frontier', pair: 'claude-fable-5-2', event: { ...OWNED, subagentType: 'jev-gate:worker-frontier', model: undefined },
       files: { '/owner/.config/jev-gate/config.json': JSON.stringify({ version: 5, frontierEnabled: enabled }) } });
-    expect(r.out).toEqual(enabled ? { model: 'claude-fable-5-1', agentId: 'child' } : { deny: NO_MODEL });
-    expect([r.calls, r.runs, r.denials, r.kept]).toEqual(enabled ? [['claude-fable-5-1'], [true], [], true] : [[], [true], denial('policy_denied', 'jev-gate:worker-frontier'), false]);
+    expect(r.out).toEqual(enabled ? { model: 'claude-fable-5-2', agentId: 'child' } : { deny: NO_MODEL });
+    expect([r.calls, r.runs, r.denials, r.kept]).toEqual(enabled ? [['claude-fable-5-2'], [true], [], true] : [[], [true], denial('policy_denied', 'jev-gate:worker-frontier'), false]);
   });
 });

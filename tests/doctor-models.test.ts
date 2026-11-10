@@ -43,9 +43,9 @@ describe('Doctor native model and effort compatibility', () => {
     expect(claudeCompatibility({ models: [], complete: false, error: 'unavailable' }, '2.1.294', [], false).find(v => v.model === 'claude-opus-5-5')?.state).toBe('unverified');
   });
   it('checks current Opus and Fable host introductions from the shared model table', () => {
-    const rows = claudeCompatibility({ models: [], complete: false, error: 'unavailable' }, '2.1.256', [{ model: 'claude-fable-5-1', effort: 'max' }], true);
+    const rows = claudeCompatibility({ models: [], complete: false, error: 'unavailable' }, '2.1.256', [{ model: 'claude-fable-5-2', effort: 'max' }], true);
     expect(rows.find(r => r.model === 'claude-opus-5-5')?.reason).toContain('2.1.280');
-    expect(rows.find(r => r.model === 'claude-fable-5-1')?.reason).toContain('2.1.257');
+    expect(rows.find(r => r.model === 'claude-fable-5-2')?.reason).toContain('2.1.321');
   });
   it('does not mistake an unlisted context variant for a missing base model', () => {
     const inventory = parseClaudeInventory([{ value: 'opus', resolvedModel: 'claude-opus-5-5', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] }]);
@@ -140,7 +140,7 @@ describe('Doctor reports', () => {
   });
   it.each(['claude-haiku-4-5', 'unavailable-legacy-fast'])('checks the active Claude Gate mapping %s and Router pins', async model => {
     const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
-    const rows = ['haiku', 'sonnet', 'opus', 'fable'].map(value => ({ value, resolvedModel: value === 'fable' ? 'claude-fable-5-1' : `claude-${value}-5-5`, supportedEffortLevels: efforts }));
+    const rows = ['haiku', 'sonnet', 'opus', 'fable'].map(value => ({ value, resolvedModel: value === 'fable' ? 'claude-fable-5-2' : `claude-${value}-5-5`, supportedEffortLevels: efforts }));
     const fake = fixture('claude', rows), config = join(fake.dir, 'config.json');
     writeFileSync(config, JSON.stringify({ version: 5, mode: 'auto', models: { fast: model } }));
     const env = { ...fake.env, JEV_GATE_CONFIG: config };

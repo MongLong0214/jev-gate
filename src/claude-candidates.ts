@@ -1,5 +1,5 @@
 import { MODEL_FACTS, factsOf, sameIdentity, claudeTargetAllowed } from './claude-models.ts';
-import type { RouteCandidate } from './router-selection.ts';
+import type { RouteCandidate, Situation } from './router-selection.ts';
 
 export type ModelAliases = Readonly<Record<string, string>>;
 // Product roles, not a measured price/performance ranking. Same-family versions have the same role.
@@ -7,8 +7,20 @@ const ROLES = {
   haiku: { rank: 0, text: 'fast: prioritize for file discovery, lookup, listing and mechanical edits with clear checks.' },
   sonnet: { rank: 1, text: 'standard: ordinary multistep implementation or investigation under established contracts.' },
   opus: { rank: 2, text: 'deep: hard debugging, competing design constraints or subtle correctness.' },
-  fable: { rank: 3, text: 'frontier: exceptional unresolved foundational reasoning.' },
+  fable: { rank: 3, text: 'frontier: the most ambitious, open-ended technical work, long unattended runs and open research problems.' },
 } as const;
+/**
+ * The work Fable serves when the person opts in, after Anthropic's model guidance (claude.dev "Which Claude model should
+ * you build with?", 2026-11-09, and the platform's choosing-a-model page): major refactors and migrations, architecture
+ * planning, leading many subagents, long unattended runs, deep research and scientific or quantitative analysis, while
+ * everyday hard engineering starts on Opus. The shared frontier option only covers open research problems, which left an
+ * opted-in Fable all but unused. Codex keeps the shared wording; its frontier model has no such published guidance.
+ */
+const FRONTIER: { option: string; situation: Situation } = { option: 'open_ended', situation: {
+  what: 'The most ambitious, open-ended technical work: a codebase-wide or system-wide effort that must be planned and carried through many interdependent steps or parallel workstreams, often for hours unattended, or a hard problem in coding, mathematics, science or quantitative analysis whose answer must be researched or discovered rather than applied.',
+  examples: ['a major refactor or migration across a large codebase or many services', 'plan the architecture of a large system, or a major redesign spanning many components', 'lead many parallel workers through a large multi-part task', 'a long unattended run expected to take hours', 'in-depth multistep research, or a scientific or quantitative analysis carried through to written findings', 'devise a novel algorithm or proof with no established method'],
+  not_for: 'Everyday hard engineering, however risky or subtle: finding one failure\'s cause, a review, a schema, API, permission or money change, a production data migration, or a single architecture decision.',
+} };
 /** Explicit alias mappings come from effective host settings/environment, never the alias's spelling. */
 export const resolveClaudeModel = (id: string, aliases: ModelAliases): string | null => factsOf(id) ? id : aliases[id] && factsOf(aliases[id]!) ? aliases[id]! : null;
 export const claudeModelAllowed = (id: string, available: readonly string[] | undefined, aliases: ModelAliases): boolean => available === undefined || available.some(value => {
@@ -55,7 +67,7 @@ export const claudeCandidates = (args: {
     if (!reason && f.minimumHostRelease && args.hostBase && /^2\.1\.(\d+)$/.test(args.hostBase) && Number(args.hostBase.split('.')[2]) < f.minimumHostRelease) reason = 'host_unverified';
     if (reason) { if (args.excluded) args.excluded[reason] = (args.excluded[reason] ?? 0) + 1; continue; }
     out.push({ id, rank: ROLES[f.family].rank, description: `${f.family} model ${id}; ${f.role ?? 'Legacy version; no comparative performance is established here.'} Product role ${ROLES[f.family].text} Documented context ${f.contextTokens} tokens. Account entitlement is not inferred.`,
-      efforts: f.unconditionalEffort, omitEffort: f.unconditionalEffort.length === 0 && f.conditionalEffort.length === 0 });
+      efforts: f.unconditionalEffort, omitEffort: f.unconditionalEffort.length === 0 && f.conditionalEffort.length === 0, ...(f.family === 'fable' ? { capability: FRONTIER } : {}) });
   }
   return out;
 };
