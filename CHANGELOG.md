@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.76 — 2026-11-11 — Narrow the capability question's unclear option
+
+- The Router's capability `unclear` option now means the requested work cannot be identified even with the previous reply and recent requests. A short follow-up that continues them (run, apply, install what they describe) is judged by the work they describe, and work whose difficulty sits between two options divides its probability between them instead of choosing unclear. `unclear` was the top answer for 33 of 298 root assessments over 48 hours (2026-11-09 to 11-11), mostly short follow-ups that the control question read as clear. Shared by Claude and Codex.
+- Moves are still decided by the existing floors (downgrade 0.65, ordinary action risk); the decision code and the `baseline_reach` return to the baseline model after five requests (#274) are unchanged. Not re-measured on the bench.
+
 ## v0.8.75 — 2026-11-10 — Route Claude work after Anthropic's model guidance
 
 - Make Fable 5.2 (Claude Code 2.1.321 or later) the current Fable; Fable 5.1 is legacy. Defaults (`routerFrontierModel`, `models.frontier`) move to `claude-fable-5-2`, and prices are regenerated. A `fable` root resolved to an unknown model before, so routing stayed native for it. Model sync now reads the new "default is `high`" effort wording.
