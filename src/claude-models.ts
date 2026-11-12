@@ -1,6 +1,6 @@
 /**
  * Exact-model facts the policy is allowed to rely on. Source: the Claude platform model overview and effort pages,
- * read 2026-11-10. https://platform.claude.com/docs/en/models/overview and https://platform.claude.com/docs/en/build-with-claude/effort. A model absent from this table has unknown rank, capacity and effort support, and nothing here
+ * read 2026-11-12. https://platform.claude.com/docs/en/models/overview and https://platform.claude.com/docs/en/build-with-claude/effort. A model absent from this table has unknown rank, capacity and effort support, and nothing here
  * guesses them: its model and effort stay native.
  */
 export type SymbolicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -51,7 +51,7 @@ export const MODEL_FACTS: readonly ModelFacts[] = [
   { ids: ["claude-sonnet-5"], suffixes: ["[1m]"], family: "sonnet", legacy: true, contextTokens: 1000000, unconditionalEffort: ["low", "medium", "high"], conditionalEffort: ["xhigh", "max"] },
   { ids: ["claude-haiku-5-5", "anthropic.claude-haiku-5-5"], suffixes: [], family: "haiku", minimumHostRelease: 293, contextTokens: 1000000, maxOutputTokens: 128000, role: "For high-volume, latency-sensitive tasks such as classification, extraction, and routing", defaultEffort: "medium", unconditionalEffort: ["low", "medium", "high"], conditionalEffort: ["xhigh", "max"] },
   { ids: ["claude-haiku-4-5-20251001", "claude-haiku-4-5", "anthropic.claude-haiku-4-5", "claude-haiku-4-5@20251001"], suffixes: [], family: "haiku", legacy: true, contextTokens: 200000, maxOutputTokens: 64000, role: "Fastest model; simple tasks, lookup and mechanical transformations with clear checks.", unconditionalEffort: [], conditionalEffort: [] },
-  { ids: ["claude-fable-5-2", "anthropic.claude-fable-5-2"], suffixes: [], family: "fable", contextTokens: 1000000, maxOutputTokens: 128000, role: "For demanding reasoning and long-horizon agentic work", defaultEffort: "high", unconditionalEffort: ["low", "medium", "high", "xhigh", "max"], conditionalEffort: [], minimumHostRelease: 321 },
+  { ids: ["claude-fable-5-2", "global.anthropic.claude-fable-5-2"], suffixes: [], family: "fable", contextTokens: 1000000, maxOutputTokens: 128000, role: "For demanding reasoning and long-horizon agentic work", defaultEffort: "high", unconditionalEffort: ["low", "medium", "high", "xhigh", "max"], conditionalEffort: [], minimumHostRelease: 321 },
 ];
 
 /** One current automatic version per family; historical facts only explain older recorded executions. */

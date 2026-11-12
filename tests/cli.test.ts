@@ -27,6 +27,9 @@ describe('committed agents/*.md match OWNED_AGENT_PROFILES + DEFAULT_CONFIG.mode
       expect(fm.fields['disallowedTools']).toBe(profile.disallowedTools.join(', '));
       expect(fm.fields['omitClaudeMd']).toBe('true');
       expect(fm.fields['skills']).toBeUndefined();
+      // Four identical descriptions left the caller to pick a tier by name, and an explicit deep call stays deep (A5).
+      const steered = profile.tier === 'deep' || profile.tier === 'frontier';
+      expect(fm.fields['description']?.includes('call jev-gate:worker instead')).toBe(steered);
     });
   }
 

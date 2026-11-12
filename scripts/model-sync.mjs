@@ -20,6 +20,8 @@ export const SOURCES = {
 };
 const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// The publisher lists a model served only on Bedrock's runtime endpoint by its global inference profile ID.
+const BEDROCK_SCOPES = ['', 'global.'];
 const requireFact = (condition, message) => { if (!condition) throw new Error(message); };
 const cells = line => line.trim().slice(1, -1).split('|').map(c => c.trim());
 const unquote = value => value.replace(/`/g, '').trim();
@@ -73,7 +75,7 @@ export function parseClaude(overview, effort) {
         /(?:`low`, `medium`, and `high`|`high` effort or below)/.test(section), `Unknown thinking/effort restrictions: ${id}`);
       unconditionalEffort = EFFORTS.slice(0, 3); conditionalEffort = EFFORTS.slice(3);
     }
-    requireFact(roles[i]?.length > 10 && roles[i].length < 500 && bedrock[i] === `anthropic.${id}`, `Unknown Claude role/provider identity: ${id}`);
+    requireFact(roles[i]?.length > 10 && roles[i].length < 500 && BEDROCK_SCOPES.some(scope => bedrock[i] === `${scope}anthropic.${id}`), `Unknown Claude role/provider identity: ${id}`);
     return { ids: [id, bedrock[i]], suffixes: [], family, contextTokens: tokens(windows[i]), maxOutputTokens: tokens(outputs[i]),
       role: roles[i], defaultEffort: defaults[i], unconditionalEffort, conditionalEffort };
   });

@@ -1,6 +1,6 @@
 ---
 name: worker
-description: Complete one Jev Gate outcome, run its checks, and return a WorkerReply.
+description: Complete one Jev Gate outcome, run its checks, and return a WorkerReply. This is the worker to call; Jev Gate assigns its tier.
 model: sonnet
 background: false
 disallowedTools: Agent, SendMessage, Skill, Artifact, ArtifactComments, ArtifactData

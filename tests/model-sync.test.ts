@@ -36,6 +36,11 @@ const rawCodex = {
 };
 
 describe('official model freshness CI', () => {
+  it('accepts a global inference profile as the Bedrock ID and rejects an unknown scope', () => {
+    const scoped = (scope: string) => overview.replace('`anthropic.claude-fable-5-2`', '`' + scope + 'anthropic.claude-fable-5-2`');
+    expect(parseClaude(scoped('global.'), effort)[0].ids).toEqual(['claude-fable-5-2', 'global.anthropic.claude-fable-5-2']);
+    expect(() => parseClaude(scoped('elsewhere.'), effort)).toThrow(/role\/provider identity/);
+  });
   it('rejects changed, missing and ambiguous native credit rates and changed cache-write billing', () => {
     const billing = 'Codex credit billing has no separate cache-write charge.';
     const table = '<tr><td>GPT-6.1 Sol</td><td>50 credits</td><td>2.5 credits</td><td>1,250 credits</td></tr>';

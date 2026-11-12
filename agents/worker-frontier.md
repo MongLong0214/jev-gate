@@ -1,6 +1,6 @@
 ---
 name: worker-frontier
-description: Complete one Jev Gate outcome, run its checks, and return a WorkerReply.
+description: Complete one Jev Gate outcome, run its checks, and return a WorkerReply. Jev Gate assigns this tier itself when the work needs it, so call jev-gate:worker instead. Call this one directly only when the user asks for it.
 model: claude-fable-5-2
 effort: high
 background: false

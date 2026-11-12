@@ -1,6 +1,6 @@
 ---
 name: worker-deep
-description: Complete one Jev Gate outcome, run its checks, and return a WorkerReply.
+description: Complete one Jev Gate outcome, run its checks, and return a WorkerReply. Jev Gate assigns this tier itself when the work needs it, so call jev-gate:worker instead. Call this one directly only to retry work a jev-gate:worker failed, or when the user asks for it.
 model: opus
 effort: high
 background: false
