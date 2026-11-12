@@ -4,6 +4,7 @@
 
 - The four worker profiles shared one description, so a caller picked a tier by its name. An explicit `jev-gate:worker-deep` call stays deep, so it skipped the standard start and the capability-based step-up that a plain `jev-gate:worker` call gets. In one 48-hour local trace all five direct worker calls of one session named the deep profile; of the four with a recorded assessment, three read as routine work and none reached the 0.8 upgrade floor.
 - The deep and frontier descriptions now say Jev Gate assigns that tier itself and to call `jev-gate:worker` instead; a direct deep call is for retrying work a `jev-gate:worker` failed or when the user asks for it, a direct frontier call only when the user asks. The plain worker's description says it is the one to call. The descriptions are guidance to the caller: decision code, floors and the rule that an explicit deep call stays deep are unchanged. Not measured on the bench.
+- The official-model freshness check accepts the Bedrock ID the publisher now lists for Fable 5.2, the global inference profile `global.anthropic.claude-fable-5-2`. The model table records that ID in place of `anthropic.claude-fable-5-2`; any other scope still fails the check.
 
 ## v0.8.76 — 2026-11-11 — Narrow the capability question's unclear option
 
