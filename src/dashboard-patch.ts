@@ -9,14 +9,14 @@ type Fields = Map<string, { value: unknown; json: string | undefined }>;
 /** Step fields only an opened stage detail or a decision basis shows. Frames leave them out, about half of a long history's
  * bytes; the page fetches them for the one opened stage and the shown calls from `/api/step`. A step without `details` is such a frame step.
  * `callId` pairs records on the server and was a fifth of a frame. */
-type DetailField = 'details' | 'routing' | 'sessionId' | 'agentId' | 'judgements' | 'callId';
+type DetailField = 'details' | 'routing' | 'sessionId' | 'agentId' | 'judgements' | 'callId' | 'progress';
 export type FrameStep = Omit<OperationStep, DetailField>;
 export type FrameRun = Omit<OperationRun, 'steps'> & { steps: FrameStep[] };
 // The page draws runs, not the server's recent feed, so frames leave the feed out.
 type FrameOperations = Omit<OperationsView, 'runs' | 'feed'> & { runs: FrameRun[] };
 /** What a frame carries: the snapshot fields the page draws. */
 export type FrameSnapshot = Omit<Partial<ActivitySnapshot>, 'operations'> & { operations: FrameOperations };
-const frameStep = <T extends OperationStep>({ details: _details, routing: _routing, sessionId: _session, agentId: _agent, judgements: _judgements, callId: _call, ...shown }: T): Omit<T, DetailField> => shown;
+const frameStep = <T extends OperationStep>({ details: _details, routing: _routing, sessionId: _session, agentId: _agent, judgements: _judgements, callId: _call, progress: _progress, ...shown }: T): Omit<T, DetailField> => shown;
 // An unchanged run keeps its object across rebuilds, and so does its frame run, so the diff still skips it by identity. A
 // changed run keeps the steps that did not change, and so do their frame steps, so the diff serializes only the new ones.
 const frameRuns = new WeakMap<OperationRun, FrameRun>(), frameSteps = new WeakMap<OperationStep, FrameStep>();

@@ -24,6 +24,10 @@ Copy `check_id` character for character from that Bash call. A short name, a lab
 name without the path you ran it with, or a command you only described is not the command and is refused. Do not
 start the check's call with `cd`, a variable assignment or `export`: change directory in an earlier call and write
 paths out in full. Explanations and observed output go in `note`.
+Do not start background work: no `run_in_background` and no Monitor. The host can still move a long command to the
+background, and then notifies you when it ends. To wait for that notice, end your turn without a report: you are woken
+when it arrives, and your job stays open meanwhile. Such a check counts only once its notice shows it finished. Every
+turn that ends with your outcome done or blocked ends with the report below.
 Report the interfaces you actually created, with the names and signatures the coordinator can rely on.
 Use the tools and connected MCPs the host provides to inspect, implement, and verify your assigned outcome. If a tool
 is unavailable or needs additional authorization or user input, report the specific blocker. Work inside the

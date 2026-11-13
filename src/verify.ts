@@ -311,6 +311,22 @@ const relativize = (command: string, cwd: unknown): string | undefined => {
   return out === command ? undefined : out;
 };
 
+/**
+ * #416: a host completion notice delivered to the worker settles the background run it names: `completed` with exit
+ * code 0 (or no code) passed, `failed` or a nonzero code failed, anything else (killed, an expired Monitor) unknown.
+ */
+const settleBackgrounded = (runs: Map<string, ObservedRun>, content: unknown): void => {
+  const text = typeof content === 'string' ? content : Array.isArray(content) ? content.filter((c) => isRecord(c) && c['type'] === 'text').map((c) => String((c as Record<string, unknown>)['text'] ?? '')).join('\n') : '';
+  for (const notice of text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)) {
+    const body = notice[1]!;
+    const run = runs.get(/<task-id>([^<>]*)<\/task-id>/.exec(body)?.[1] ?? '');
+    const status = /<status>([a-z_]+)<\/status>/.exec(body)?.[1];
+    if (!run || !status) continue;
+    const code = /exit code (-?\d+)/.exec(/<summary>([\s\S]*?)<\/summary>/.exec(body)?.[1] ?? '')?.[1];
+    run.status = status === 'completed' && (code === undefined || code === '0') ? 'passed' : status === 'failed' || status === 'completed' && code !== undefined ? 'failed' : 'unknown';
+  }
+};
+
 /** Reads the transcript's last VERIFY_MAX_BYTES; null when there is no file to read. Never throws. */
 export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES): WorkerObservation | null => {
   let fd: number | null = null;
@@ -332,11 +348,14 @@ export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES)
   const pending = new Map<string, ObservedRun>();
   const writes = new Map<string, { start: number; end: number | null }>();
   const runs: ObservedRun[] = [];
+  /** #416: runs the host moved to the background, by task id. Only their completion notice says how they ended. */
+  const backgrounded = new Map<string, ObservedRun>();
   let seq = 0;
   const lines = text.split('\n');
   // A cut tail starts mid-line; that first fragment is not a record.
   for (const line of truncated ? lines.slice(1) : lines) {
-    if (!line.includes('"tool_use"') && !line.includes('"tool_result"')) continue;
+    const notice = line.includes('<task-notification>');
+    if (!line.includes('"tool_use"') && !line.includes('"tool_result"') && !notice) continue;
     let rec: unknown;
     try {
       rec = JSON.parse(line);
@@ -344,6 +363,7 @@ export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES)
       continue;
     }
     const content = isRecord(rec) && isRecord(rec['message']) ? rec['message']['content'] : null;
+    if (notice && isRecord(rec) && rec['type'] === 'user') settleBackgrounded(backgrounded, content);
     if (!Array.isArray(content)) continue;
     const cwd = isRecord(rec) ? rec['cwd'] : undefined;
     for (const block of content) {
@@ -363,7 +383,13 @@ export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES)
         if (!run) continue;
         pending.delete(block['tool_use_id']);
         const mark = block['is_error'];
-        runs.push({ ...run, status: mark === true ? 'failed' : mark === false ? 'passed' : 'unknown' });
+        // #416: a command the host moved to the background returns `is_error: false` with no exit status. It is
+        // unknown until its completion notice, never a pass.
+        const result = isRecord(rec) ? rec['toolUseResult'] : null;
+        const task = isRecord(result) && typeof result['backgroundTaskId'] === 'string' ? result['backgroundTaskId'] : null;
+        const observed: ObservedRun = { ...run, status: task !== null ? 'unknown' : mark === true ? 'failed' : mark === false ? 'passed' : 'unknown' };
+        if (task !== null) backgrounded.set(task, observed);
+        runs.push(observed);
       }
     }
   }

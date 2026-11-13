@@ -52,10 +52,13 @@ export interface OperationStep {
   /** Native host spans store their explicit start; other records are end-stamped measurements. */
   startedAt?: string;
   judgements?: Array<{ question: string; value: string; confidence: number | null; probabilities: Array<{ label: string; value: number }> }>;
+  /** #417: a background worker's recorded progress. Every count is what the records show; absent stays null, never zero. */
+  progress?: WorkerProgress;
   /** The recorded exchange behind one measured Jev response. Every absent value stays null; cost is a list-price estimate, never a billed amount. */
   receipt?: JevReceipt;
 }
 
+export interface WorkerProgress { lastAt: string; lastTool: string | null; turns: number | null; requests: number | null; input: number | null; output: number | null; tasks?: Array<{ type: string; status: string; description: string | null }> }
 export interface JevReceipt { status: number | null; code: string | null; model: string | null; input: number | null; output: number | null; costUsd: number | null; choice: string | null; confidence: number | null; threshold: number | null; direction: string | null }
 
 export interface OperationRun {
@@ -206,6 +209,7 @@ const traceTitle = (phase: string, r: Rec): string => ({
   pre_intent: 'Gate B · Jev 요청', pre_result: 'Gate B · 등급 결정',
   dispatch: '워커 호출',
   background_dispatch: '백그라운드 실행 준비', background_launch: '백그라운드 워커 실행', background_conversation: '메인 대화 계속', background_terminal: '백그라운드 워커 종료', background_policy_delivery: '종료 정책 전달',
+  background_paused: '워커 백그라운드 대기', background_resumed_after_terminal: '종료 판정 뒤 워커 재개', background_cancel_after_terminal: '종료 판정 뒤 워커 중지',
   worktree_start: 'Worktree · 생성 시작', worktree_result: 'Worktree · 생성 결과', dispatch_denied: 'Agent 호출 거절', post: token(r['verdict']) ? '워커 결과 · 수락 판정' : 'Agent 호출 결과 · 계약 판정 없음', failure: '호스트 호출 실패', stop: '턴 종료',
 } as Record<string, string>)[phase] ?? phase;
 
@@ -278,7 +282,54 @@ const ROUTER_EVENT: Record<string, string> = {
   child: '하위 실행 등록', child_route: '하위 단계 판단', child_result: '하위 단계 응답 모델 확인', child_stop: '하위 단계 판단 중단', cache_restored: '캐시 기준 복원',
   cache_restore_skipped: '캐시 기준 복원 생략', context_restored: '대화 문맥 복원', context_restore_skipped: '대화 문맥 복원 생략', effort_cache: 'effort 캐시 유지', context_reset: '문맥 초기화', budget_timeout: '판단 시간 초과', late: '늦은 응답',
 };
-const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>, live: Liveness): OperationStep | null => {
+/** #417: what a native child's own Router rows show: request, response and turn-end rows only, which no build drops, so the
+ * split build's index (`sync`) and a whole build count the same rows. `ats` and `requestAts` stay sorted. */
+interface WorkerStats { ats: string[]; requestAts: string[]; turns: Map<string, number>; usage: number; input: number; output: number }
+const CHILD_EVENTS = new Set(['model_request', 'child_result', 'model_failure', 'turn_end']);
+export const workerStatsKey = (row: ModRecord): string | null => row.component === 'router' && row.at && CHILD_EVENTS.has(String(row.rec['event'])) && token(row.rec['session_id']) && token(row.rec['agent_id'])
+  ? JSON.stringify([row.rec['session_id'], row.rec['agent_id']]) : null;
+const tokens = (u: Rec | null, keys: string[]): number => keys.reduce((sum, k) => sum + (number(u?.[k]) ?? 0), 0);
+/** Adds a child row to its stats, or takes it out; false once nothing is left. */
+const noteWorker = (stats: WorkerStats, row: ModRecord, add: boolean): boolean => {
+  const r = row.rec, sign = add ? 1 : -1, put = (list: string[]): void => { if (add) insert(list, row.at, byText); else remove(list, row.at, byText); };
+  put(stats.ats);
+  if (r['event'] === 'model_request') {
+    put(stats.requestAts);
+    const turn = token(r['turn']);
+    if (turn) { const count = (stats.turns.get(turn) ?? 0) + sign; if (count) stats.turns.set(turn, count); else stats.turns.delete(turn); }
+  }
+  const usage = r['event'] === 'child_result' ? field(r, 'usage') : null;
+  if (usage) { stats.usage += sign; stats.input += sign * tokens(usage, ['input', 'cache_read', 'cache_creation']); stats.output += sign * tokens(usage, ['output']); }
+  return stats.ats.length > 0;
+};
+const newWorkerStats = (): WorkerStats => ({ ats: [], requestAts: [], turns: new Map(), usage: 0, input: 0, output: 0 });
+/** A background worker's gate records: its last tool, its last pause and the alarm after its terminal. */
+interface WorkerTrace { lastAt: string; activeAt: string; tool: string | null; paused: { at: string; tasks: NonNullable<WorkerProgress['tasks']> } | null; resumedAt: string | null; endAt: string | null }
+interface WorkerLookup { trace: Map<string, WorkerTrace>; stats: (session: string, agent: string) => WorkerStats | undefined }
+const backgroundKey = (r: Rec): string => `background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`;
+const later = (a: string, b: string | null | undefined): string => b && b > a ? b : a;
+/** Kind, status and one screened line of each task; the hook already cut them, and a page never shows a command. */
+const taskBriefs = (v: unknown): NonNullable<WorkerProgress['tasks']> => (Array.isArray(v) ? v.slice(0, 32) : []).flatMap(t => {
+  const task = rec(t), type = token(task?.['type']), status = token(task?.['status']), d = task?.['description'];
+  return type && status ? [{ type, status, description: typeof d === 'string' && d.length <= 160 && !d.includes('\n') && !looksSecret(d) ? d : null }] : [];
+});
+const workerTraces = (records: Rec[]): Map<string, WorkerTrace> => {
+  const out = new Map<string, WorkerTrace>();
+  for (const r of records) {
+    const phase = String(r['phase']), at = iso(r['written_at']);
+    if (!at || !['background_activity', 'background_paused', 'background_resumed_after_terminal', 'background_terminal'].includes(phase)) continue;
+    const key = backgroundKey(r);
+    let w = out.get(key);
+    if (!w) out.set(key, w = { lastAt: '', activeAt: '', tool: null, paused: null, resumedAt: null, endAt: null });
+    w.lastAt = later(w.lastAt, at);
+    if (phase === 'background_terminal') { w.endAt = later(w.endAt ?? '', at); continue; }
+    if (phase === 'background_paused') { if (!w.paused || at >= w.paused.at) w.paused = { at, tasks: taskBriefs(r['tasks']) }; continue; }
+    if (phase === 'background_resumed_after_terminal' && (!w.resumedAt || at < w.resumedAt)) w.resumedAt = at;
+    if (at >= w.activeAt) { w.activeAt = at; if (token(r['tool_name'])) w.tool = token(r['tool_name']); }
+  }
+  return out;
+};
+const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>, modelTerminals: Map<string, string>, live: Liveness, workers?: WorkerLookup): OperationStep | null => {
   const phase = token(r['phase']);
   if (!phase) return null;
   const connection = phase === 'failure' ? codexConnectionFailure(r) : null;
@@ -291,7 +342,8 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
       details: [connection[0], '훅과 로컬 Jev 연결 사이의 오류 · 도구 실행 실패나 워커 실패를 뜻하지 않음', 'HTTP 상태·내부 원인·프로세스 종료 코드는 이 기록만으로 확인 불가'] };
   }
   // #289: a legacy planner dispatch is not worker execution, and its feature is gone like the plan and guard records.
-  const feature = phase === 'dispatch' && r['role'] === 'planner' ? null : traceFeature(phase);
+  // #417: a worker's periodic activity record is shown on its launch step, never as a step of its own.
+  const feature = phase === 'dispatch' && r['role'] === 'planner' || phase === 'background_activity' ? null : traceFeature(phase);
   if (!feature) return null;
   const at = iso(r['written_at']);
   if (!at) return null;
@@ -331,6 +383,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
   let summary = '';
   let lane: StepLane = 'policy';
   let outcome: OperationStep['outcome'], refusal: [string, string] | null = null;
+  let progress: WorkerProgress | undefined, workerEnd: string | null = null;
   if (isIntent) {
     lane = phase.endsWith('_start') ? 'local' : 'jev';
     summary = hasResult ? '응답 기록과 연결됨' : state === 'active' ? '응답을 기다리는 중' : '응답 기록 없음 · 진행 여부 미확인';
@@ -387,9 +440,32 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     details.push('응답이 보고한 값만 표시');
   } else if (phase.startsWith('background_')) {
     lane = phase === 'background_dispatch' || phase === 'background_conversation' || phase === 'background_policy_delivery' ? 'policy' : 'host';
-    const closed = resultIds.has(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
+    const closed = resultIds.has(backgroundKey(r));
     if (phase === 'background_dispatch') { summary = '원래 작업에 실행 예약 연결 · 시작 확인 대기'; state = closed ? 'done' : 'unconfirmed'; }
-    if (phase === 'background_launch') { state = closed ? 'done' : young(live, at) ? 'active' : 'unconfirmed'; summary = closed ? '시작과 실제 종료 연결됨' : state === 'active' ? '워커 실행 중 · 메인에서 질문 가능' : '시작 기록 있음 · 종료 결과 미관측'; details.push('시작 알림은 완료·수락 결과가 아닙니다'); }
+    if (phase === 'background_launch') {
+      // #417: a worker is working while records arrive, waiting while its last pause has no later activity or model request,
+      // quiet after MODEL_IDLE_MS, and an alarm when it ran again after its terminal (#416). No record is terminal evidence.
+      const w = workers?.trace.get(backgroundKey(r)), agent = token(r['agent_id']), session = token(r['session_id']);
+      const stats = agent && session ? workers?.stats(session, agent) : undefined;
+      const lastAt = later(later(at, w?.lastAt), stats?.ats.at(-1));
+      const paused = !closed && w?.paused && w.paused.at > later(w.activeAt, stats?.requestAts.at(-1)) ? w.paused : null;
+      workerEnd = closed ? w?.endAt ?? null : null;
+      if (closed && w?.resumedAt) { state = 'error'; issue = 'host'; summary = '종료 판정 뒤 재개 · 판정은 그대로 · 워커 확인 필요'; details.push('종료 판정 뒤에도 같은 워커의 활동이 기록됨 · 필요하면 TaskStop으로 중지'); }
+      else if (closed) { state = 'done'; summary = '시작과 실제 종료 연결됨'; }
+      else if (paused) { state = 'active'; summary = `백그라운드 대기 · 띄운 작업 ${n(paused.tasks.length)}개`; details.push('턴은 멈췄고 워커가 띄운 작업이 남음 · 끝나면 호스트가 워커를 깨움 · 예약 유지'); }
+      else {
+        const quietAt = Date.parse(lastAt) + MODEL_IDLE_MS;
+        flipsAt(live, quietAt);
+        state = live.now < quietAt ? 'active' : 'unconfirmed';
+        summary = state === 'active' ? text('작업 중', w?.tool && `마지막 도구 ${w.tool}`, '메인에서 질문 가능') : '응답 없음 · 10분 넘게 활동 기록 없음 · 종료 결과 미관측';
+      }
+      details.push('시작 알림은 완료·수락 결과가 아닙니다');
+      progress = { lastAt, lastTool: w?.tool ?? null, turns: stats ? stats.turns.size : null, requests: stats ? stats.requestAts.length : null,
+        input: stats?.usage ? stats.input : null, output: stats?.usage ? stats.output : null, ...(paused ? { tasks: paused.tasks } : {}) };
+    }
+    if (phase === 'background_paused') { lane = 'host'; summary = `턴 멈춤 · 띄운 작업 ${n(taskBriefs(r['tasks']).length)}개 · 예약 유지`; details.push(r['basis'] === 'transcript' ? '근거: 워커 기록의 미종료 백그라운드 명령' : '근거: 호스트가 보낸 진행 중 작업 목록', '종료가 아님 · 작업이 끝나면 호스트가 워커를 깨움'); }
+    if (phase === 'background_resumed_after_terminal') { lane = 'host'; state = 'error'; issue = 'host'; summary = text('종료 판정 뒤 워커 재개', token(r['tool_name']) && `마지막 도구 ${token(r['tool_name'])}`, '판정은 그대로'); }
+    if (phase === 'background_cancel_after_terminal') { lane = 'host'; state = 'interrupted'; summary = '종료 판정 뒤 워커 중지 · 판정은 그대로'; }
     if (phase === 'background_conversation') summary = `원래 작업 유지 · 종료 결과 대기 ${n(number(r['active']))}개`;
     if (phase === 'background_policy_delivery') { summary = '종료 정책 한 번 전달 · 다음 일반 요청은 Gate A 재개'; state = 'done'; }
     if (phase === 'background_terminal') { summary = token(r['status']) === 'completed' ? '호스트에서 실제 종료 확인 · 계약 수락은 별도 검사' : codexFailureReason(r) ?? verdictReason('', r['verdict_reason'])?.[1] ?? '호스트에서 중단·실패 확인 · 성공 수락 없음'; state = token(r['status']) === 'completed' ? 'done' : r['not_executed'] === true ? 'error' : 'interrupted'; if (state === 'done') outcome = 'host_ended'; if (r['not_executed'] === true) details.push('워커 미실행 · 완료 주장 없음'); if (r['orphaned'] === true) details.push('이전 작업 결과 · 현재 작업 미진행'); }
@@ -495,11 +571,14 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
     ...(outcome ? { outcome } : {}), ...((outcome === 'accepted' || outcome === 'rejected') && token(r['task_id']) ? { task: token(r['task_id'])! } : {}),
     // A host end and a policy delivery decide nothing, so a later one never stands in for the contract verdict before it.
     // #269: a Jev request whose response is recorded is that response's start, which the response row already times.
-    ...(['stop', 'background_conversation', 'background_policy_delivery', 'codex_model_request', 'codex_model_failure', 'codex_model_cancelled'].includes(phase) || outcome === 'host_ended' && phase === 'background_terminal' || isIntent && hasResult && lane === 'jev' ? { lifecycle: true } : {}),
+    ...(['stop', 'background_conversation', 'background_policy_delivery', 'background_paused', 'background_cancel_after_terminal', 'codex_model_request', 'codex_model_failure', 'codex_model_cancelled'].includes(phase) || outcome === 'host_ended' && phase === 'background_terminal' || isIntent && hasResult && lane === 'jev' ? { lifecycle: true } : {}),
     ...(phase === 'admission_result' && ['direct', 'orchestrated'].includes(String(field(r, 'decision')?.['shape'])) ? { executionPath: field(r, 'decision')!['shape'] as 'direct' | 'orchestrated' } : {}),
     ...(duration !== null && duration >= 0 ? { durationMs: duration } : {}),
     ...(elapsed !== null && elapsed >= 0 ? { elapsedMs: elapsed } : {}),
     ...(phase === 'codex_model_request' && state === 'active' ? { startedAt: at } : {}),
+    ...(phase === 'background_launch' && state === 'active' ? { startedAt: at } : {}),
+    ...(workerEnd && workerEnd >= at ? { elapsedMs: Date.parse(workerEnd) - Date.parse(at) } : {}),
+    ...(progress ? { progress } : {}),
     ...(phase.endsWith('_result') && judgements(r) ? { judgements: judgements(r)! } : {}),
     ...(receipt ? { receipt } : {}) };
 };
@@ -711,10 +790,11 @@ const sessionEnd = (item: Rec | ModRecord, mod: boolean): [string, string] | nul
 };
 /** A split build hands each part the session ends recorded anywhere, and the native session ends and child origins recorded in
  * other parts. `position` is an item's place in one pass's order of its kind; `read` collects the sessions and agents read. */
-interface PartContext { sessions: Ends; read: Set<string>; position: (item: Rec | ModRecord) => number; codexEnds: Rec[]; children: (agent: string) => Origin[] }
+interface PartContext { sessions: Ends; read: Set<string>; position: (item: Rec | ModRecord) => number; codexEnds: Rec[]; children: (agent: string) => Origin[]; worker: (key: string) => WorkerStats | undefined }
 
 /** The executions of records that join nothing outside them (see `sync`). */
 const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartContext): Part => {
+  const allMods = mods;
   // A native child skips routing on every model step; one row per step would bury the run list. Each part drops its own,
   // so a rebuild does not pass over every row of the history for them.
   mods = mods.filter(m => !(m.component === 'router' && m.rec['event'] === 'child_route' && m.rec['skipped'] === 'native_child'));
@@ -775,7 +855,15 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   const origins: Part['origins'] = [];
   mods = routedModRecords(mods, records, context, origins);
   const resultIds = new Set(records.flatMap((r) => token(r['request_id']) && token(r['phase']) ? [`${token(r['request_id'])}:${token(r['phase'])}`] : []));
-  for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(`background:${token(r['session_id'])}:${token(r['execution_prompt_id']) ?? token(r['prompt_id'])}:${token(r['tool_use_id'])}`);
+  for (const r of records) if (r['phase'] === 'background_terminal') resultIds.add(backgroundKey(r));
+  // A whole build counts every child row itself; a split build reads the index `sync` keeps over all of them.
+  let own: Map<string, WorkerStats> | undefined;
+  const workers: WorkerLookup = { trace: workerTraces(records), stats: (session, agent) => {
+    const key = JSON.stringify([session, agent]);
+    if (context) return context.worker(key);
+    if (!own) { own = new Map(); for (const row of allMods) { const k = workerStatsKey(row); if (k) { let st = own.get(k); if (!st) own.set(k, st = newWorkerStats()); noteWorker(st, row, true); } } }
+    return own.get(key);
+  } };
   const intents = new Map(records.flatMap((r): Array<[string, string]> => {
     const phase = token(r['phase']); if (!phase?.endsWith('_intent')) return [];
     const requestId = token(r['request_id']); const at = iso(r['written_at']);
@@ -797,7 +885,7 @@ const buildPart = (records: Rec[], mods: ModRecord[], now: Date, context?: PartC
   }
   const grouped = new Map<string, { source: OperationRun['source']; host: Host; mode: string; executionId?: string; steps: OperationStep[]; rank: Rank }>();
   for (const [index, r] of records.entries()) {
-    const step = traceStep(r, resultIds, intents, modelTerminals, live);
+    const step = traceStep(r, resultIds, intents, modelTerminals, live, workers);
     if (!step) continue;
     const host = r['host'] === 'codex' ? 'codex' : 'claude';
     const source = gateGroup(r).split(':')[0] as OperationRun['source'];
@@ -924,6 +1012,7 @@ const fresh = () => ({
   runs: [] as Entry[], active: new Set<Entry>(), requests: new Map<string, number>(), managed: 0, irregular: 0,
   featureCount: new Map<FeatureId, number>(), featureAts: new Map<FeatureId, string[]>(), newest: [] as Built[], durations: [] as number[],
   latest: new Map<string, Ref[]>(), obsLast: new Map<string, Observed[]>(), obsOk: new Map<string, string[]>(), origins: new Map<string, Exported[]>(),
+  workers: new Map<string, WorkerStats>(),
 });
 let split = fresh();
 let viewUntil = Infinity;
@@ -1073,6 +1162,13 @@ const sync = (records: Rec[], mods: ModRecord[], now: Date, retry = true): boole
       if (!list.length) s.ends.delete(end[0]);
       touch(end[0]);
     }
+    const worker = node.mod ? workerStatsKey(node.item as ModRecord) : null;
+    if (worker) {
+      let stats = s.workers.get(worker);
+      if (!stats) s.workers.set(worker, stats = newWorkerStats());
+      if (!noteWorker(stats, node.item as ModRecord, add)) s.workers.delete(worker);
+      touch(`worker:${worker}`);
+    }
     if (!node.mod && codexRow(r) && r['event'] === 'SessionEnd') {
       const session = String(r['session_id']), list = listOf(s.codexEnds, session);
       if (add) list.push(r); else list.splice(list.indexOf(r) >>> 0, 1);
@@ -1141,7 +1237,9 @@ const build = (g: Group, now: Date): void => {
   const read = new Set<string>(), position = (item: Item): number => s.nodes.get(item)?.pos ?? -1;
   // The group's own origins are out of the list while it builds (`drop`).
   const children = (agent: string): Origin[] => s.origins.get(agent)?.map(o => ({ at: o.at, pos: o.node.pos, routing: o.routing })) ?? [];
-  const part = buildPart(records.map(n => n.item as Rec), mods.map(n => n.item as ModRecord), now, { sessions: s.ends, read, position, codexEnds: ends, children });
+  // #417: a worker's progress is read from every child row, wherever it is grouped; a new one rebuilds only its readers.
+  const worker = (key: string): WorkerStats | undefined => { read.add(`worker:${key}`); return s.workers.get(key); };
+  const part = buildPart(records.map(n => n.item as Rec), mods.map(n => n.item as ModRecord), now, { sessions: s.ends, read, position, codexEnds: ends, children, worker });
   g.reads = [...read, ...[...sessions].map(session => `cx:${session}`)];
   for (const key of g.reads) { let set = s.readers.get(key); if (!set) s.readers.set(key, set = new Set()); set.add(g); }
   g.built = summarize(g, part, records, mods);

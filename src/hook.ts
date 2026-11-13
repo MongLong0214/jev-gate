@@ -3,7 +3,7 @@ import { prepareDispatchAllocation, selectedDispatchPair, type DispatchAllocatio
 import { ISOLATION_NOTE, OWNED_AGENT_PROFILES } from './agents.js';
 import type { PairOffer, PairPatch } from './router-selection.js';
 import { integratedClaudePlugin } from './claude-setup.js';
-import { claudeTerminal, dispatchMarker, isStopNotice, noticeClaim, taskNoticeVerdict, type NoticeBasis } from './claude-background.js';
+import { backgroundTaskBriefs, backgroundWait, claudeTerminal, dispatchMarker, isStopNotice, noticeClaim, taskNoticeVerdict, type NoticeBasis } from './claude-background.js';
 import { observedDelegationPrices } from './delegation-prices.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -55,7 +55,7 @@ import {
   renderRouteNote,
 } from './coordinator.js';
 import { callJev, MAX_REQUEST_BYTES, type JevOutcome, type JevRequest } from './jev.js';
-import { pendingBackgroundPolicy } from './job.js';
+import { pendingBackgroundPolicy, settleBackground } from './job.js';
 import {
   activeWorkers,
   boundExhausted,
@@ -75,7 +75,7 @@ import { composeSingleWorkerPrompt, MAX_COMPOSED_BYTES, parseWorkerReply, report
 import { openTraceDir, type TraceWriter } from './trace.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from './liveness.js';
 import { evidenceFormatOnly, readWorkerObservation, refusalReason, subagentTranscriptPath, verifyChecks } from './verify.js';
-import type { CheckVerification, CodexFailure, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
+import type { BackgroundSettled, CheckVerification, CodexFailure, ConfigV5, DenyReason, ErrorCode, ExecutionShape, HookInput, JobGeneration, JobState, PlannedTask, Receipt, Reservation, RoutingMode, Tier } from './types.js';
 import { agentForTier, CODEX_FAILURE_CATEGORIES, CODEX_FAILURE_STAGES, OWNED_AGENTS, TIERS } from './types.js';
 import { MAX_PROMPT_BYTES } from './brief.js';
 import { normalizeUsage } from './cost.js';
@@ -160,6 +160,8 @@ const parseInput = (text: string): HookInput | { code: ErrorCode } => {
   if (typeof parsed['source'] === 'string' && ['user', 'sdk', 'system', 'loop_wakeup', 'schedule_wakeup', 'poll_event'].includes(parsed['source'])) out.source = parsed['source'] as NonNullable<HookInput['source']>;
   if ('tool_input' in parsed) out.tool_input = parsed['tool_input'];
   if ('tool_response' in parsed) out.tool_response = parsed['tool_response'];
+  const tasks = backgroundTaskBriefs(parsed['background_tasks']);
+  if (tasks !== null) out.background_tasks = tasks;
   // Host finding (v5-host-1): effort arrives as { level: "high" }, not a string; a string form is accepted too.
   const effort = parsed['effort'];
   if (typeof effort === 'string') out.effort = effort;
@@ -271,6 +273,9 @@ const isSlashCommand = (prompt: string): boolean => prompt.trimStart().startsWit
 
 /** The worst-case route note: every tier name is short, so one bound covers whichever tier is chosen. */
 const ROUTE_NOTE_MAX_BYTES = Math.max(...TIERS.flatMap((t) => [renderRouteNote(t), renderSingleRouteNote(t)].map((n) => Buffer.byteLength(n, 'utf8'))));
+
+/** #417: a background worker's tool activity is recorded at most this often; a resume after a pause is always recorded. */
+export const BACKGROUND_ACTIVITY_MS = 15_000;
 
 /** L7: below this, a provider call cannot plausibly finish, so it is not started. */
 const MIN_NETWORK_MS = 250;
@@ -573,6 +578,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const verdict_reason = observed.cancelled ? 'worker_cancelled' : observed.completed ? null : 'worker_failed';
     const state = readJob(deps.env, sessionId);
     if (!state.ok || !state.value) return skip('no_state');
+    const settled: BackgroundSettled = { agent_id: agentId, tool_use_id: owner.id, task_id: owner.r.task_id, status, at: new Date().toISOString() };
     if (!sameGeneration(owner.gen, state.value.current)) {
       updateJob(deps.env, sessionId, prev => prev ? { ...prev, history: prev.history.map(g => {
         const r = own(g.active, owner.id);
@@ -580,9 +586,9 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
         const receipt: Receipt = { task_id: r.task_id ?? '', contract_hash: r.contract_hash ?? '', rev: r.rev ?? 0, attempt: r.attempt, tool_use_id: owner.id,
           provenance: 'worker_reported', reply: null, verdict: 'unknown', verdict_reason: 'generation_changed',
           requested_model: r.allocation_pair?.model ?? null, observed_model: observed.model, root_effort: null, recorded_at: new Date().toISOString() };
-        return { ...release(g, owner.id), receipts: [...g.receipts, receipt] };
+        return settleBackground({ ...release(g, owner.id), receipts: [...g.receipts, receipt] }, settled);
       }) } : null);
-      trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, orphaned: true, accepted: false, status, verdict_reason });
+      trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, agent_id: agentId, orphaned: true, accepted: false, status, verdict_reason });
       return skip();
     }
     const event: HookInput = { hook_event_name: 'PostToolUse', session_id: sessionId, ...(owner.gen.prompt_id === null ? {} : { prompt_id: owner.gen.prompt_id }), ...(input.transcript_path ? { transcript_path: input.transcript_path } : {}), ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
@@ -590,8 +596,14 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
       tool_response: { status, agentId, resolvedModel: observed.model, content: [{ type: 'text', text: observed.text }] } };
     const result = await runHook({ ...deps, stdin: (async function* () { yield JSON.stringify(event); })() });
     const context = result.stdout ? JSON.parse(result.stdout)?.hookSpecificOutput?.additionalContext : null;
-    if (typeof context === 'string') updateJob(deps.env, sessionId, prev => prev && sameGeneration(prev.current, owner.gen) ? { ...prev, current: { ...pendingBackgroundPolicy(prev.current), background_context: context } } : null);
-    trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, task_id: owner.r.task_id, status, verdict_reason });
+    // #416: the verdict is final for this execution; a later resume or stop of it is recorded against this entry.
+    updateJob(deps.env, sessionId, prev => {
+      if (!prev || !sameGeneration(prev.current, owner.gen)) return null;
+      let current = typeof context === 'string' ? { ...pendingBackgroundPolicy(prev.current), background_context: context } : prev.current;
+      if (own(current.active, owner.id)?.background_execution?.token !== owner.r.background_execution?.token) current = settleBackground(current, settled);
+      return current === prev.current ? null : { ...prev, current };
+    });
+    trace?.write('background_terminal', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, agent_id: agentId, task_id: owner.r.task_id, status, verdict_reason });
     return skip();
   };
 
@@ -609,11 +621,95 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const state = readJob(deps.env, input.session_id);
     if (!state.ok || !state.value) return skip('no_state');
     const found = [state.value.current, ...state.value.history].flatMap(gen => Object.entries(gen.active).flatMap(([id, r]) => r.background_execution && (r.background_execution.agent_id === input.agent_id || observed?.token === r.background_execution.token) ? [{ gen, id, r }] : []));
-    if (found.length !== 1) return skip();
+    if (found.length !== 1) {
+      // #416: a turn that ends after its execution's verdict means the worker ran again without the gate.
+      if (!found.length && observed?.at) resumedAfterTerminal(state.value, input.agent_id, observed.at, null);
+      return skip();
+    }
     const owner = found[0]!; const execution = owner.r.background_execution;
     if (!execution || execution.subagent_type !== input.agent_type || !observed || execution.agent_id !== null && execution.agent_id !== input.agent_id) return skip();
+    // #416: a turn that ends while the worker's own background work runs is a pause. The host wakes the worker when that
+    // work ends; the reservation, its write protection and the pending verdict stay, and nothing is said to the child.
+    const wait = observed.completed ? backgroundWait(input, observed.text) : null;
+    if (wait) {
+      const at = new Date().toISOString();
+      let paused = false;
+      updateJob(deps.env, input.session_id, prev => {
+        if (!prev) return null;
+        const change = (gen: JobGeneration): JobGeneration => {
+          const r = sameGeneration(gen, owner.gen) ? own(gen.active, owner.id) : undefined;
+          if (!r?.background_execution || r.background_execution.token !== execution.token) return gen;
+          paused = true;
+          return { ...gen, active: { ...gen.active, [owner.id]: { ...r, background_wait: { at, tasks: wait.tasks } } } };
+        };
+        const current = change(prev.current), history = prev.history.map(change);
+        return paused ? { ...prev, current, history } : null;
+      });
+      if (paused) {
+        trace?.write('background_paused', { ...base, execution_prompt_id: owner.gen.prompt_id, tool_use_id: owner.id, task_id: owner.r.task_id, agent_id: input.agent_id, basis: wait.basis, tasks: wait.tasks });
+        return skip();
+      }
+    }
     // SubagentStop context goes to the child. Root receives stored policy guidance on its native completion turn.
     return backgroundResult(owner, observed, input.agent_id);
+  };
+
+  /**
+   * #416: activity of a worker whose execution already has its verdict: it was woken after that verdict and now runs
+   * without reservation or verdict. Recorded once per execution; `after` is the time the activity must follow.
+   */
+  const resumedAfterTerminal = (state: JobState, agentId: string, after: string | null, tool: string | null): void => {
+    const sessionId = input.session_id;
+    if (!sessionId) return;
+    const hit = [state.current, ...state.history].flatMap(gen => (gen.background_settled ?? []).filter(s => s.agent_id === agentId && !s.resumed && (after === null || after > s.at)).map(s => ({ gen, s })));
+    if (hit.length !== 1) return;
+    const { gen, s } = hit[0]!;
+    let marked = false;
+    updateJob(deps.env, sessionId, prev => {
+      if (!prev) return null;
+      const mark = (g: JobGeneration): JobGeneration => {
+        if (!sameGeneration(g, gen) || !g.background_settled?.some(e => e.agent_id === agentId && e.at === s.at && !e.resumed)) return g;
+        marked = true;
+        return { ...g, background_settled: g.background_settled.map(e => e.agent_id === agentId && e.at === s.at ? { ...e, resumed: true as const } : e) };
+      };
+      const current = mark(prev.current), history = prev.history.map(mark);
+      return marked ? { ...prev, current, history } : null;
+    });
+    if (marked) trace?.write('background_resumed_after_terminal', { ...base, execution_prompt_id: gen.prompt_id, tool_use_id: s.tool_use_id, task_id: s.task_id, agent_id: agentId, terminal_status: s.status, terminal_at: s.at, ...(tool ? { tool_name: tool } : {}) });
+  };
+
+  /**
+   * #417: what a background worker is doing, from its own tool calls. The first call after a pause clears the pause and
+   * is always recorded; otherwise at most one record per BACKGROUND_ACTIVITY_MS, with the tool name only, never its input.
+   */
+  const backgroundActivity = (): void => {
+    const agentId = caller.agent_id, sessionId = input.session_id;
+    if (input.hook_event_name !== 'PreToolUse' || deps.host || !agentId || !sessionId) return;
+    const state = readJob(deps.env, sessionId);
+    if (!state.ok || !state.value) return;
+    const tool = typeof input.tool_name === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(input.tool_name) ? input.tool_name : null;
+    const found = [state.value.current, ...state.value.history].flatMap(gen => Object.entries(gen.active).flatMap(([id, r]) => r.background_execution?.agent_id === agentId ? [{ gen, id, r }] : []));
+    if (!found.length) { resumedAfterTerminal(state.value, agentId, null, tool); return; }
+    if (found.length !== 1) return;
+    const { gen, id, r } = found[0]!;
+    const now = new Date(), due = (seen: string | undefined) => !seen || now.getTime() - Date.parse(seen) >= BACKGROUND_ACTIVITY_MS;
+    if (!r.background_wait && !due(r.background_seen)) return;
+    let wait: Reservation['background_wait'] | null = null, wrote = false;
+    updateJob(deps.env, sessionId, prev => {
+      if (!prev) return null;
+      const change = (g: JobGeneration): JobGeneration => {
+        const cur = sameGeneration(g, gen) ? own(g.active, id) : undefined;
+        if (!cur?.background_execution || cur.background_execution.token !== r.background_execution!.token || !cur.background_wait && !due(cur.background_seen)) return g;
+        const { background_wait: paused, ...rest } = cur;
+        wait = paused ?? null; wrote = true;
+        return { ...g, active: { ...g.active, [id]: { ...rest, background_seen: now.toISOString() } } };
+      };
+      const current = change(prev.current), history = prev.history.map(change);
+      return wrote ? { ...prev, current, history } : null;
+    });
+    if (!wrote) return;
+    const resumed = wait as Reservation['background_wait'] | null;
+    trace?.write('background_activity', { ...base, execution_prompt_id: gen.prompt_id, tool_use_id: id, task_id: r.task_id, agent_id: agentId, ...(tool ? { tool_name: tool } : {}), ...(resumed ? { resumed: true, paused_at: resumed.at } : {}) });
   };
 
   const backgroundCancel = async (): Promise<HookResult> => {
@@ -623,6 +719,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const state = readJob(deps.env, input.session_id);
     if (!state.ok || !state.value) return skip('no_state');
     const owners = [state.value.current, ...state.value.history].flatMap(gen => Object.entries(gen.active).flatMap(([id, r]) => r.background_execution?.agent_id === taskId ? [{ gen, id, r }] : []));
+    if (!owners.length) return cancelAfterTerminal(state.value, taskId);
     if (owners.length !== 1) return skip();
     const owner = owners[0]!;
     const result = await backgroundResult(owner, { completed: false, cancelled: true, text: '', model: owner.r.background_execution!.resolved_model }, taskId);
@@ -631,6 +728,31 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     const mark = (gen: JobGeneration): JobGeneration => sameGeneration(gen, owner.gen) ? { ...gen, background_stopped: [...(gen.background_stopped ?? []), stop] } : gen;
     updateJob(deps.env, input.session_id, prev => prev ? { ...prev, current: { ...mark(prev.current), ...(sameGeneration(prev.current, owner.gen) && Object.keys(prev.current.active).length === 0 ? { outcome: 'incomplete' as const } : {}) }, history: prev.history.map(mark) } : null);
     return result;
+  };
+
+  /**
+   * #416: a native TaskStop of a worker whose execution already has its verdict. The verdict stands; the stop is recorded,
+   * and the host's killed notice for it is settled here rather than taken as a person's prompt.
+   */
+  const cancelAfterTerminal = (state: JobState, taskId: string): HookResult => {
+    const sessionId = input.session_id!;
+    const hit = [state.current, ...state.history].flatMap(gen => (gen.background_settled ?? []).filter(s => s.agent_id === taskId && !s.stopped).map(s => ({ gen, s })));
+    if (hit.length !== 1) return skip();
+    const { gen, s } = hit[0]!;
+    let marked = false;
+    updateJob(deps.env, sessionId, prev => {
+      if (!prev) return null;
+      const mark = (g: JobGeneration): JobGeneration => {
+        if (!sameGeneration(g, gen) || !g.background_settled?.some(e => e.agent_id === taskId && e.at === s.at && !e.stopped)) return g;
+        marked = true;
+        return { ...g, background_settled: g.background_settled.map(e => e.agent_id === taskId && e.at === s.at ? { ...e, stopped: true as const } : e),
+          background_stopped: [...(g.background_stopped ?? []), { agent_id: taskId, tool_use_id: s.tool_use_id }] };
+      };
+      const current = mark(prev.current), history = prev.history.map(mark);
+      return marked ? { ...prev, current, history } : null;
+    });
+    if (marked) trace?.write('background_cancel_after_terminal', { ...base, execution_prompt_id: gen.prompt_id, tool_use_id: s.tool_use_id, task_id: s.task_id, agent_id: taskId, terminal_status: s.status, terminal_at: s.at, resumed: s.resumed === true });
+    return skip();
   };
 
   // Some native models persist their final text without stop_reason. The later, host-authored
@@ -671,6 +793,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     });
     if (written.ok) for (const item of expired) trace?.write('post', { ...base, ...item, owned: true, role: 'worker', verdict: 'unknown', verdict_reason: 'worker_no_result' });
   }
+  if (input.hook_event_name === 'PreToolUse' && caller.agent_id) backgroundActivity();
   if (input.hook_event_name === 'SubagentStop') return backgroundStop();
   if (input.hook_event_name === 'PostToolUse' && input.tool_name === 'TaskStop') return backgroundCancel();
   if (input.hook_event_name === 'PostToolUse') { const launch = backgroundLaunch(); if (launch) return launch; }

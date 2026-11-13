@@ -88,8 +88,10 @@ describe('operations display model', () => {
     const active = buildOperations([launch, question], [], new Date(later), { trace: true });
     expect(active.runs).toHaveLength(1); expect(active.runs[0]?.state).toBe('active');
     expect(active.feed.some(s => s.summary.includes('질문 가능'))).toBe(true);
-    const stale = buildOperations([launch], [], new Date(Date.parse(at) + 31_000), { trace: true });
-    expect(stale.feed[0]?.summary).toBe('시작 기록 있음 · 종료 결과 미관측'); expect(stale.runs[0]?.state).toBe('unconfirmed');
+    // #417: a worker stays working while records arrive; ten quiet minutes make it unanswered, never ended.
+    expect(buildOperations([launch], [], new Date(Date.parse(at) + 599_999), { trace: true }).runs[0]?.state).toBe('active');
+    const stale = buildOperations([launch], [], new Date(Date.parse(at) + 600_000), { trace: true });
+    expect(stale.feed[0]?.summary).toBe('응답 없음 · 10분 넘게 활동 기록 없음 · 종료 결과 미관측'); expect(stale.runs[0]?.state).toBe('unconfirmed');
     const terminal = { ...base, written_at: later, phase: 'background_terminal', tool_use_id: 'd', prompt_id: 'q', execution_prompt_id: 'p1', status: 'completed' };
     const done = buildOperations([launch, question, terminal], [], new Date(later), { trace: true });
     expect(done.runs).toHaveLength(1); expect(done.runs[0]?.state).toBe('done');
@@ -652,8 +654,8 @@ it('reuses an unchanged recent session only until its next age edge, and equals 
     expect(view, `at +${offset}ms`).toEqual(buildOperations(records, mods, now, avail, true));
     // Between two edges nothing is rebuilt: the same run objects come back.
     if (previous && offset === 31_000) expect(view.runs.every(run => previous!.runs.includes(run))).toBe(true);
-    // The dashboard rebuilds without new records only at the next edge: here the 30-second mark of the record at +2s.
-    if (offset === 31_000) expect(operationsStableUntil()).toBe(t0 + 32_000);
+    // The dashboard rebuilds without new records only at the next edge: here the 30-second mark of the Compact row at +10s.
+    if (offset === 31_000) expect(operationsStableUntil()).toBe(t0 + 40_000);
     previous = view;
   }
 });
@@ -933,4 +935,80 @@ it('settles client-disconnected Codex requests as interrupted without inventing 
   expect(view.feed.find(s => s.title === '모델 · 응답 대기')?.state).toBe('done');
   expect(view.feed.find(s => s.title === '모델 · 연결 종료')).toMatchObject({ state: 'interrupted', summary: '클라이언트 연결 종료 · 응답/소비 미확인' });
   expect(view.feed.some(s => s.state === 'error')).toBe(false);
+});
+
+describe('#417 background worker progress', () => {
+  const t0 = Date.parse('2026-11-13T02:00:00.000Z'), time = (s: number) => new Date(t0 + s * 1000).toISOString(), avail = { trace: true };
+  const bg = { session_id: 's1', prompt_id: 'p1', execution_prompt_id: 'p1', mode: 'auto', tool_use_id: 'd', agent_id: 'w1' };
+  const launch = { ...bg, written_at: time(0), phase: 'background_launch', status: 'running', requested_model: 'sonnet' };
+  const activity = (s: number, tool: string, extra: Record<string, unknown> = {}) => ({ ...bg, written_at: time(s), phase: 'background_activity', tool_name: tool, ...extra });
+  const paused = (s: number) => ({ ...bg, written_at: time(s), phase: 'background_paused', basis: 'host_tasks', tasks: [
+    { id: 'b1', type: 'shell', status: 'running', description: 'Run eslint over the repo' },
+    { id: 'm1', type: 'monitor', status: 'running', description: 'token sk-abcdefghijklmnopqrstuvwxyz0123' }] });
+  const terminal = (s: number) => ({ ...bg, written_at: time(s), phase: 'background_terminal', status: 'completed' });
+  const resumed = (s: number) => ({ ...bg, written_at: time(s), phase: 'background_resumed_after_terminal', terminal_status: 'completed', tool_name: 'Edit' });
+  const child = (s: number, event: string, extra: Record<string, unknown> = {}) => row('router', { session_id: 's1', agent_id: 'w1', scope: 'child', event, ...extra }, time(s));
+  const worker = (records: Record<string, unknown>[], mods: ModRecord[], s: number) => {
+    const now = new Date(t0 + s * 1000), view = buildOperations(records, mods, now, avail);
+    expect(view).toEqual(buildOperations(records, mods, now, avail, true));
+    const run = view.runs.find(r => r.steps.some(x => x.title === '백그라운드 워커 실행'))!;
+    return { view, run, step: run.steps.find(x => x.title === '백그라운드 워커 실행')! };
+  };
+
+  it('shows the #416 sequence as working, waiting on background work, ended, then an alarm', () => {
+    let w = worker([launch, activity(5, 'Bash')], [], 10);
+    expect(w.step).toMatchObject({ state: 'active', summary: '작업 중 · 마지막 도구 Bash · 메인에서 질문 가능', startedAt: time(0), progress: { lastAt: time(5), lastTool: 'Bash', turns: null, requests: null } });
+    // The periodic activity record is the launch step's, not a step of its own.
+    expect(w.run.steps.map(x => x.title)).toEqual(['백그라운드 워커 실행']);
+    w = worker([launch, activity(5, 'Bash'), paused(20)], [], 25);
+    expect(w.step).toMatchObject({ state: 'active', summary: '백그라운드 대기 · 띄운 작업 2개' });
+    expect(w.step.progress?.tasks).toEqual([{ type: 'shell', status: 'running', description: 'Run eslint over the repo' }, { type: 'monitor', status: 'running', description: null }]);
+    expect(w.run.steps.find(x => x.title === '워커 백그라운드 대기')).toMatchObject({ lifecycle: true, state: 'done', summary: '턴 멈춤 · 띄운 작업 2개 · 예약 유지' });
+    // Waiting is the host's to end: no quiet bound turns it into an unanswered worker.
+    expect(worker([launch, activity(5, 'Bash'), paused(20)], [], 20 + 3600).step.state).toBe('active');
+    // A model request after the pause is the worker woken, before any tool of it.
+    expect(worker([launch, paused(20)], [child(30, 'model_request', { turn: 'u2' })], 31).step.summary).toBe('작업 중 · 메인에서 질문 가능');
+    w = worker([launch, paused(20), activity(40, 'Read', { resumed: true }), terminal(60)], [], 61);
+    expect(w.step).toMatchObject({ state: 'done', summary: '시작과 실제 종료 연결됨', elapsedMs: 60_000 });
+    expect(w.step.startedAt).toBeUndefined();
+    w = worker([launch, paused(20), terminal(60), resumed(90)], [], 91);
+    expect(w.step).toMatchObject({ state: 'error', issue: 'host', summary: '종료 판정 뒤 재개 · 판정은 그대로 · 워커 확인 필요' });
+    expect(w.run.state).toBe('attention');
+    expect(w.run.steps.find(x => x.title === '종료 판정 뒤 워커 재개')).toMatchObject({ state: 'error', summary: '종료 판정 뒤 워커 재개 · 마지막 도구 Edit · 판정은 그대로' });
+    expect(JSON.stringify(w.view)).not.toContain('sk-abcdefghij');
+  });
+
+  it('reports a worker with no record for ten minutes as unanswered, and rebuilds at that edge only', () => {
+    expect(worker([launch, activity(30, 'Bash')], [], 629).step.state).toBe('active');
+    expect(operationsStableUntil()).toBe(t0 + 630_000);
+    expect(worker([launch, activity(30, 'Bash')], [], 630).step).toMatchObject({ state: 'unconfirmed', summary: '응답 없음 · 10분 넘게 활동 기록 없음 · 종료 결과 미관측' });
+    // A Router row of the child is activity too.
+    expect(worker([launch, activity(30, 'Bash')], [child(600, 'model_request', { turn: 'u1' })], 630).step.state).toBe('active');
+  });
+
+  it('counts the child\'s turns, model requests and tokens from its own Router rows only', () => {
+    const mods = [child(2, 'model_request', { turn: 'u1' }), child(4, 'child_result', { turn: 'u1', usage: { input: 10, cache_read: 1000, cache_creation: 200, output: 50 } }),
+      child(6, 'model_request', { turn: 'u1' }), child(8, 'child_result', { turn: 'u1', usage: { input: 5, cache_read: 1200, output: 20 } }),
+      child(30, 'model_request', { turn: 'u2' }), child(33, 'turn_end', { turn: 'u2' }),
+      row('router', { session_id: 's1', agent_id: 'other', event: 'model_request', turn: 'x' }, time(9)), row('router', { session_id: 's2', agent_id: 'w1', event: 'model_request', turn: 'y' }, time(9))];
+    const w = worker([launch], mods, 40);
+    expect(w.step.progress).toEqual({ lastAt: time(33), lastTool: null, turns: 2, requests: 3, input: 2415, output: 70 });
+    // Requests with no recorded usage leave the tokens unknown, never zero.
+    expect(worker([launch], [child(2, 'model_request', { turn: 'u1' })], 3).step.progress).toMatchObject({ requests: 1, input: null, output: null });
+  });
+
+  it('rebuilds only the worker\'s own execution when its child records arrive', () => {
+    const other = { session_id: 's1', prompt_id: 'p0', mode: 'auto', written_at: time(0), phase: 'admission_intent', request_id: 'r0' };
+    const records = [other, launch], mods: ModRecord[] = [child(2, 'model_request', { turn: 'u1' })];
+    const first = worker(records, mods, 5);
+    mods.push(child(4, 'child_result', { turn: 'u1', usage: { input: 1, output: 2 } }));
+    const second = worker(records, mods, 5);
+    expect(second.step.progress).toMatchObject({ requests: 1, input: 1, output: 2 });
+    const unrelated = (v: typeof first.view) => v.runs.find(r => r.steps.some(x => x.title === 'Gate A · Jev 요청'))!;
+    expect(unrelated(second.view)).toBe(unrelated(first.view));
+    // A child row of an agent no worker launched rebuilds nothing.
+    mods.push(row('router', { session_id: 's1', agent_id: 'native', event: 'model_request', turn: 'n1' }, time(4)));
+    const third = worker(records, mods, 5);
+    expect(third.run).toBe(second.run);
+  });
 });
