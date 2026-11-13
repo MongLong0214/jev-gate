@@ -6,7 +6,7 @@ import { subagentTranscriptPath } from './verify.js';
 import type { BackgroundTaskBrief, HookInput } from './types.js';
 import { parseDispatchMarker } from './claude-dispatch.js';
 import { looksSecret } from './outbound-text.js';
-import { extractJson } from './plan.js';
+import { carriesWorkerReport } from './plan.js';
 
 export { dispatchMarker } from './claude-dispatch.js';
 
@@ -86,9 +86,11 @@ export const isStopNotice = (prompt: string, stop: { agent_id: string; tool_use_
   return envelope?.task === stop.agent_id && envelope.tool === stop.tool_use_id && envelope.status === 'killed';
 };
 
-/** #416: the host's own bounds for a background task summary; anything past them is not a task summary. */
+/** #416: the host's own bounds for a background task id and its kind and status words. */
 const TASK_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const TASK_WORD_RE = /^[A-Za-z0-9_ -]{1,40}$/;
+const taskWord = (value: unknown): string => typeof value === 'string' && TASK_WORD_RE.test(value) ? value : 'unknown';
+/** #416: how many of a worker's own tasks one pause records. */
 export const MAX_BACKGROUND_TASKS = 32;
 const DESCRIPTION_MAX = 120;
 
@@ -104,6 +106,10 @@ const briefDescription = (value: unknown): string | null => {
  * #416: Stop/SubagentStop `background_tasks` as recorded: id, kind, status and a one-line description. The host already
  * cuts a description to 1000 characters; this keeps 120 and drops `command`, which can carry anything a shell line can.
  * Null when the field is absent or is not the host's array, which is not the same as an empty one.
+ *
+ * Every entry with a task id is kept: the list is the whole session's, so whose task an entry is gets decided from all
+ * of it, and a kind or status this record does not keep becomes `unknown` without dropping the task. The bound on what
+ * is stored is applied by `backgroundWait`, after ownership.
  */
 export const backgroundTaskBriefs = (raw: unknown): BackgroundTaskBrief[] | null => {
   if (!Array.isArray(raw)) return null;
@@ -111,10 +117,8 @@ export const backgroundTaskBriefs = (raw: unknown): BackgroundTaskBrief[] | null
   for (const item of raw) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
     const task = item as Record<string, unknown>;
-    if (typeof task['id'] !== 'string' || !TASK_ID_RE.test(task['id']) || typeof task['type'] !== 'string' || !TASK_WORD_RE.test(task['type']) ||
-      typeof task['status'] !== 'string' || !TASK_WORD_RE.test(task['status'])) continue;
-    out.push({ id: task['id'], type: task['type'], status: task['status'], description: briefDescription(task['description']) });
-    if (out.length >= MAX_BACKGROUND_TASKS) break;
+    if (typeof task['id'] !== 'string' || !TASK_ID_RE.test(task['id'])) continue;
+    out.push({ id: task['id'], type: taskWord(task['type']), status: taskWord(task['status']), description: briefDescription(task['description']) });
   }
   return out;
 };
@@ -170,8 +174,8 @@ export const workerBackgroundLaunches = (input: HookInput): { shells: Set<string
 
 /**
  * #416: a worker that ends its turn while background work it launched is still running is paused, not finished: the
- * host parks it and wakes it when that work ends. A final message that carries a report object is the worker's
- * answer whatever it left running, so only a turn without one can be a pause.
+ * host parks it and wakes it when that work ends. A final message that carries the worker's report is its answer
+ * whatever it left running, so only a turn without one can be a pause; braces in a progress message are not a report.
  *
  * `background_tasks` lists the whole session's in-flight work without owners, so only the tasks this worker's own
  * transcript launched count; the worker's own entry and every other worker's or the root's tasks never do. A host that
@@ -179,11 +183,11 @@ export const workerBackgroundLaunches = (input: HookInput): { shells: Set<string
  * has no end the transcript always shows, so it never holds a worker on that evidence alone.
  */
 export const backgroundWait = (input: HookInput, finalText: string): { tasks: BackgroundTaskBrief[]; basis: 'host_tasks' | 'transcript' } | null => {
-  if (extractJson(finalText) !== null) return null;
+  if (carriesWorkerReport(finalText)) return null;
   const launches = workerBackgroundLaunches(input);
   if (!launches) return null;
   if (input.background_tasks) {
-    const tasks = input.background_tasks.filter(t => t.id !== input.agent_id && (launches.shells.has(t.id) || launches.monitors.has(t.id)));
+    const tasks = input.background_tasks.filter(t => t.id !== input.agent_id && (launches.shells.has(t.id) || launches.monitors.has(t.id))).slice(0, MAX_BACKGROUND_TASKS);
     return tasks.length ? { tasks, basis: 'host_tasks' } : null;
   }
   const pending = [...launches.shells].filter(id => !launches.ended.has(id)).slice(0, MAX_BACKGROUND_TASKS);

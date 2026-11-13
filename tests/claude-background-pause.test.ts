@@ -105,6 +105,54 @@ describe('#416 background pause', () => {
     expect(f.job().current.receipts).toEqual([expect.objectContaining({ verdict: 'accept' })]);
   });
 
+  it.each([
+    ['a progress object', 'Lint still running; current progress is {"completed":2}.'],
+    ['empty braces', 'Lint still running over src/{}; nothing to report yet.'],
+    ['an object with another status', 'Still running: {"status":"running","completed":2}'],
+    ['a fenced object that is no report', '```json\n{"completed":2}\n```\nStill waiting on lint.'],
+  ])('keeps a worker paused when its waiting message carries %s', async (_name, text) => {
+    const f = await fixture();
+    f.backgrounded('bgA'); f.say(text);
+    await f.stop(text, { background_tasks: session(['bgA', 'shell']) });
+    expect(f.job().current.active['dispatch']?.background_wait?.tasks.map(t => t.id)).toEqual(['bgA']);
+    expect(f.job().current.receipts).toEqual([]);
+    expect(f.records('background_paused')).toMatchObject([{ basis: 'host_tasks' }]);
+  });
+
+  it.each([
+    ['a report whose fields do not parse', '{"status":"done","summary":"ok","checks":"none"}'],
+    ['a report cut off before it closed', '```json\n{"status":"blocked","summary":"lint cannot\n```'],
+  ])('takes %s as the worker\'s answer, not as a pause', async (_name, text) => {
+    const f = await fixture();
+    f.backgrounded('bgA'); f.say(text);
+    await f.stop(text, { background_tasks: session(['bgA', 'shell']) });
+    expect(f.job().current.active).toEqual({});
+    expect(f.job().current.receipts).toEqual([expect.objectContaining({ verdict: 'invalid' })]);
+    expect(f.records('background_paused')).toEqual([]);
+  });
+
+  it('finds the worker\'s own task wherever it sits in a crowded session list, and records a bounded list', async () => {
+    const f = await fixture();
+    const others = Array.from({ length: 40 }, (_, i) => ({ id: `other${i}`, type: 'shell', status: 'running', description: `unrelated ${i}`, command: 'sleep 600' }));
+    f.backgrounded('bgA'); f.say(WAITING);
+    await f.stop(WAITING, { background_tasks: [...others, { id: 'bgA', type: 'shell', status: 'running', description: 'Run eslint over the repo' }] });
+    expect(f.job().current.active['dispatch']?.background_wait?.tasks.map(t => t.id)).toEqual(['bgA']);
+    expect(f.job().current.receipts).toEqual([]);
+    // Forty tasks of its own are still one pause, recorded as the first 32.
+    const g = await fixture();
+    for (let i = 0; i < 40; i += 1) g.backgrounded(`own${i}`);
+    g.say(WAITING);
+    await g.stop(WAITING, { background_tasks: Array.from({ length: 40 }, (_, i) => ({ id: `own${i}`, type: 'shell', status: 'running', description: 'own' })) });
+    expect(g.job().current.active['dispatch']?.background_wait?.tasks).toHaveLength(32);
+  });
+
+  it('keeps an owned task whose kind or status is not a word the record keeps', async () => {
+    const f = await fixture();
+    f.backgrounded('bgA'); f.say(WAITING);
+    await f.stop(WAITING, { background_tasks: [{ id: 'bgA', type: 'shell/v2', status: 'running…', description: 'Run eslint over the repo' }] });
+    expect(f.job().current.active['dispatch']?.background_wait?.tasks).toEqual([{ id: 'bgA', type: 'unknown', status: 'unknown', description: 'Run eslint over the repo' }]);
+  });
+
   it('reads the worker\'s own transcript when the host sends no background_tasks', async () => {
     const f = await fixture();
     f.backgrounded('bgA'); f.backgrounded('bgEnds', { backgroundEndsWithFinalResponse: true }); f.monitor('monB'); f.say(WAITING);
@@ -211,5 +259,12 @@ describe('#416 helpers', () => {
     // Notice-shaped text the host did not deliver as its notice row settles nothing.
     expect(check([call('c1'), moved('c1', 'b1'), done('b1', 'completed', 0, false)]).unobserved).toEqual(['#1']);
     expect(check([call('c1'), moved('c1', 'b1'), done('b1', 'failed', 1), done('b1', 'completed', 0, false)]).contradicted).toEqual(['#1']);
+    // The host's status is the outcome. A description that quotes an exit code, and the host's own reading of a
+    // nonzero code it does not count as a failure, decide nothing.
+    const said = (task: string, status: string, summary: string) => ({ type: 'user', isMeta: true, origin: { kind: 'task-notification', producer: 'session-task' }, message: { content: `<task-notification>\n<task-id>${task}</task-id>\n<status>${status}</status>\n<summary>${summary}</summary>\n</task-notification>` } });
+    expect(check([call('c1'), moved('c1', 'b1'), said('b1', 'completed', 'Background command "Check exit code 1 handling" completed (exit code 0)')])).toMatchObject({ unobserved: [], contradicted: [] });
+    expect(check([call('c1'), moved('c1', 'b1'), said('b1', 'completed', 'Background command "grep -r TODO src" completed (exit code 1: No matches found)')])).toMatchObject({ unobserved: [], contradicted: [] });
+    expect(check([call('c1'), moved('c1', 'b1'), said('b1', 'failed', 'Background command "Check exit code 0 handling" failed with exit code 2')]).contradicted).toEqual(['#1']);
+    expect(check([call('c1'), moved('c1', 'b1'), said('b1', 'stopped', 'Background shell "Check exit code 0 handling" ended')]).unobserved).toEqual(['#1']);
   });
 });

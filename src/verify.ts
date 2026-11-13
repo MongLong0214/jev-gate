@@ -313,8 +313,11 @@ const relativize = (command: string, cwd: unknown): string | undefined => {
 };
 
 /**
- * #416: a host completion notice delivered to the worker settles the background run it names: `completed` with exit
- * code 0 (or no code) passed, `failed` or a nonzero code failed, anything else (killed, an expired Monitor) unknown.
+ * #416: a host completion notice delivered to the worker settles the background run it names by the host's own
+ * `<status>`: `completed` passed, `failed` failed, anything else (killed, stopped) unknown. That is the same authority
+ * as `is_error` on a foreground result. The summary is not read: it quotes the task's description, which can say
+ * anything, and the host reports `completed (exit code 1: No matches found)` for a nonzero code it does not count as
+ * a failure, as it does in the foreground.
  */
 const settleBackgrounded = (runs: Map<string, ObservedRun>, content: unknown): void => {
   const text = typeof content === 'string' ? content : Array.isArray(content) ? content.filter((c) => isRecord(c) && c['type'] === 'text').map((c) => String((c as Record<string, unknown>)['text'] ?? '')).join('\n') : '';
@@ -323,8 +326,7 @@ const settleBackgrounded = (runs: Map<string, ObservedRun>, content: unknown): v
     const run = runs.get(/<task-id>([^<>]*)<\/task-id>/.exec(body)?.[1] ?? '');
     const status = /<status>([a-z_]+)<\/status>/.exec(body)?.[1];
     if (!run || !status) continue;
-    const code = /exit code (-?\d+)/.exec(/<summary>([\s\S]*?)<\/summary>/.exec(body)?.[1] ?? '')?.[1];
-    run.status = status === 'completed' && (code === undefined || code === '0') ? 'passed' : status === 'failed' || status === 'completed' && code !== undefined ? 'failed' : 'unknown';
+    run.status = status === 'completed' ? 'passed' : status === 'failed' ? 'failed' : 'unknown';
   }
 };
 
