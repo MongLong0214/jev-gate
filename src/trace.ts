@@ -43,6 +43,14 @@ export type TracePhase =
   | 'background_stalled'
   | 'background_policy_delivery'
   | 'background_conversation'
+  /** #416: a background worker ended a turn while its own background work ran; the reservation stays. */
+  | 'background_paused'
+  /** #417: a background worker's tool activity, at most one per 15 s, and its first call after a pause. */
+  | 'background_activity'
+  /** #416: a worker ran again after its execution got its verdict. */
+  | 'background_resumed_after_terminal'
+  /** #416: a native TaskStop of a worker whose execution already had its verdict. */
+  | 'background_cancel_after_terminal'
   | 'dispatch_denied'
   /** #356: a root turn was offered the observed-progress handoff. */
   | 'handoff'

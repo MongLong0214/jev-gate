@@ -1,11 +1,11 @@
 import type { EngineInterface, On, Register, SessionMessage } from 'claude-code';
 
-import type { CompactConfig } from './config.ts';
-import { resolveCompactConfig } from './config.ts';
-import { assemble, buildDigest } from './digest.ts';
-import { createRecorder, createRecordingState, type RecordingState } from './recording.ts';
-import { createCompactSelector } from './selection.ts';
-import { installedKeyPath, parseInstalledKey } from '../../router/hooks/key.ts';
+import type { CompactConfig } from './config.js';
+import { resolveCompactConfig } from './config.js';
+import { assemble, buildDigest } from './digest.js';
+import { createRecorder, createRecordingState, type RecordingState } from './recording.js';
+import { createCompactSelector } from './selection.js';
+import { installedKeyPath, parseInstalledKey } from '../../router/hooks/key.js';
 
 let sequence = 0;
 

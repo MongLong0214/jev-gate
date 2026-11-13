@@ -36,6 +36,10 @@ const textOnly = (content: unknown): string | null => {
  */
 export const isHostNoticeRow = (row: unknown): boolean =>
   isRecord(row) && row['type'] === 'user' && row['promptSource'] === 'system' && isRecord(row['origin']) && row['origin']['kind'] === 'task-notification';
+/** #416: the same notice in a subagent's own transcript, as 2.1.318 writes it there: a meta row with no prompt source.
+ * Only the host sets these fields; text a person or a task wrote can look like a notice but never like this row. */
+export const isWorkerNoticeRow = (row: unknown): boolean =>
+  isRecord(row) && row['type'] === 'user' && (isHostNoticeRow(row) || row['isMeta'] === true && isRecord(row['origin']) && row['origin']['kind'] === 'task-notification');
 
 /**
  * #281: the one test for "a person typed this transcript row", shared by Gate A's notice detection and Compact's

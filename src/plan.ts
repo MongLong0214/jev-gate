@@ -211,6 +211,22 @@ export const parseWorkerReply = (text: string): ParseResult<WorkerReply> => {
   };
 };
 
+/**
+ * #416: whether a final message carries the worker's report, as opposed to braces that happen to sit in its prose: the
+ * span `parseWorkerReply` reads, holding the contract's `status` of done or blocked. A span that does not parse counts
+ * when it names that status, so a report the worker got wrong is still judged as its answer.
+ */
+export const carriesWorkerReport = (text: string): boolean => {
+  const json = extractJson(text);
+  if (json === null) return false;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return isRecord(parsed) && (parsed['status'] === 'done' || parsed['status'] === 'blocked');
+  } catch {
+    return /"status"\s*:\s*"(?:done|blocked)"/.test(json);
+  }
+};
+
 /** A17/#33 item 4: the shape of Gate B's `prior_attempt` field. Nothing fills it since the planner was removed (#289). */
 export interface PriorAttemptSummary {
   attempt: number;

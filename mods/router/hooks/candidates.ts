@@ -1,1 +1,1 @@
-export * from '../../../src/claude-candidates.ts';
+export * from '../../../src/claude-candidates.js';

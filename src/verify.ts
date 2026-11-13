@@ -2,6 +2,7 @@ import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type { CheckVerification } from './types.js';
+import { isWorkerNoticeRow } from './recent-prompts.js';
 
 /**
  * Owner review of real use, 2026-09-28: a worker grades its own work. `deterministicVerdict` checks that every required
@@ -311,6 +312,24 @@ const relativize = (command: string, cwd: unknown): string | undefined => {
   return out === command ? undefined : out;
 };
 
+/**
+ * #416: a host completion notice delivered to the worker settles the background run it names by the host's own
+ * `<status>`: `completed` passed, `failed` failed, anything else (killed, stopped) unknown. That is the same authority
+ * as `is_error` on a foreground result. The summary is not read: it quotes the task's description, which can say
+ * anything, and the host reports `completed (exit code 1: No matches found)` for a nonzero code it does not count as
+ * a failure, as it does in the foreground.
+ */
+const settleBackgrounded = (runs: Map<string, ObservedRun>, content: unknown): void => {
+  const text = typeof content === 'string' ? content : Array.isArray(content) ? content.filter((c) => isRecord(c) && c['type'] === 'text').map((c) => String((c as Record<string, unknown>)['text'] ?? '')).join('\n') : '';
+  for (const notice of text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)) {
+    const body = notice[1]!;
+    const run = runs.get(/<task-id>([^<>]*)<\/task-id>/.exec(body)?.[1] ?? '');
+    const status = /<status>([a-z_]+)<\/status>/.exec(body)?.[1];
+    if (!run || !status) continue;
+    run.status = status === 'completed' ? 'passed' : status === 'failed' ? 'failed' : 'unknown';
+  }
+};
+
 /** Reads the transcript's last VERIFY_MAX_BYTES; null when there is no file to read. Never throws. */
 export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES): WorkerObservation | null => {
   let fd: number | null = null;
@@ -332,11 +351,14 @@ export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES)
   const pending = new Map<string, ObservedRun>();
   const writes = new Map<string, { start: number; end: number | null }>();
   const runs: ObservedRun[] = [];
+  /** #416: runs the host moved to the background, by task id. Only their completion notice says how they ended. */
+  const backgrounded = new Map<string, ObservedRun>();
   let seq = 0;
   const lines = text.split('\n');
   // A cut tail starts mid-line; that first fragment is not a record.
   for (const line of truncated ? lines.slice(1) : lines) {
-    if (!line.includes('"tool_use"') && !line.includes('"tool_result"')) continue;
+    const notice = line.includes('<task-notification>');
+    if (!line.includes('"tool_use"') && !line.includes('"tool_result"') && !notice) continue;
     let rec: unknown;
     try {
       rec = JSON.parse(line);
@@ -344,6 +366,8 @@ export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES)
       continue;
     }
     const content = isRecord(rec) && isRecord(rec['message']) ? rec['message']['content'] : null;
+    // Only the host's own notice row settles a run; notice-shaped text anywhere else is not its outcome.
+    if (notice && isWorkerNoticeRow(rec)) settleBackgrounded(backgrounded, content);
     if (!Array.isArray(content)) continue;
     const cwd = isRecord(rec) ? rec['cwd'] : undefined;
     for (const block of content) {
@@ -363,7 +387,13 @@ export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES)
         if (!run) continue;
         pending.delete(block['tool_use_id']);
         const mark = block['is_error'];
-        runs.push({ ...run, status: mark === true ? 'failed' : mark === false ? 'passed' : 'unknown' });
+        // #416: a command the host moved to the background returns `is_error: false` with no exit status. It is
+        // unknown until its completion notice, never a pass.
+        const result = isRecord(rec) ? rec['toolUseResult'] : null;
+        const task = isRecord(result) && typeof result['backgroundTaskId'] === 'string' ? result['backgroundTaskId'] : null;
+        const observed: ObservedRun = { ...run, status: task !== null ? 'unknown' : mark === true ? 'failed' : mark === false ? 'passed' : 'unknown' };
+        if (task !== null) backgrounded.set(task, observed);
+        runs.push(observed);
       }
     }
   }

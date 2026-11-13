@@ -380,6 +380,12 @@ const lineFor = (r: Rec, posts: Map<string, Rec>): string | null => {
       return `background stalled: no active worker; policy delivered, Gate A resumes after this turn (${str(r['reason']) ?? 'unknown'})`;
     case 'background_policy_delivery':
       return `background policy delivered: no active worker; next human prompt resumes Gate A (${str(r['reason']) ?? 'unknown'})`;
+    case 'background_paused':
+      return `background paused: the worker ended a turn while ${Array.isArray(r['tasks']) ? r['tasks'].length : 'unknown'} of its own background tasks ran; reservation kept, no verdict yet`;
+    case 'background_resumed_after_terminal':
+      return `background resumed after its ${str(r['terminal_status']) ?? 'recorded'} verdict: the worker ran again without reservation or verdict${str(r['tool_name']) ? ` (${str(r['tool_name'])})` : ''}`;
+    case 'background_cancel_after_terminal':
+      return `background stopped after its ${str(r['terminal_status']) ?? 'recorded'} verdict: the verdict stands; the stop is recorded`;
     default:
       // Intent records pair with a result that is rendered instead, so they are not lines of their own.
       return null;

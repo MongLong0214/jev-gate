@@ -1,1 +1,1 @@
-export * from '../../../src/router-context.ts';
+export * from '../../../src/router-context.js';

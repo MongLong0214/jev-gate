@@ -1,7 +1,7 @@
-import { inspectChoice, type ChoiceFailure } from '../../../src/router-answers.ts';
-import { createClient, type Transport, type JevClient, estimateTokens, MAX_REQUEST_BYTES, MAX_REQUEST_TOKENS, JEV_MODEL } from '../../router/hooks/client.ts';
-import { looksSecret } from '../../router/hooks/secret.ts';
-import { DIGEST_MARK, type DigestMessage, type DigestResult } from './digest.ts';
+import { inspectChoice, type ChoiceFailure } from '../../../src/router-answers.js';
+import { createClient, type Transport, type JevClient, estimateTokens, MAX_REQUEST_BYTES, MAX_REQUEST_TOKENS, JEV_MODEL } from '../../router/hooks/client.js';
+import { looksSecret } from '../../router/hooks/secret.js';
+import { DIGEST_MARK, type DigestMessage, type DigestResult } from './digest.js';
 
 const labels = ['required', 'related', 'unrelated', 'unclear'] as const;
 export interface CompactCandidate { id: string; message: number; tool: number; input: string; result: string; excerpt: boolean }

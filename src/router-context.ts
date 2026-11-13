@@ -1,4 +1,4 @@
-import { looksSecret } from './router-secret.ts';
+import { looksSecret } from './router-secret.js';
 export interface RoutingCache {
   model: string; input: number | null; read: number | null; write: number | null; ageMs: number;
   source?: 'provider_response_usage' | 'host_usage';

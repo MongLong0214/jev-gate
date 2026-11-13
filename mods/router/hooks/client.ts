@@ -1,4 +1,4 @@
-import { looksSecret } from './secret.ts';
+import { looksSecret } from './secret.js';
 
 /**
  * The one TypeSafe call (#40), runtime-neutral: everything that touches the network or the clock comes in through a

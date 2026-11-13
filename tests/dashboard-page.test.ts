@@ -561,6 +561,15 @@ it('counts an active step live from its recorded start', async () => {
   expect(Number.parseFloat(du())).toBeGreaterThanOrEqual(6);
 });
 
+it('opens a background worker\'s progress and the tasks it waits on (#417)', () => {
+  const started = new Date(Date.now() - 5000).toISOString(), p = page();
+  const progress = { lastAt: started, lastTool: 'Bash', turns: 2, requests: 5, input: 24_150, output: 700, tasks: [{ type: 'shell', status: 'running', description: 'Run eslint over the repo' }] };
+  p.push(snapshot([run('r', 'claude', [step('w', 'workers', 'host', { state: 'active', at: started, startedAt: started, title: '백그라운드 워커 실행', summary: '백그라운드 대기 · 띄운 작업 1개', progress })], { state: 'active', firstAt: started })])); go(p, 'r');
+  for (const want of ['마지막 도구', 'Bash', 'child 턴', '모델 요청', '24.1K → 700', '백그라운드 작업', 'shell · running · Run eslint over the repo']) expect(opened(p)).toContain(want);
+  p.click('#language');
+  for (const want of ['Last tool', 'Child turns', 'Model requests', 'Background tasks', 'Waiting on background work · launched tasks 1']) expect(opened(p)).toContain(want);
+});
+
 it('grows the bar of a running stage on the same tick as its duration', async () => {
   const now = Date.now(), started = new Date(now - 2000).toISOString(), p = page();
   p.push(snapshot([run('r', 'claude', [step('d', 'router', 'host', { at: new Date(now - 10_000).toISOString(), durationMs: 1000 }), step('m', 'router', 'host', { state: 'active', at: started, startedAt: started })], { state: 'active' })])); go(p, 'r');

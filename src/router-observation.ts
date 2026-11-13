@@ -1,5 +1,5 @@
-import { sameModel } from './claude-models.ts';
-import { normalizeUsage, type TokenUsage } from './cost.ts';
+import { sameModel } from './claude-models.js';
+import { normalizeUsage, type TokenUsage } from './cost.js';
 
 export const ROUTER_OBSERVATION_WAIT_MS = 1500;
 // Leave startup/serialization room beyond the bounded transcript flush wait.

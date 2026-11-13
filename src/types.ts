@@ -148,6 +148,12 @@ export interface HookInput {
   error?: string;
   is_interrupt?: boolean;
   duration_ms?: number;
+  /**
+   * #416: Stop/SubagentStop. In-flight background work (running or pending, backgrounded) of the whole session, built by
+   * the host from its one task registry: at a worker's SubagentStop it also lists the worker itself, other workers and
+   * the root's own tasks. No entry names its owner. Older hosts omit it; parsed through `backgroundTaskBriefs`.
+   */
+  background_tasks?: BackgroundTaskBrief[];
   /** Set only by the Codex adapter's owned dispatch failure. */
   codex_failure?: CodexFailure;
 }
@@ -217,7 +223,20 @@ export interface Reservation {
   /** A launch receipt is not a terminal result. Native identity remains reserved until observed completion. */
   allocation_pair?: { model: string; effort_edit: { kind: 'keep' } | { kind: 'set'; value: string } | { kind: 'omit' } };
   background_execution?: { token: string; agent_id: string | null; subagent_type: string; resolved_model: string | null };
+  /**
+   * #416: the worker ended a turn while background work it launched was still running. The host parks it and wakes it
+   * when that work ends, so this is a pause, not a terminal result: the reservation stays.
+   */
+  background_wait?: { at: string; tasks: BackgroundTaskBrief[] };
+  /** #417: when the last worker activity record was written for this execution; activity is recorded at most every BACKGROUND_ACTIVITY_MS. */
+  background_seen?: string;
 }
+
+/** #416/#417: one background task as recorded: never a command line, only the host's kind and status and a short description. */
+export interface BackgroundTaskBrief { id: string; type: string; status: string; description: string | null }
+
+/** #416: an execution that already got its terminal verdict. Later activity or a TaskStop for it is recorded, never ignored. */
+export interface BackgroundSettled { agent_id: string; tool_use_id: string; task_id: string | null; status: 'completed' | 'failed' | 'cancelled'; at: string; resumed?: true; stopped?: true }
 
 /** What a worker's own transcript showed about the checks it reported as passing (src/verify.ts). */
 export interface CheckVerification {
@@ -301,6 +320,8 @@ export interface JobGeneration {
   background_context?: string;
   /** #281: executions a native TaskStop ended, each awaiting the host's one killed notice (taken once, `notices_taken`). */
   background_stopped?: Array<{ agent_id: string; tool_use_id: string }>;
+  /** #416: executions of this generation that already got their terminal verdict (newest last, bounded). */
+  background_settled?: BackgroundSettled[];
   /** #281: notices taken as the host's before their row was written (noticeClaim). A later copy is a person's. */
   notices_taken?: string[];
   /** #356: this turn was offered the observed-progress handoff; it is offered once. */

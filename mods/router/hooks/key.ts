@@ -1,4 +1,4 @@
-import { validKey } from './config.ts';
+import { validKey } from './config.js';
 
 /** Pure data helpers: the Function Hooks host forbids passing $ across an imported function. */
 export const installedKeyPath = (home: string | undefined, config: string | undefined): string | undefined => {

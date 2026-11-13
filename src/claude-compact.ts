@@ -3,10 +3,10 @@ import { readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DIGEST_MARK, type DigestMessage, type DigestResult, type DigestToolUse } from '../mods/compact/hooks/digest.ts';
-import { COMPACT_OPTION_NAMES, resolveCompactConfig, type CompactConfig } from '../mods/compact/hooks/config.ts';
-import { createCompactSelector } from '../mods/compact/hooks/selection.ts';
-import type { Transport } from '../mods/router/hooks/client.ts';
+import { DIGEST_MARK, type DigestMessage, type DigestResult, type DigestToolUse } from '../mods/compact/hooks/digest.js';
+import { COMPACT_OPTION_NAMES, resolveCompactConfig, type CompactConfig } from '../mods/compact/hooks/config.js';
+import { createCompactSelector } from '../mods/compact/hooks/selection.js';
+import type { Transport } from '../mods/router/hooks/client.js';
 import { claudeTraceDir } from './claude-setup.js';
 import type { Env } from './config.js';
 import { readPrivateJson, resolveApiKey, writePrivateJson } from './credentials.js';

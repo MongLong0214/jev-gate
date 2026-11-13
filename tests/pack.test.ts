@@ -207,7 +207,7 @@ describe.skipIf(!hasZip)('npm run pack (#18)', () => {
     expect(spawnSync('unzip', ['-q', join(outDir, `jev-gate-router-${manifest.version}.zip`), '-d', dest], { encoding: 'utf8' }).status).toBe(0);
     expectReadmeLinksInside(dest);
     expect(readFileSync(join(dest, 'README.md'), 'utf8')).toMatch(/^## Enable$/m);
-    expect(readFileSync(join(dest, 'hooks/router.ts'), 'utf8')).toContain("from '../src/claude-dispatch.ts'");
+    expect(readFileSync(join(dest, 'hooks/router.ts'), 'utf8')).toContain("from '../src/claude-dispatch.js'");
     expect(readFileSync(join(dest, 'hooks/version.ts'), 'utf8')).toContain(JSON.stringify(manifest.version));
     expect(readFileSync(join(dest, 'src/claude-dispatch.ts'), 'utf8')).toBe(readFileSync(join(root, 'src/claude-dispatch.ts'), 'utf8'));
   });

@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import type { Env } from './config.js';
-import type { ExecutionShape, JobGeneration, JobState, OwnedRole, Reservation, StateCode, Tier } from './types.js';
+import type { BackgroundSettled, BackgroundTaskBrief, ExecutionShape, JobGeneration, JobState, OwnedRole, Reservation, StateCode, Tier } from './types.js';
 import { workerReceipt } from './plan.js';
 import { renderWorkerDelivery } from './coordinator.js';
 import { workerTraceData } from './worker-record.js';
@@ -12,20 +12,40 @@ import { workerTraceData } from './worker-record.js';
 // Retired state layouts can carry whole reports outside receipts. Keep only the supported generation/reservation fields.
 const GENERATION_FIELDS = new Set(['prompt_id', 'generation_id', 'request', 'created_at', 'shape', 'attempts', 'outcome', 'forced',
   'execution', 'root_fallback', 'root_fallback_reason', 'admission_revision', 'background_job', 'interactive_prompt_id',
-  'background_idle_since', 'background_delivery', 'background_stopped', 'notices_taken', 'handoff_offered']);
+  'background_idle_since', 'background_delivery', 'background_stopped', 'background_settled', 'notices_taken', 'handoff_offered']);
 const RESERVATION_FIELDS = new Set(['role', 'task_id', 'contract_hash', 'rev', 'tier', 'attempt', 'deliverables', 'started_at',
-  'orphaned', 'codex_execution', 'allocation_pair', 'background_execution']);
+  'orphaned', 'codex_execution', 'allocation_pair', 'background_execution', 'background_wait', 'background_seen']);
+/** #416: the settled executions a generation keeps, newest last. Only a later resume or stop of one of them is looked up. */
+export const MAX_BACKGROUND_SETTLED = 32;
+const SETTLED_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const isTime = (v: unknown): v is string => typeof v === 'string' && Number.isFinite(Date.parse(v));
+const isBrief = (v: unknown): v is BackgroundTaskBrief => isRecord(v) && typeof v['id'] === 'string' && typeof v['type'] === 'string' &&
+  typeof v['status'] === 'string' && (v['description'] === null || typeof v['description'] === 'string');
+/** #416/#417: the pause and activity fields of a reservation, kept only in the shape this version writes. */
+const projectProgress = (r: Reservation): Reservation => {
+  const { background_wait: wait, background_seen: seen, ...rest } = r;
+  return { ...rest,
+    ...(isRecord(wait) && isTime(wait['at']) && Array.isArray(wait['tasks']) && wait['tasks'].every(isBrief) ? { background_wait: { at: wait['at'], tasks: wait['tasks'] } } : {}),
+    ...(isTime(seen) ? { background_seen: seen } : {}) };
+};
+const projectSettled = (list: unknown): BackgroundSettled[] => !Array.isArray(list) ? [] : list.filter((s): s is BackgroundSettled =>
+  isRecord(s) && typeof s['agent_id'] === 'string' && typeof s['tool_use_id'] === 'string' && (s['task_id'] === null || typeof s['task_id'] === 'string') &&
+  SETTLED_STATUSES.has(String(s['status'])) && isTime(s['at'])).slice(-MAX_BACKGROUND_SETTLED);
+/** #416: record that an execution got its terminal verdict, so its later resume or stop is not lost. */
+export const settleBackground = (gen: JobGeneration, entry: BackgroundSettled): JobGeneration =>
+  ({ ...gen, background_settled: [...(gen.background_settled ?? []).filter(s => s.agent_id !== entry.agent_id), entry].slice(-MAX_BACKGROUND_SETTLED) });
 
 /** Stored free-form context from older versions is never trusted as coordinator input. Rebuild from receipts. */
 const projectGeneration = (gen: JobGeneration): JobGeneration => {
   const { background_context: _legacy } = gen;
   const rest = Object.fromEntries(Object.entries(gen).filter(([key]) => GENERATION_FIELDS.has(key))) as unknown as JobGeneration;
+  if (rest.background_settled !== undefined) { const settled = projectSettled(rest.background_settled); if (settled.length) rest.background_settled = settled; else delete rest.background_settled; }
   const receipts = (gen.receipts ?? []).map(workerReceipt), receipt = receipts.at(-1);
   const background_context = receipt ? renderWorkerDelivery(receipt, { single: gen.execution === 'single', rootFallback: !!gen.root_fallback,
     ...(gen.root_fallback_reason === 'accepted' || gen.root_fallback_reason === 'attempt_cap' ? { rootFallbackReason: gen.root_fallback_reason } : {}) })
     : gen.root_fallback_reason === 'delivery_failed' ? 'No eligible automatic child model. Continue in the main session; no child started.' : '';
   const active = Object.fromEntries(Object.entries(gen.active).map(([id, raw]) => {
-    const reservation = Object.fromEntries(Object.entries(raw).filter(([key]) => RESERVATION_FIELDS.has(key))) as unknown as Reservation;
+    const reservation = projectProgress(Object.fromEntries(Object.entries(raw).filter(([key]) => RESERVATION_FIELDS.has(key))) as unknown as Reservation);
     return [id, reservation.background_execution ? { ...reservation,
       background_execution: workerTraceData('background_launch', reservation.background_execution) as unknown as NonNullable<typeof reservation.background_execution>,
     } : reservation];

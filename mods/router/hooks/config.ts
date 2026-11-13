@@ -1,6 +1,6 @@
-import { aliasFamily, factsOf } from './models.ts';
-import type { ModelTier } from './policy.ts';
-import { TIER_ORDER } from './policy.ts';
+import { aliasFamily, factsOf } from './models.js';
+import type { ModelTier } from './policy.js';
+import { TIER_ORDER } from './policy.js';
 
 /**
  * The option contract (#40), read from the manifest's userConfig as `register(on, options)` receives it. A wrong

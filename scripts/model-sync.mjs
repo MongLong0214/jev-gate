@@ -71,7 +71,7 @@ export function parseClaude(overview, effort) {
       unconditionalEffort = [...EFFORTS]; conditionalEffort = [];
     } else {
       requireFact(thinking[i] === 'Adaptive' && /(?:between_tools|disabled)/.test(section) &&
-        /At `xhigh` or `max`,[\s\S]*?400 error/.test(section) &&
+        /At `xhigh` or `max`,?[\s\S]*?400 error/.test(section) &&
         /(?:`low`, `medium`, and `high`|`high` effort or below)/.test(section), `Unknown thinking/effort restrictions: ${id}`);
       unconditionalEffort = EFFORTS.slice(0, 3); conditionalEffort = EFFORTS.slice(3);
     }

@@ -64,6 +64,12 @@ describe('official model freshness CI', () => {
     expect(apiDefault).not.toEqual(linked);
     expect(parseClaude(overview, apiDefault)).toEqual(parseClaude(overview, effort));
     expect(() => parseClaude(overview, apiDefault.replace('The API default is `high`', 'The API default is `low`'))).toThrow(/default disagreement/);
+    // Sonnet 5.5's section (2026-11) states the same restriction without the comma and names the accepted levels.
+    const reworded = effort.replaceAll('The disabled mode accepts `high` effort or below. At `xhigh` or `max`, it returns a 400 error.',
+      'To have the model respond without thinking first, send `thinking: {"type": "between_tools"}`, not `"disabled"`. It works at `low`, `medium`, and `high` effort. At `xhigh` or `max` it returns a 400 error, so use adaptive thinking, the default, at those levels.');
+    expect(reworded).not.toEqual(effort);
+    expect(parseClaude(overview, reworded)).toEqual(parseClaude(overview, effort));
+    expect(() => parseClaude(overview, reworded.replaceAll('400 error', 'valid request'))).toThrow(/restrictions/);
     expect(() => parseClaude(overview, linked.replace('[Claude Fable 5.2]', '[Claude Mythos 5.2]'))).toThrow(/effort section/);
     expect(() => parseClaude(overview, linked.replace('all five effort', 'all four effort'))).toThrow(/effort support/);
     expect(() => parseClaude(overview, linked + '\n' + effort)).toThrow(/ambiguous effort section/);

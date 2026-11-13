@@ -6,7 +6,8 @@ import type { OperationRun, OperationStep, OperationsView } from './operations.j
  * whole history. Keys advance only when content changes, so an unchanged rebuild sends nothing. */
 interface RunMemo { run: FrameRun; meta: string; steps: Map<string, string> | null }
 type Fields = Map<string, { value: unknown; json: string | undefined }>;
-/** Step fields only an opened stage detail or a decision basis shows. Frames leave them out, about half of a long history's
+/** Step fields only an opened stage detail or a decision basis shows. A worker's `progress` stays in frames: it changes while
+ * the stage is open, and the page refetches an opened stage only when its frame step changes (#417). Frames leave them out, about half of a long history's
  * bytes; the page fetches them for the one opened stage and the shown calls from `/api/step`. A step without `details` is such a frame step.
  * `callId` pairs records on the server and was a fifth of a frame. */
 type DetailField = 'details' | 'routing' | 'sessionId' | 'agentId' | 'judgements' | 'callId';
