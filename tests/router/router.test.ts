@@ -1811,6 +1811,7 @@ describe('root effort and the prompt cache', () => {
     const f = fakeEngine({ hostBase: '2.1.293', respond: answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: ['fast', .99], effort: ['low', .99] }) });
     f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
     f.engine.currentEffort = async () => undefined;
+    f.engine.cacheCapability = async () => ({ host: '2.1.293', connection: 'api-key', excluded: false, hipaa: false });
     await warmRoot(router, f, 'claude-sonnet-5-5', 'high');
     const turn = async (turnId: string, steps: number) => {
       router.turnStart({ turnId, text: 'Find the exact helper file.' });
@@ -1827,6 +1828,54 @@ describe('root effort and the prompt cache', () => {
     expect(f.logs.find(l => l.event === 'root' && l.turn === 'after')).toMatchObject({ reasons: { model: 'baseline_reach' }, proposed_patch: expect.objectContaining({ model: 'claude-haiku-5-5' }), cost: null });
     expect(await turn('again', 1)).toBe('h');
     expect(f.logs.find(l => l.event === 'root' && l.turn === 'again')).toMatchObject({ cost: { horizon: 5, evidence: { target: { requests_since: 2 } } } });
+  });
+  // The host sends a turn's effort from its first request to its last (per-turn effort, host 2.1.323): four turns of
+  // 2026-11-11 to 11-13 returned to Opus or Fable by baseline_reach and ran 19 requests on the switch's effort while
+  // the record named the baseline's.
+  describe('a switched turn that returns to its baseline', () => {
+    const CAPABLE = { host: '2.1.293', connection: 'api-key', excluded: false, hipaa: false } as const;
+    const setup = async (capable: boolean) => {
+      const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
+      const f = fakeEngine({ hostBase: '2.1.293', respond: answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: ['fast', .99], effort: ['low', .99] }) });
+      f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+      f.engine.currentEffort = async () => undefined;
+      if (capable) f.engine.cacheCapability = async () => CAPABLE;
+      await warmRoot(router, f, 'claude-sonnet-5-5', 'high');
+      router.turnStart({ turnId: 'long', text: 'Find the exact helper file.' });
+      const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 900, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 1000 });
+      for (let index = 0; index < 7; index++) await drain(router.turnStep(f.engine, { turnId: 'long', index, model: 'claude-sonnet-5-5', effort: 'high' }, n.next));
+      return { f, sent: n.calls.map(c => `${c.model === 'claude-haiku-5-5' ? 'h' : 's'}:${c.effort}`) };
+    };
+    it('goes on with the effort the turn started on, and records it', async () => {
+      const { f, sent } = await setup(true);
+      expect(sent).toEqual([...Array(5).fill('h:low'), 's:low', 's:low']);
+      expect(f.logs.filter(l => l.event === 'root_result' && l.turn === 'long').slice(5)).toEqual([5, 6].map(index => expect.objectContaining({
+        index, requested: 'claude-sonnet-5-5', requested_effort: 'low', applied: { effort: 'low', effortEdit: { kind: 'set', value: 'low' } } })));
+    });
+    it('leaves the turn native when the switch ends before its first request', async () => {
+      const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
+      const f = fakeEngine({ hostBase: '2.1.293', respond: answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: ['fast', .99], effort: ['low', .99] }) });
+      f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+      f.engine.currentEffort = async () => undefined;
+      f.engine.cacheCapability = async () => CAPABLE;
+      await warmRoot(router, f, 'claude-sonnet-5-5', 'high');
+      router.turnStart({ turnId: 'early', text: 'Find the exact helper file.' });
+      const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 900, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 1000 });
+      // The allowlist loses Haiku between the decision and the first request.
+      const all = f.engine.availableModels;
+      f.engine.availableModels = async () => f.logs.some(l => l.event === 'root' && l.turn === 'early') ? ['claude-sonnet-5-5'] : await all();
+      for (let index = 0; index < 2; index++) await drain(router.turnStep(f.engine, { turnId: 'early', index, model: 'claude-sonnet-5-5', effort: 'high' }, n.next));
+      expect(f.logs.find(l => l.event === 'root' && l.turn === 'early')).toMatchObject({ patch: { model: 'claude-haiku-5-5', effort: 'low' } });
+      expect(f.logs).toContainEqual({ event: 'root_stop', turn: 'early', index: 0, reason: 'model_not_allowed' });
+      expect(n.calls.map(c => `${c.model}:${c.effort}`)).toEqual(['claude-sonnet-5-5:high', 'claude-sonnet-5-5:high']);
+    });
+    it('holds a switch whose effort is below the one the baseline itself would run', async () => {
+      // No capability: the baseline's effort stays on its warm cache's, so a return on low would run it below that.
+      const { f, sent } = await setup(false);
+      expect(sent).toEqual(Array(7).fill('s:high'));
+      expect(f.logs.find(l => l.event === 'root' && l.turn === 'long')).toMatchObject({ cost_reason: 'return_effort', reasons: { model: 'return_effort' },
+        proposed_patch: expect.objectContaining({ model: 'claude-haiku-5-5', effort: 'low' }), patch: {}, held_for_cache: 'low' });
+    });
   });
   it('keeps the original model pair when an observed priced switch has a strictly positive cost floor', async () => {
     let tier = 'standard'; const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
@@ -1864,6 +1913,7 @@ describe('root effort and the prompt cache', () => {
       const f = fakeEngine({ hostBase: '2.1.293', respond: req => answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: [tier, .99], effort: [effort, .99] })(req) });
       f.engine.currentContextBound = async (turnId: string, index: number) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
       f.engine.currentEffort = async () => undefined;
+      f.engine.cacheCapability = async () => ({ host: '2.1.293', connection: 'api-key', excluded: false, hipaa: false });
       await warmRoot(router, f, 'claude-opus-5-5', 'high');
       const counts = { input_tokens: 900, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 1000 };
       router.turnStart({ turnId: 't0', text: 'Find the exact helper file.' });
@@ -3061,6 +3111,7 @@ describe('root baseline across a resume', () => {
     expect(store.get('session')).toMatchObject({ cache: { messages: 5, seen: [expect.objectContaining({ model: 'claude-opus-5-5', read: 20_000 })] } });
     first.router.sessionEnd();
     const resumed = processOf(store, answering({ ...CLEAR, tier: ['fast', 0.99], effort: ['low', 0.99] }));
+    resumed.f.engine.cacheCapability = async () => ({ host: '2.1.293', connection: 'api-key', excluded: false, hipaa: false });
     expect((await turn(resumed, 't2', 'claude-opus-5-5', 'xhigh', messageCount))[0]?.[0]).toBe(model);
     expect(resumed.f.logs.find(l => l.event === 'root')).toMatchObject({ cost_reason: reason, proposed_patch: expect.objectContaining({ model: 'claude-haiku-5-5' }) });
     expect(resumed.f.logs.some(l => l.event === 'cache_restored')).toBe(reason === 'cost_allows');

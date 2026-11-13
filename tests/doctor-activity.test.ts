@@ -217,6 +217,17 @@ describe('activity: router_applied', () => {
   it('is ok when the requested family answered', () => expect(level([router('child_result', { agent_id: 'a1', requested: 'claude-haiku-5-5', observed: 'claude-haiku-5-5' })], 'router_applied')).toBe('ok'));
 });
 
+describe('activity: router_effort_applied', () => {
+  const sent = (requested_effort: unknown, observed_effort: unknown, effort_evidence = 'transcript_api_request') => router('root_result', { requested: 'claude-opus-5-5', observed: 'claude-opus-5-5', requested_effort, observed_effort, effort_evidence });
+  it('warns when a request went out on another effort than its record names', () => {
+    expect(check(run([sent('xhigh', 'low'), sent('xhigh', 'low'), sent('low', 'low')]), 'router_effort_applied')).toMatchObject({ level: 'warn', message: expect.stringContaining('3 requests with an observed effort, 2 sent on another effort than recorded (xhigh->low 2)') });
+  });
+  it('is ok when every observed effort is the recorded one', () => expect(level([sent('low', 'low')], 'router_effort_applied')).toBe('ok'));
+  it('counts only an effort read from the sent request', () => {
+    expect(check(run([sent('xhigh', 'unknown', 'unobserved'), sent(null, 'low'), sent(3, 'low')]), 'router_effort_applied')).toMatchObject({ level: 'info', message: expect.stringContaining('0 requests with an observed effort') });
+  });
+});
+
 describe('activity: router_released', () => {
   const turn = (...after: Rec[]): Rec[] => [
     router('root', { scope: 'root', turn: 't1', patch: { model: 'claude-haiku-5-5' } }, 10),
