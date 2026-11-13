@@ -2,6 +2,7 @@ import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type { CheckVerification } from './types.js';
+import { isWorkerNoticeRow } from './recent-prompts.js';
 
 /**
  * Owner review of real use, 2026-09-28: a worker grades its own work. `deterministicVerdict` checks that every required
@@ -363,7 +364,8 @@ export const readWorkerObservation = (path: string, maxBytes = VERIFY_MAX_BYTES)
       continue;
     }
     const content = isRecord(rec) && isRecord(rec['message']) ? rec['message']['content'] : null;
-    if (notice && isRecord(rec) && rec['type'] === 'user') settleBackgrounded(backgrounded, content);
+    // Only the host's own notice row settles a run; notice-shaped text anywhere else is not its outcome.
+    if (notice && isWorkerNoticeRow(rec)) settleBackgrounded(backgrounded, content);
     if (!Array.isArray(content)) continue;
     const cwd = isRecord(rec) ? rec['cwd'] : undefined;
     for (const block of content) {

@@ -988,20 +988,24 @@ describe('#417 background worker progress', () => {
 
   it('counts the child\'s turns, model requests and tokens from its own Router rows only', () => {
     const mods = [child(2, 'model_request', { turn: 'u1' }), child(4, 'child_result', { turn: 'u1', usage: { input: 10, cache_read: 1000, cache_creation: 200, output: 50 } }),
-      child(6, 'model_request', { turn: 'u1' }), child(8, 'child_result', { turn: 'u1', usage: { input: 5, cache_read: 1200, output: 20 } }),
+      child(6, 'model_request', { turn: 'u1' }), child(8, 'child_result', { turn: 'u1', usage: { input: 5, cache_read: 1200, cache_creation: 0, output: 20 } }),
       child(30, 'model_request', { turn: 'u2' }), child(33, 'turn_end', { turn: 'u2' }),
       row('router', { session_id: 's1', agent_id: 'other', event: 'model_request', turn: 'x' }, time(9)), row('router', { session_id: 's2', agent_id: 'w1', event: 'model_request', turn: 'y' }, time(9))];
     const w = worker([launch], mods, 40);
     expect(w.step.progress).toEqual({ lastAt: time(33), lastTool: null, turns: 2, requests: 3, input: 2415, output: 70 });
     // Requests with no recorded usage leave the tokens unknown, never zero.
     expect(worker([launch], [child(2, 'model_request', { turn: 'u1' })], 3).step.progress).toMatchObject({ requests: 1, input: null, output: null });
+    // A response missing a counter makes the total unknown, not a smaller measured sum.
+    for (const usage of [{}, { output: 5 }, { input: 1, cache_read: 2, output: 3 }, null]) {
+      expect(worker([launch], [...mods.slice(0, 4), child(9, 'child_result', { turn: 'u1', usage })], 10).step.progress).toMatchObject({ requests: 2, input: null, output: null });
+    }
   });
 
   it('rebuilds only the worker\'s own execution when its child records arrive', () => {
     const other = { session_id: 's1', prompt_id: 'p0', mode: 'auto', written_at: time(0), phase: 'admission_intent', request_id: 'r0' };
     const records = [other, launch], mods: ModRecord[] = [child(2, 'model_request', { turn: 'u1' })];
     const first = worker(records, mods, 5);
-    mods.push(child(4, 'child_result', { turn: 'u1', usage: { input: 1, output: 2 } }));
+    mods.push(child(4, 'child_result', { turn: 'u1', usage: { input: 1, cache_read: 0, cache_creation: 0, output: 2 } }));
     const second = worker(records, mods, 5);
     expect(second.step.progress).toMatchObject({ requests: 1, input: 1, output: 2 });
     const unrelated = (v: typeof first.view) => v.runs.find(r => r.steps.some(x => x.title === 'Gate A · Jev 요청'))!;

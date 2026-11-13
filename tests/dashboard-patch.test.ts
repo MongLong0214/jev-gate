@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadActivity, type ActivitySnapshot } from '../src/activity.js';
-import { diffFrame, type FrameMemo } from '../src/dashboard-patch.js';
+import { diffFrame, frameOperations, type FrameMemo } from '../src/dashboard-patch.js';
 import type { OperationRun, OperationStep } from '../src/operations.js';
 import { applyPatch } from './live-frames.js';
 
@@ -41,6 +41,15 @@ const same = (held: Record<string, unknown>, next: ActivitySnapshot): void => {
 };
 
 describe('dashboard frame patches', () => {
+  it('sends a worker step whose progress alone changed, so an opened stage is fetched again (#417)', () => {
+    // As the server sends it: frames leave out the detail-only fields.
+    const framed = (runs: OperationRun[]) => { const s = snapshot(runs); return { ...s, operations: frameOperations(s.operations) } as unknown as ActivitySnapshot; };
+    const feed = stream(), progress = { lastAt: '2026-10-13T01:00:05.000Z', lastTool: 'Bash', turns: 1, requests: 1, input: null, output: null };
+    feed(framed([run('w', [step('w1', { state: 'active', progress })])]));
+    const moved = { ...progress, lastAt: '2026-10-13T01:00:21.000Z', requests: 2, input: 100, output: 50 };
+    const sent = JSON.parse(feed(framed([run('w', [step('w1', { state: 'active', progress: moved })])])).patch!) as { runs: Record<string, { put: Record<string, { progress: unknown }> }> };
+    expect(sent.runs['w']!.put['w1']!.progress).toEqual(moved);
+  });
   it('sends nothing when only the build time moved, and only the changed steps of a changed run', () => {
     const feed = stream();
     const a = run('a', [step('a1'), step('a2')]), b = run('b', [step('b1')]);

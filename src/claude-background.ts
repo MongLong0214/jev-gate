@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { isHostNoticeRow } from './recent-prompts.js';
+import { isHostNoticeRow, isWorkerNoticeRow } from './recent-prompts.js';
 import { subagentTranscriptPath } from './verify.js';
 import type { BackgroundTaskBrief, HookInput } from './types.js';
 import { parseDispatchMarker } from './claude-dispatch.js';
@@ -155,6 +155,7 @@ export const workerBackgroundLaunches = (input: HookInput): { shells: Set<string
         if (typeof r['task_id'] === 'string' && typeof r['message'] === 'string' && r['message'].startsWith(`Successfully stopped task: ${r['task_id']} (`)) ended.add(r['task_id']);
         continue;
       }
+      if (!isWorkerNoticeRow(row)) continue;
       const content = (row['message'] as { content?: unknown } | undefined)?.content;
       const body = typeof content === 'string' ? content : Array.isArray(content) ? content.filter(c => c?.type === 'text').map(c => String(c.text ?? '')).join('\n') : '';
       for (const notice of body.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)) {

@@ -284,11 +284,11 @@ const ROUTER_EVENT: Record<string, string> = {
 };
 /** #417: what a native child's own Router rows show: request, response and turn-end rows only, which no build drops, so the
  * split build's index (`sync`) and a whole build count the same rows. `ats` and `requestAts` stay sorted. */
-interface WorkerStats { ats: string[]; requestAts: string[]; turns: Map<string, number>; usage: number; input: number; output: number }
+interface WorkerStats { ats: string[]; requestAts: string[]; turns: Map<string, number>; responses: number; complete: number; input: number; output: number }
 const CHILD_EVENTS = new Set(['model_request', 'child_result', 'model_failure', 'turn_end']);
 export const workerStatsKey = (row: ModRecord): string | null => row.component === 'router' && row.at && CHILD_EVENTS.has(String(row.rec['event'])) && token(row.rec['session_id']) && token(row.rec['agent_id'])
   ? JSON.stringify([row.rec['session_id'], row.rec['agent_id']]) : null;
-const tokens = (u: Rec | null, keys: string[]): number => keys.reduce((sum, k) => sum + (number(u?.[k]) ?? 0), 0);
+const USAGE_KEYS = ['input', 'cache_read', 'cache_creation', 'output'];
 /** Adds a child row to its stats, or takes it out; false once nothing is left. */
 const noteWorker = (stats: WorkerStats, row: ModRecord, add: boolean): boolean => {
   const r = row.rec, sign = add ? 1 : -1, put = (list: string[]): void => { if (add) insert(list, row.at, byText); else remove(list, row.at, byText); };
@@ -298,11 +298,15 @@ const noteWorker = (stats: WorkerStats, row: ModRecord, add: boolean): boolean =
     const turn = token(r['turn']);
     if (turn) { const count = (stats.turns.get(turn) ?? 0) + sign; if (count) stats.turns.set(turn, count); else stats.turns.delete(turn); }
   }
-  const usage = r['event'] === 'child_result' ? field(r, 'usage') : null;
-  if (usage) { stats.usage += sign; stats.input += sign * tokens(usage, ['input', 'cache_read', 'cache_creation']); stats.output += sign * tokens(usage, ['output']); }
+  // Tokens are known only while every response recorded all four counters; a missing one is unknown, never zero.
+  if (r['event'] === 'child_result') {
+    const usage = field(r, 'usage'), counts = USAGE_KEYS.map(k => number(usage?.[k]));
+    stats.responses += sign;
+    if (counts.every(c => c !== null && c >= 0)) { const [input, read, write, output] = counts as number[]; stats.complete += sign; stats.input += sign * (input! + read! + write!); stats.output += sign * output!; }
+  }
   return stats.ats.length > 0;
 };
-const newWorkerStats = (): WorkerStats => ({ ats: [], requestAts: [], turns: new Map(), usage: 0, input: 0, output: 0 });
+const newWorkerStats = (): WorkerStats => ({ ats: [], requestAts: [], turns: new Map(), responses: 0, complete: 0, input: 0, output: 0 });
 /** A background worker's gate records: its last tool, its last pause and the alarm after its terminal. */
 interface WorkerTrace { lastAt: string; activeAt: string; tool: string | null; paused: { at: string; tasks: NonNullable<WorkerProgress['tasks']> } | null; resumedAt: string | null; endAt: string | null }
 interface WorkerLookup { trace: Map<string, WorkerTrace>; stats: (session: string, agent: string) => WorkerStats | undefined }
@@ -461,7 +465,7 @@ const traceStep = (r: Rec, resultIds: Set<string>, intents: Map<string, string>,
       }
       details.push('시작 알림은 완료·수락 결과가 아닙니다');
       progress = { lastAt, lastTool: w?.tool ?? null, turns: stats ? stats.turns.size : null, requests: stats ? stats.requestAts.length : null,
-        input: stats?.usage ? stats.input : null, output: stats?.usage ? stats.output : null, ...(paused ? { tasks: paused.tasks } : {}) };
+        input: stats?.responses && stats.complete === stats.responses ? stats.input : null, output: stats?.responses && stats.complete === stats.responses ? stats.output : null, ...(paused ? { tasks: paused.tasks } : {}) };
     }
     if (phase === 'background_paused') { lane = 'host'; summary = `턴 멈춤 · 띄운 작업 ${n(taskBriefs(r['tasks']).length)}개 · 예약 유지`; details.push(r['basis'] === 'transcript' ? '근거: 워커 기록의 미종료 백그라운드 명령' : '근거: 호스트가 보낸 진행 중 작업 목록', '종료가 아님 · 작업이 끝나면 호스트가 워커를 깨움'); }
     if (phase === 'background_resumed_after_terminal') { lane = 'host'; state = 'error'; issue = 'host'; summary = text('종료 판정 뒤 워커 재개', token(r['tool_name']) && `마지막 도구 ${token(r['tool_name'])}`, '판정은 그대로'); }
