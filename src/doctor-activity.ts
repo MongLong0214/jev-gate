@@ -182,6 +182,13 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     say(mismatched.length || codexMismatch.length ? 'fail' : compared.length + codexObserved.length ? 'ok' : 'info', `router_applied: ${compared.length + codexObserved.length} requests with an observed model, ${mismatched.length + codexMismatch.length} answered by another model family${mismatched.length ? ` (${tally(mismatched.map(r => `${familyOf(r['requested'])}->${familyOf(r['observed'])}`))})` : ''}`,
       'The host answered with a model the Router did not request; check the model restrictions and the host version.');
 
+    // The effort is read from the request the host sent. A step sent on another effort than its record names ran on one
+    // the Router did not choose for it: the 19 requests of 2026-11-11 to 11-13 that kept a switch's effort on the baseline.
+    const efforts = router('root_result', 'child_result').filter(r => str(r['requested_effort']) && str(r['observed_effort']) && r['effort_evidence'] === 'transcript_api_request');
+    const drifted = efforts.filter(r => r['requested_effort'] !== r['observed_effort']);
+    say(drifted.length ? 'warn' : efforts.length ? 'ok' : 'info', `router_effort_applied: ${efforts.length} requests with an observed effort, ${drifted.length} sent on another effort than recorded${drifted.length ? ` (${tally(drifted.map(r => `${String(r['requested_effort'])}->${String(r['observed_effort'])}`))})` : ''}`,
+      'The host sent these requests on an effort the Router did not name: it holds a turn\'s effort from its first request, and caps one a model does not take. Update Jev Gate and rerun doctor; report it if it stays.');
+
     // A root turn's routing ends only with a recorded reason; a later unrouted step without one is the #279 mid-turn release.
     const turns = new Map<string, Rec[]>();
     for (const r of rs) if (isRouter(r) && str(r['turn']) && !str(r['agent_id']) && (r['scope'] === undefined || r['scope'] === 'root')) group(turns, `${String(r['session_id'])}:${String(r['turn'])}`, r);

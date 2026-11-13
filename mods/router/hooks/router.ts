@@ -447,6 +447,12 @@ interface SpawnPlan {
   manual?: true;
 }
 
+/** The effort a turn's requests carry under a patch: the patch's own, none when it omits one, else the baseline's. */
+const turnEffort = (baseline: Baseline, patch: RoutingPatch): Baseline['effort'] =>
+  patch.effortEdit?.kind === 'omit' ? undefined : patch.effort ?? baseline.effort;
+
+const belowEffort = (a: Baseline['effort'], b: Baseline['effort']): boolean => isSymbolicEffort(a) && isSymbolicEffort(b) && effortIndex(a) < effortIndex(b);
+
 /** Apply the cache floor without raising effort above the native baseline. Missing proposals stay missing. */
 export const cachePatch = (
   baseline: Baseline,
@@ -705,13 +711,19 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       t.baselineSeq = observedCache?.seq;
       const room = TURN_HORIZON - (t.baselineSeq === undefined ? 0 : rootSeq - t.baselineSeq);
       const cost = decision.patch.model && room >= 1 ? routeCost('claude', id, cacheId(decision.patch.model), rootCaches, String(cacheEpoch), engine.now(), estimateTokens(text), Math.min(room, CACHE_REACH)) : null;
-      const { hold, reason: costReason } = decision.patch.model && room < 1 ? { hold: true, reason: 'baseline_reach' } : costHold(cost, offer.baselineCandidate?.rank, offer.candidates.find(c => c.id === decision.patch.model)?.rank);
-      const chosen = hold && result.ok ? keepModelPair(offer, result.answers).patch : decision.patch;
+      const priced = decision.patch.model && room < 1 ? { hold: true, reason: 'baseline_reach' } : costHold(cost, offer.baselineCandidate?.rank, offer.candidates.find(c => c.id === decision.patch.model)?.rank);
       const capability = engine.cacheCapability ? await within(engine.cacheCapability().catch(() => undefined), live) : undefined;
       const capabilityReason = capability ? claudeEffortCache(offer.baseline.model, capability) : 'capability_unknown';
       const earlier = capabilityReason !== 'excluded' && storedEffortHits.has(id) && !preservedEffortModels.has(id) && capabilityReason !== 'supported';
       const preserves = !missedEffortModels.has(id) && (preservedEffortModels.has(id) || capabilityReason === 'supported' || earlier);
-      const cached = cachePatch(t.baseline, preserves ? null : t.warmEffort, chosen as RoutingPatch);
+      const floored = (patch: RoutingPatch) => cachePatch(t.baseline, preserves ? null : t.warmEffort, patch);
+      // The host sends a turn's effort from its first request to its last, so a switched turn that returns to the
+      // baseline model returns on the switch's effort: a switch whose effort is below the one the baseline itself
+      // would run this turn is held.
+      const kept = result.ok ? floored(keepModelPair(offer, result.answers).patch as RoutingPatch) : null;
+      const switched = floored(decision.patch as RoutingPatch);
+      const { hold, reason: costReason } = decision.patch.model && kept && !priced.hold && belowEffort(turnEffort(t.baseline, switched.patch), turnEffort(t.baseline, kept.patch)) ? { hold: true, reason: 'return_effort' } : priced;
+      const cached = hold && kept ? kept : switched;
       if (!live.aborted && !t.stopped) t.patch = cached.patch;
       if (!Object.keys(t.patch).length) t.stopped = true;
       log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, ...(notices.has(turnId) ? { turn_source: 'task_notification' } : {}), context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
@@ -748,14 +760,19 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     let model = t.modelStopped ? undefined : t.patch.model;
     if (model && t.baselineSeq !== undefined && rootSeq - t.baselineSeq >= CACHE_REACH) { model = undefined; t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'baseline_reach' }); }
     if (model && (!claudeTargetAllowed(model, allowFable) || !claudeModelAllowed(model, available, aliases))) { model = undefined; t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' }); }
-    // An effort selected conditionally for B can never be reused on A after B was suppressed.
-    if (t.patch.model && !model) return null;
     if (model && factsOf(model)!.contextTokens < (factsOf(t.baseline.model)?.contextTokens ?? 0)) {
       const bound = await within(engine.currentContextBound?.(e.turnId, e.index).catch(() => undefined) ?? Promise.resolve(undefined), live);
       if (!bound?.compatible || bound.turnId !== e.turnId || bound.index !== e.index || !claudeContextFits(t.baseline.model, model, bound.inputUpperBound)) { t.stopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'context_unverified' }); return null; }
     }
+    // A switch that ended after the turn's first request goes on with the turn's effort: the host keeps sending the
+    // effort of that first request whatever a later step names, and the decision took the switch only where that effort
+    // is not below the baseline's own. One that ended before any request was sent leaves the turn native.
     const edit = !t.effortStopped ? t.patch.effortEdit : undefined;
     const effort = edit?.kind === 'set' && isSymbolicEffort(edit.value) ? edit.value : !t.effortStopped ? t.patch.effort : undefined;
+    if (t.patch.model && !model) {
+      if (e.index === 0) t.stopped = true;
+      if (t.stopped || edit?.kind !== 'set' || !pairValid(t.baseline.model, effort)) return null;
+    }
     if (model && edit?.kind !== 'omit' && !pairValid(model, effort ?? e.effort)) { log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'pair_invalid' }); return null; }
     const patch: RoutingPatch = { ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(edit ? { effortEdit: edit } : {}) };
     return Object.keys(patch).length ? patch : null;
