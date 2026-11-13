@@ -138,7 +138,7 @@ npm run build
 node dist/cli.js doctor
 ```
 
-`npm run typecheck`, `npm test`, and `claude plugin validate . --strict` are the checks in [AGENTS.md](../AGENTS.md). Tests are offline. Do not put a key in the repository, an issue, or a chat log, and do not attach raw transcripts.
+`npm run typecheck`, `npm test`, `npm run build` and `npm run validate:plugin` are the checks in [AGENTS.md](../AGENTS.md). Tests are offline. Do not put a key in the repository, an issue, or a chat log, and do not attach raw transcripts.
 
 `npm run pack` writes `dist-pack/jev-gate-<version>.zip` for the integrated plugin. `--profile router` writes the single-part archive used for development. The bench is not part of that. `npm run release:check` rebuilds the integrated archive and compares it with the pin; it fails on a released version whose bytes changed, which is the point of the check. Do not publish from a documentation edit.
 

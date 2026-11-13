@@ -49,5 +49,5 @@
 - trace 보존: Claude·Codex 판단 기록은 공통 `src/trace.ts` 정책으로 48시간 보관한다. doctor activity 판정은 최근 24시간만 쓴다.
 - 회계: intent 기록이 없으면 "안 보냄"이 아니라 "모름". 실패 후에도 소비는 가능. 빈 usage는 0이 아니다. 요청한 프로필·실제 모델·실제 effort는 서로 다른 사실이다. haiku는 frontmatter effort가 적용되지 않는다(2026-09-18 관측). job state가 없다고 기록을 안 남기지 않는다(#48) -- root-caller Agent 호출은 job 유무와 무관하게 `off` 모드를 제외한 모든 모드에서 `requested_model`/`resolved_model`/`subagent_type`을 trace에 남긴다.
 - 벤치: 계획 행이 분모. 누락 파일은 not_started가 아니다. 측정 세션은 부모 환경을 상속하지 않는다(`CLAUDE_*` 제거). 유리한 결과 선택·checker 사후 조정 금지(결함은 기록하고 전원 재채점, 이력 보존). arm을 뺄 때는 결과를 보기 전에 근거를 기록한다.
-- 변경 후 `npm run typecheck && npm test && npm run build && claude plugin validate . --strict`를 실제 실행하고 결과를 그대로 보고한다. 테스트는 fake HTTP·fake CLI만 사용하며 키/로그인이 필요 없다.
+- 변경 후 `npm run typecheck && npm test && npm run build && npm run validate:plugin`을 실제 실행하고 결과를 그대로 보고한다. `validate:plugin`은 marketplace manifest와 **패키징된 plugin 디렉터리**를 `claude plugin validate --strict`로 검증한다(호스트 2.1.323부터 검증기가 대상 디렉터리의 TypeScript를 전부 타입 체크하므로 `node_modules`가 있는 체크아웃 루트는 검증할 수 없다). 배포되는 hooks 모듈(`hooks/`, `mods/*/hooks/`, 공유 `src/*.ts`)의 상대 import는 `.js`로 쓴다 -- 검증기의 타입 체크가 `.ts` 지정자를 거부한다(TS5097). 테스트는 fake HTTP·fake CLI만 사용하며 키/로그인이 필요 없다.
 - 구현 완료 / 설치 호스트 관측 / 측정된 제품 효과는 서로 다른 완료다. packet이 작아진 것, Jev를 호출한 것, 테스트가 통과한 것을 "토큰이 줄었다"로 바꾸어 보고하지 않는다. 요청 없이 release/npm publish/marketplace/홍보를 하지 않는다.

@@ -1,5 +1,5 @@
-import { cacheState, switchCost, type CacheObservation, type ModelCache } from './cost.ts';
-import { providerContextLimit, providerPrice } from './provider-prices.ts';
+import { cacheState, switchCost, type CacheObservation, type ModelCache } from './cost.js';
+import { providerContextLimit, providerPrice } from './provider-prices.js';
 
 /**
  * Adapter estimate using observed usage, not a forecast supplied by a classifier. `cache` holds one context's

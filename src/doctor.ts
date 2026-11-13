@@ -80,7 +80,11 @@ export const moduleIssues = (root: string, entry: string): string[] => {
       const canonicalRel = relative(canonicalRoot, realpathSync(file));
       if (canonicalRel.startsWith('..') || isAbsolute(canonicalRel)) { issues.push(`${rel}: relative module import escapes the plugin`); continue; }
       const text = readFileSync(file, 'utf8');
-      for (const match of text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)(["'])(\.[^"']+)\1/g)) pending.push(resolve(dirname(file), match[2]!));
+      for (const match of text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)(["'])(\.[^"']+)\1/g)) {
+        const target = resolve(dirname(file), match[2]!);
+        // A `.js` specifier in a TypeScript module names its `.ts` source, which is the file the package carries.
+        pending.push(file.endsWith('.ts') && target.endsWith('.js') && !readableFile(target) ? `${target.slice(0, -3)}.ts` : target);
+      }
     } catch { issues.push(`${relative(root, file)} unreadable`); }
   }
   return issues;

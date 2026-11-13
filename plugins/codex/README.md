@@ -173,7 +173,7 @@ If no policy runs, check automatic connection readiness, `/hooks` trust, enablem
 npm run typecheck
 npm test
 npm run build
-claude plugin validate . --strict
+npm run validate:plugin
 JEV_CODEX_E2E=1 npx vitest run tests/codex/runtime.test.ts tests/codex/connection-runtime.test.ts tests/codex/native-history-runtime.test.ts
 ```
 

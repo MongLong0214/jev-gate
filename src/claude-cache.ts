@@ -1,4 +1,4 @@
-import { factsOf } from './claude-models.ts';
+import { factsOf } from './claude-models.js';
 
 export interface ClaudeCacheCapability { host: string | undefined; connection: 'api-key' | 'bearer' | 'unknown'; excluded: boolean; hipaa: boolean | null }
 /** API support is not proof that a gateway or HIPAA account enables the beta. */

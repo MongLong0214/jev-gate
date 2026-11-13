@@ -1,15 +1,15 @@
 import type { EngineInterface, On, Register } from 'claude-code';
 
-import type { RouterConfig } from './config.ts';
-import { anyRouting, resolveConfig } from './config.ts';
-import type { HostPins, RouterEngine } from './router.ts';
-import { createRouter } from './router.ts';
-import { installedKeyPath, parseInstalledKey } from './key.ts';
-import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.ts';
-import { createRecorder, createRecordingState, type RecordingState } from './recording.ts';
-import { ROUTER_OBSERVATION_PROCESS_MS, type RouterObservation } from '../../../src/router-observation.ts';
-import { childStepContext } from '../../../src/router-child-context.ts';
-import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel, hostFlag } from './models.ts';
+import type { RouterConfig } from './config.js';
+import { anyRouting, resolveConfig } from './config.js';
+import type { HostPins, RouterEngine } from './router.js';
+import { createRouter } from './router.js';
+import { installedKeyPath, parseInstalledKey } from './key.js';
+import { frontierConfigPath, parseFrontierRouting } from '../../../src/frontier-routing.js';
+import { createRecorder, createRecordingState, type RecordingState } from './recording.js';
+import { ROUTER_OBSERVATION_PROCESS_MS, type RouterObservation } from '../../../src/router-observation.js';
+import { childStepContext } from '../../../src/router-child-context.js';
+import { currentClaudeModel, factsOf, frontmatterEdits, frontmatterModel, hostFlag } from './models.js';
 
 const set = (v: string | undefined): boolean => v !== undefined && v.trim() !== '';
 /**

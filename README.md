@@ -251,7 +251,7 @@ npm ci
 npm run typecheck
 npm test
 npm run build
-claude plugin validate . --strict
+npm run validate:plugin
 ```
 
 Unit tests use fake HTTP/CLI and require no keys or login. Native-host and browser E2E are opt-in. A performance claim needs a paired comparison with actual downstream outcomes; digest size or a successful Jev call alone is insufficient. [A/B benchmark](docs/bench-ab.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/MongLong0214/jev-gate/issues).

@@ -1,5 +1,5 @@
-import { MODEL_FACTS, factsOf, sameIdentity, claudeTargetAllowed } from './claude-models.ts';
-import type { RouteCandidate, Situation } from './router-selection.ts';
+import { MODEL_FACTS, factsOf, sameIdentity, claudeTargetAllowed } from './claude-models.js';
+import type { RouteCandidate, Situation } from './router-selection.js';
 
 export type ModelAliases = Readonly<Record<string, string>>;
 // Product roles, not a measured price/performance ranking. Same-family versions have the same role.

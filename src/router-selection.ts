@@ -1,4 +1,4 @@
-import { choiceDistribution, validateChoice, validateScore } from './router-answers.ts';
+import { choiceDistribution, validateChoice, validateScore } from './router-answers.js';
 /** Jev's structured criterion: what an option covers, examples, and what belongs to a neighbouring option instead. */
 export interface Situation { what: string; examples: readonly string[]; not_for: string }
 export type Question = { type: 'choice'; instructions: string; criteria: Record<string, string | Situation> } | { type: 'score'; instructions: string; criteria: readonly string[] };

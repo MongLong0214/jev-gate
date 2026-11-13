@@ -1,6 +1,6 @@
-import raw from './provider-prices-data.ts';
-import type { PriceFacts } from './cost.ts';
-import { factsOf } from './claude-models.ts';
+import raw from './provider-prices-data.js';
+import type { PriceFacts } from './cost.js';
+import { factsOf } from './claude-models.js';
 
 /** Adapter facts generated from official metadata by the existing PR model check. No per-request network lookup. */
 export const providerPrice = (host: 'claude' | 'codex', model: string, prompt: number | null, serviceTier: string | null = null): PriceFacts | null => {

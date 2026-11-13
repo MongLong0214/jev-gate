@@ -1,1 +1,1 @@
-export * from '../../../src/router-selection.ts';
+export * from '../../../src/router-selection.js';

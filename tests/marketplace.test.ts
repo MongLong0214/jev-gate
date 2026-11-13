@@ -58,7 +58,9 @@ describe('the marketplace', () => {
         const spec = (a ?? b)!;
         if (spec === 'claude-code' || spec.startsWith('node:')) continue;
         expect(spec.startsWith('.'), `${rel} imports ${spec}`).toBe(true);
-        visit(relative(root, resolve(dirname(join(root, rel)), spec)));
+        // The modules import each other by `.js`, which names the `.ts` source the archive carries (the host's type check refuses a `.ts` specifier).
+        expect(spec.endsWith('.js'), `${rel} imports ${spec}`).toBe(true);
+        visit(relative(root, resolve(dirname(join(root, rel)), spec.replace(/\.js$/, '.ts'))));
       }
     };
     visit('hooks/register.ts');

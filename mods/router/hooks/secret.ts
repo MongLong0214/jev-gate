@@ -1,1 +1,1 @@
-export * from '../../../src/router-secret.ts';
+export * from '../../../src/router-secret.js';

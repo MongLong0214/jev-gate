@@ -1,1 +1,1 @@
-export * from '../../../src/claude-models.ts';
+export * from '../../../src/claude-models.js';

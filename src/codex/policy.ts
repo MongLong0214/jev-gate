@@ -33,8 +33,8 @@ import { cacheDiagnostics, requestChange, requestShape, type RequestShape } from
 import { compactScope, newCompactState, prepareCodexCompact, type CompactReceipt, type CompactState } from './compact.js';
 import { observedDelegationPrices } from '../delegation-prices.js';
 import { normalizeCatalog, codexTargetAllowed, generalCodexModel } from './catalog.js';
-import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.ts';
-import type { RoutingCache } from '../../mods/router/hooks/context.ts';
+import { applyEffort, type PairPatch } from '../../mods/router/hooks/selection.js';
+import type { RoutingCache } from '../../mods/router/hooks/context.js';
 
 export interface CodexSubmission { prompt: string | null; model: string; effort: string | null; requestId: string; epoch: string; index: number | null; scope: 'root' | 'child'; parent: string | null; defaultCachePolicy: boolean; billing: CodexBilling; cacheInput?: RequestShape }
 export interface CodexRequestFailure { stage: 'connect' | 'stream' | 'http' | 'sse' | 'eof'; elapsed_ms: number; status?: number }

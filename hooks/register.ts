@@ -1,10 +1,10 @@
 import type { PluginOptions, Register } from 'claude-code';
 
-import { COMPACT_OPTION_NAMES, resolveCompactConfig } from '../mods/compact/hooks/config.ts';
-import { registerCompact } from '../mods/compact/hooks/register.ts';
-import { resolveConfig } from '../mods/router/hooks/config.ts';
-import { registerRouter, type ContextObserver } from '../mods/router/hooks/register.ts';
-import { createRecordingState } from '../mods/router/hooks/recording.ts';
+import { COMPACT_OPTION_NAMES, resolveCompactConfig } from '../mods/compact/hooks/config.js';
+import { registerCompact } from '../mods/compact/hooks/register.js';
+import { resolveConfig } from '../mods/router/hooks/config.js';
+import { registerRouter, type ContextObserver } from '../mods/router/hooks/register.js';
+import { createRecordingState } from '../mods/router/hooks/recording.js';
 
 
 /**

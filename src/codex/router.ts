@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { offerRoute, selectPair, pairReceipt, type PairPatch, type RouteCandidate } from '../../mods/router/hooks/selection.ts';
-import { routingContext, type RoutingCache } from '../../mods/router/hooks/context.ts';
-import { looksSecret } from '../../mods/router/hooks/secret.ts';
-import { MAX_REQUEST_TOKENS, estimateTokens } from '../../mods/router/hooks/client.ts';
+import { offerRoute, selectPair, pairReceipt, type PairPatch, type RouteCandidate } from '../../mods/router/hooks/selection.js';
+import { routingContext, type RoutingCache } from '../../mods/router/hooks/context.js';
+import { looksSecret } from '../../mods/router/hooks/secret.js';
+import { MAX_REQUEST_TOKENS, estimateTokens } from '../../mods/router/hooks/client.js';
 import { callJev } from '../jev.js';
 import { codexRouteCost, type CodexBilling } from './route-cost.js';
 import type { ModelCache } from '../cost.js';

@@ -1,5 +1,5 @@
-import type { RootSwitch, SymbolicEffort } from './models.ts';
-import { aliasFamily, effortIndex, factsOf, isSymbolicEffort, sameIdentity, sameModel, splitModelId } from './models.ts';
+import type { RootSwitch, SymbolicEffort } from './models.js';
+import { aliasFamily, effortIndex, factsOf, isSymbolicEffort, sameIdentity, sameModel, splitModelId } from './models.js';
 
 /**
  * Pure task-to-parameter policy (#41): the questions, the strict answer check and the deterministic rule. No I/O,
@@ -14,7 +14,7 @@ export type ControlAnswer = 'task_clear' | 'explicit_lock' | 'needs_context' | '
 export type RiskAnswer = 'ordinary' | 'consequential' | 'unclear';
 
 export interface RoutingPatch {
-  effortEdit?: import('./selection.ts').EffortEdit;
+  effortEdit?: import('./selection.js').EffortEdit;
   model?: string;
   effort?: RoutedEffort;
 }
@@ -162,8 +162,8 @@ export const buildState = (task: RoutingTask): Record<string, unknown> =>
 
 // ------------------------------------------------------------------------------------------------ answers
 
-export { PROB_SUM_TOLERANCE, ARGMAX_TOLERANCE, ROUNDING_PER_LABEL, HUNDREDTHS_TOLERANCE, validateChoice, validateScore } from '../../../src/router-answers.ts';
-import { validateChoice, validateScore } from '../../../src/router-answers.ts';
+export { PROB_SUM_TOLERANCE, ARGMAX_TOLERANCE, ROUNDING_PER_LABEL, HUNDREDTHS_TOLERANCE, validateChoice, validateScore } from '../../../src/router-answers.js';
+import { validateChoice, validateScore } from '../../../src/router-answers.js';
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export interface Answers {

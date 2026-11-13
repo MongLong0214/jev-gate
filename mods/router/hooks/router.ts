@@ -1,24 +1,24 @@
-import type { RouterObservation } from '../../../src/router-observation.ts';
-import type { Transport, Usage } from './client.ts';
-import { createClient, estimateTokens, JEV_MODEL } from './client.ts';
-import type { RouterConfig } from './config.ts';
-import { validKey } from './config.ts';
-import type { RootSwitch, SymbolicEffort } from './models.ts';
-import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_FACTS, sameModel } from './models.ts';
-import type { Answers, Baseline, PolicyOptions, RoutedEffort, RoutingPatch } from './policy.ts';
-import { choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, pairValid } from './policy.ts';
-import { looksSecret } from './secret.ts';
-import { offerRoute, selectPair, keepModelPair, pairReceipt, applyEffort, toolBound, type PairOffer, type EffortEdit } from './selection.ts';
-import { CONTEXT_TAIL, RECENT_REQUESTS, routingContext, type RoutingCache } from './context.ts';
-import { claudeCandidates, claudeContextFits, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.ts';
-import { claudeTargetAllowed, currentClaudeModel, isFable } from './models.ts';
-import type { ChildStepContext } from '../../../src/router-child-context.ts';
-import { normalizeUsage, usageCost, observedTtl, ModelCache, type CacheObservation } from '../../../src/cost.ts';
-import { providerPrice } from '../../../src/provider-prices.ts';
-import { CACHE_REACH, costHold, routeCost, TURN_HORIZON } from '../../../src/route-cost.ts';
-import { claudeEffortCache, effortCacheHit, type ClaudeCacheCapability } from '../../../src/claude-cache.ts';
-import { parseDispatchMarker } from '../../../src/claude-dispatch.ts';
-import { ROUTER_HOOK_VERSION } from './version.ts';
+import type { RouterObservation } from '../../../src/router-observation.js';
+import type { Transport, Usage } from './client.js';
+import { createClient, estimateTokens, JEV_MODEL } from './client.js';
+import type { RouterConfig } from './config.js';
+import { validKey } from './config.js';
+import type { RootSwitch, SymbolicEffort } from './models.js';
+import { aliasFamily, answeredBy, effortIndex, factsOf, isSymbolicEffort, MODEL_FACTS, sameModel } from './models.js';
+import type { Answers, Baseline, PolicyOptions, RoutedEffort, RoutingPatch } from './policy.js';
+import { choosePatch, EFFORT_LEVEL_TARGETS, offerableEfforts, pairValid } from './policy.js';
+import { looksSecret } from './secret.js';
+import { offerRoute, selectPair, keepModelPair, pairReceipt, applyEffort, toolBound, type PairOffer, type EffortEdit } from './selection.js';
+import { CONTEXT_TAIL, RECENT_REQUESTS, routingContext, type RoutingCache } from './context.js';
+import { claudeCandidates, claudeContextFits, claudeModelAllowed, resolveClaudeModel, type ModelAliases } from './candidates.js';
+import { claudeTargetAllowed, currentClaudeModel, isFable } from './models.js';
+import type { ChildStepContext } from '../../../src/router-child-context.js';
+import { normalizeUsage, usageCost, observedTtl, ModelCache, type CacheObservation } from '../../../src/cost.js';
+import { providerPrice } from '../../../src/provider-prices.js';
+import { CACHE_REACH, costHold, routeCost, TURN_HORIZON } from '../../../src/route-cost.js';
+import { claudeEffortCache, effortCacheHit, type ClaudeCacheCapability } from '../../../src/claude-cache.js';
+import { parseDispatchMarker } from '../../../src/claude-dispatch.js';
+import { ROUTER_HOOK_VERSION } from './version.js';
 
 /**
  * The Router's handlers over a structural engine. register.ts adapts the host's `$` to RouterEngine (the environment
