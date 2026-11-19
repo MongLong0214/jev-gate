@@ -213,8 +213,10 @@ export function priceMetadata(raw, official) {
     requireFact(model && context && Object.values(base).every(v => Number.isFinite(v) && v >= 0), `Unknown OpenAI price contract: ${key}`);
     const limit = Number(context.replaceAll(',', ''));
     // The same surcharge in both publisher wordings: "prompts with more than … are priced at 2x …" and, from the 6.2 pages, "requests with more than …, … rates double …".
-    const surcharges = [...text.matchAll(/\b(?:(?:API )?prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output|requests with more than (\d+)K input tokens, input and cache rates double and output costs 1\.5 times the short-context rate)/gi)];
-    requireFact(surcharges.length <= 1 && (surcharges.length === 1 || !/\bprompts\b[^\n]*\bpriced\b|\bmore than \d+K input tokens\b/i.test(text)), `Unknown long-context price contract: ${key}`);
+    const rule = /\b(?:(?:API )?prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output|requests with more than (\d+)K input tokens, input and cache rates double and output costs 1\.5 times the short-context rate)/gi;
+    const surcharges = [...text.matchAll(rule)];
+    // A recognized rule does not cover another beside it: what is left of the page without it must not state a surcharge.
+    requireFact(surcharges.length <= 1 && !/\bprompts\b[^\n]*\bpriced\b|\bmore than \d+K input tokens\b/i.test(text.replace(rule, '')), `Unknown long-context price contract: ${key}`);
     const long = surcharges[0];
     const bands = long ? [{ ...base, maxPrompt: Number(long[1] ?? long[2]) * 1000 }, { maxPrompt: limit, input: base.input * 2, read: base.read * 2, write: base.write * 2, output: base.output * 1.5 }] : [{ ...base, maxPrompt: limit }];
     add('codex', model, SOURCES[key].replace(/\.md$/, ''), bands);

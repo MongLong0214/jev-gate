@@ -87,6 +87,12 @@ describe('official model freshness CI', () => {
     for (const surcharge of [rule.replace('2x', '3x'), rule + rule, reworded.replace('double', 'triple'), reworded + rule]) {
       expect(() => priceMetadata({ ...raw, sol: raw.sol + surcharge }, [])).toThrow(/long-context price contract/);
     }
+    // A recognized rule does not cover an unrecognized one beside it, on any page and in either order.
+    for (const known of [rule, reworded]) for (const unknown of [rule.replace('2x', '3x'), reworded.replace('double', 'triple')]) {
+      for (const surcharge of [known + unknown, unknown + known]) for (const key of Object.keys(raw)) {
+        expect(() => priceMetadata({ ...raw, [key]: raw[key] + surcharge }, []), key + ': ' + surcharge).toThrow(/long-context price contract/);
+      }
+    }
     expect(priceMetadata(raw, [])[0].bands).toEqual([{ input: 2, read: 0.1, write: 2.5, output: 10, maxPrompt: 922000 }]);
   });
   it.each([
