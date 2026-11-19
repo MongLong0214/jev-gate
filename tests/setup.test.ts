@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { credentialsDir, credentialsPath, readPrivateJson, resolveApiKey, saveApiKey, withApiKey, writePrivateJson } from '../src/credentials.js';
-import { claudeDefaults, prepareClaude } from '../src/claude-setup.js';
+import { claudeDefaults, claudePreferences, prepareClaude } from '../src/claude-setup.js';
 import { startOnboarding, type Onboarding } from '../src/onboarding.js';
 
 const dirs: string[] = []; const pages: Onboarding[] = [];
@@ -48,7 +48,7 @@ describe('Claude automatic initialization', () => {
     writeFileSync(path, JSON.stringify({ permissions, pluginConfigs: { 'jev-gate@jev-gate': { gateMode: 'off' } }, enabledPlugins: { 'jev-gate@jev-gate': true, 'other@market': true, 'jev-gate-router@jev-gate': true } }));
     const first = prepareClaude(env); expect(first).toMatchObject({ changed: true, restartRequired: true, conflicts: [] });
     const after = readFileSync(path, 'utf8'); const settings = JSON.parse(after);
-    expect(settings).toMatchObject({ permissions, env: claudeDefaults(env), pluginConfigs: { 'jev-gate@jev-gate': { gateMode: 'off' } }, enabledPlugins: { 'other@market': true, 'jev-gate-router@jev-gate': false } });
+    expect(settings).toMatchObject({ permissions, env: { ...claudeDefaults(env), ...claudePreferences }, pluginConfigs: { 'jev-gate@jev-gate': { gateMode: 'off' } }, enabledPlugins: { 'other@market': true, 'jev-gate-router@jev-gate': false } });
     const second = prepareClaude({ ...env, ...settings.env }); expect(second).toEqual({ changed: false, restartRequired: false, conflicts: [] });
     expect(readFileSync(path, 'utf8')).toBe(after);
     expect(after).not.toContain('TYPESAFE_API_KEY'); expect(existsSync(join(dir, '.jev-gate-setup.lock'))).toBe(false);
@@ -59,6 +59,23 @@ describe('Claude automatic initialization', () => {
     writeFileSync(path, JSON.stringify({ env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '0', CLAUDE_CODE_FORK_SUBAGENT: '1', CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }, model: 'opus' }));
     expect(prepareClaude(env).conflicts).toEqual(['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS', 'CLAUDE_CODE_FORK_SUBAGENT']);
     expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '0', CLAUDE_CODE_FORK_SUBAGENT: '1', CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }, model: 'opus' });
+  });
+  it('turns Code Mode on where the owner set nothing, and leaves their own value alone without a conflict or a restart', () => {
+    expect(claudePreferences).toEqual({ CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' });
+    for (const [where, own] of [['settings', '0'], ['settings', 'true'], ['shell', '0']] as const) {
+      const env = fixture(); const dir = join(env.HOME, '.claude'); mkdirSync(dir);
+      const path = join(dir, 'settings.json');
+      const launch = { ...claudeDefaults(env), ...(where === 'settings' ? { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: own } : {}) };
+      writeFileSync(path, JSON.stringify({ env: launch }));
+      const shell = { ...env, ...claudeDefaults(env), ...(where === 'shell' ? { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: own } : {}) };
+      expect(prepareClaude(shell)).toMatchObject({ restartRequired: false, conflicts: [] });
+      expect(JSON.parse(readFileSync(path, 'utf8')).env).toEqual(launch);
+    }
+    // A session started before the preference was written is not asked to restart for it.
+    const env = fixture(); const dir = join(env.HOME, '.claude'); mkdirSync(dir);
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ env: claudeDefaults(env) }));
+    expect(prepareClaude({ ...env, ...claudeDefaults(env) })).toEqual({ changed: true, restartRequired: false, conflicts: [] });
+    expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).env).toEqual({ ...claudeDefaults(env), ...claudePreferences });
   });
   it('does not overwrite malformed settings or follow a symlink and recovers a dead initializer lock', () => {
     const env = fixture(); const dir = join(env.HOME, '.claude'); mkdirSync(dir);

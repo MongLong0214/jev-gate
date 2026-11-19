@@ -476,6 +476,20 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   /** #281: every Gate A record says whether the prompt was taken as a person's and why, so notice inflow is countable. */
   const humanInput = (): { human_input: { verdict: 'human' | 'task_notification'; basis: NoticeBasis } } =>
     ({ human_input: { verdict: isTaskNotice() ? 'task_notification' : 'human', basis: taskNotice!.basis } });
+  /**
+   * The host re-sends the running turn's prompt_id with every prompt it delivers inside that turn: a person's queued
+   * message and, in Code Mode, each script result (2.1.327). Gate A judged that turn once, at its first prompt, and a new
+   * generation there would retire the turn's own job and its handoff claim, so such a delivery is not a boundary and
+   * asks nothing. A background job answers a later prompt under `interactive_prompt_id`, and that turn is the same. A
+   * host notice keeps its own path.
+   */
+  let midTurn: boolean | undefined;
+  const sameTurn = (): boolean => midTurn ??= (() => {
+    if (!input.session_id || !input.prompt_id || isTaskNotice()) return false;
+    const state = readJob(deps.env, input.session_id);
+    const current = state.ok ? state.value?.current : null;
+    return !!current && (current.prompt_id === input.prompt_id || current.interactive_prompt_id === input.prompt_id);
+  })();
 
   const interactivePrompt = (): HookResult | null => {
     if (caller.agent_id || caller.agent_type || !input.session_id || !input.prompt_id) return null;
@@ -771,7 +785,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   // A prompt/Stop boundary closes reservations that never acquired a native execution identity.
   // Actual background/Codex executions retain protection until native terminal evidence arrives.
   if (input.session_id && !caller.agent_id && !caller.agent_type &&
-      (input.hook_event_name === 'Stop' || input.hook_event_name === 'UserPromptSubmit' && typeof input.prompt === 'string' && input.prompt.trim() && !isSlashCommand(input.prompt) && !isTaskNotice())) {
+      (input.hook_event_name === 'Stop' || input.hook_event_name === 'UserPromptSubmit' && typeof input.prompt === 'string' && input.prompt.trim() && !isSlashCommand(input.prompt) && !isTaskNotice() && !sameTurn())) {
     const expired: { prompt_id: string | null; tool_use_id: string; task_id: string | null; subagent_type: string }[] = [];
     const written = updateJob(deps.env, input.session_id, prev => {
       if (!prev) return null;
@@ -797,7 +811,7 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
   if (input.hook_event_name === 'SubagentStop') return backgroundStop();
   if (input.hook_event_name === 'PostToolUse' && input.tool_name === 'TaskStop') return backgroundCancel();
   if (input.hook_event_name === 'PostToolUse') { const launch = backgroundLaunch(); if (launch) return launch; }
-  if (input.hook_event_name === 'UserPromptSubmit') { const response = interactivePrompt(); if (response) return response; }
+  if (input.hook_event_name === 'UserPromptSubmit' && !sameTurn()) { const response = interactivePrompt(); if (response) return response; }
 
   const mode: RoutingMode = rawMode;
 
@@ -826,6 +840,10 @@ export const runHook = async (deps: HookDeps): Promise<HookResult> => {
     if (isTaskNotice()) {
       trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'task_notification', changed_default: false } });
       return skip('task_notification');
+    }
+    if (sameTurn()) {
+      trace?.write('admission_result', { ...base, ...humanInput(), attempted: false, known_not_sent: true, decision: { shape: 'direct', decided: false, reason: 'same_turn', changed_default: false } });
+      return skip('same_turn');
     }
 
     let shape: ExecutionShape = 'direct';

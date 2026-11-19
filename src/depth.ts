@@ -32,6 +32,12 @@ const MODEL_COMMAND_MARKER = Buffer.from('<command-name>/model</command-name>');
 /** Only something shaped like a model ID leaves this reading; any other text in that field stays in the transcript. */
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/[\]-]{0,127}$/;
 
+/**
+ * The host writes an assistant row of its own, with zeroed usage, for each tool call a Code Mode script makes (2.1.327).
+ * It is not an API request: it carries no depth and does not count as one.
+ */
+const SYNTHETIC_MODEL = '<synthetic>';
+
 type UsageLine = { tokens: number; model: string | null };
 
 /**
@@ -50,7 +56,7 @@ const readUsageLine = (line: Buffer): UsageLine | null => {
   }
   if (!isRecord(entry) || entry['isSidechain'] === true) return null;
   const message = entry['message'];
-  if (!isRecord(message)) return null;
+  if (!isRecord(message) || message['model'] === SYNTHETIC_MODEL) return null;
   const usage = message['usage'];
   if (!isRecord(usage)) return null;
   let total = 0;
@@ -196,7 +202,7 @@ export const readTurnProgress = (path: string | null | undefined, promptId: stri
     const message = isRecord(row['message']) ? row['message'] : null;
     const content = message?.['content'];
     if (row['type'] === 'assistant') {
-      if (typeof message?.['id'] === 'string') pending.push(message['id']);
+      if (typeof message?.['id'] === 'string' && message['model'] !== SYNTHETIC_MODEL) pending.push(message['id']);
       if (Array.isArray(content) && content.some((b) => isRecord(b) && b['type'] === 'tool_use' && b['name'] === 'Agent')) pendingAgent = true;
       return false;
     }

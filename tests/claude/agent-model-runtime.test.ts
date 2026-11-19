@@ -31,7 +31,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
     { scope: 'worker', selected: 'claude-fable-5-2', actual: 'claude-fable-5-2', effort: 'max', allowFable: true },
     // `actual` is the role Jev picks; `cost` is the switch cost guard's call on it, and a held switch runs on Opus. A
     // session's first turn has no observed prefix, so its downgrade is held; a later move over this tiny prefix repays its
-    // cache write within a turn's requests (#271).
+    // cache write within the two requests a switch is held to serve (`STRETCH_FEWEST`), at the fixture's 200-token output.
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, cost: 'cost_unknown_hold' },
     { scope: 'root', selected: 'claude-haiku-5-5', actual: 'claude-haiku-5-5', effort: 'medium', allowFable: false, cost: 'cost_unknown_hold' },
     { scope: 'root', selected: 'claude-sonnet-5-5', actual: 'claude-sonnet-5-5', effort: 'high', allowFable: false, probability: .7, cost: 'cost_unknown_hold' },
@@ -94,7 +94,7 @@ describe.skipIf(process.env['JEV_CLAUDE_E2E'] !== '1')('installed Claude Gate B 
       event('message_start', { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1 } } } });
       event('content_block_start', { type: 'content_block_start', index: 0, content_block: tool ? { type: 'tool_use', id: 'fixture_dispatch', name: scenario.scope === 'root' || typeof (tool as Record<string, unknown>).command === 'string' ? 'Bash' : 'Agent', input: {} } : { type: 'text', text: '' } });
       event('content_block_delta', { type: 'content_block_delta', index: 0, delta: tool ? { type: 'input_json_delta', partial_json: JSON.stringify(tool) } : { type: 'text_delta', text } });
-      event('content_block_stop', { type: 'content_block_stop', index: 0 }); event('message_delta', { type: 'message_delta', delta: { stop_reason: tool ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }); event('message_stop', { type: 'message_stop' }); res.end();
+      event('content_block_stop', { type: 'content_block_stop', index: 0 }); event('message_delta', { type: 'message_delta', delta: { stop_reason: tool ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 200 } }); event('message_stop', { type: 'message_stop' }); res.end();
     };
     const api = createServer(async (req, res) => {
       const chunks: Buffer[] = []; for await (const part of req) chunks.push(Buffer.from(part)); let raw = Buffer.concat(chunks); if (req.headers['content-encoding'] === 'gzip') raw = gunzipSync(raw);

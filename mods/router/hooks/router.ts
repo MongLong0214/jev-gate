@@ -393,6 +393,8 @@ interface TurnRouting {
   stopReason?: string;
   modelStopped: boolean;
   effortStopped: boolean;
+  /** A step of a drifted turn went out without the native pair restored: the rest of the turn keeps what it went out on. */
+  restoreStopped: boolean;
   /** The effort the conversation's cached prefix was last sent at, while that cache is still warm; null when cold. */
   warmEffort: SymbolicEffort | null;
   /**
@@ -719,10 +721,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const floored = (patch: RoutingPatch) => cachePatch(t.baseline, preserves ? null : t.warmEffort, patch);
       // The host sends a turn's effort from its first request to its last, so a switched turn that returns to the
       // baseline model returns on the switch's effort: a switch whose effort is below the one the baseline itself
-      // would run this turn is held.
+      // would run this turn is held. So is one above it that its price decided, as a return would run the baseline at an
+      // output cost that price leaves out; an upgrade is never held for cost.
       const kept = result.ok ? floored(keepModelPair(offer, result.answers).patch as RoutingPatch) : null;
       const switched = floored(decision.patch as RoutingPatch);
-      const { hold, reason: costReason } = decision.patch.model && kept && !priced.hold && belowEffort(turnEffort(t.baseline, switched.patch), turnEffort(t.baseline, kept.patch)) ? { hold: true, reason: 'return_effort' } : priced;
+      const returnEffort = kept && (belowEffort(turnEffort(t.baseline, switched.patch), turnEffort(t.baseline, kept.patch)) || priced.reason !== 'upgrade_allowed' && belowEffort(turnEffort(t.baseline, kept.patch), turnEffort(t.baseline, switched.patch)));
+      const { hold, reason: costReason } = decision.patch.model && returnEffort && !priced.hold ? { hold: true, reason: 'return_effort' } : priced;
       const cached = hold && kept ? kept : switched;
       if (!live.aborted && !t.stopped) t.patch = cached.patch;
       if (!Object.keys(t.patch).length) t.stopped = true;
@@ -766,7 +770,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
     // A switch that ended after the turn's first request goes on with the turn's effort: the host keeps sending the
     // effort of that first request whatever a later step names, and the decision took the switch only where that effort
-    // is not below the baseline's own. One that ended before any request was sent leaves the turn native.
+    // is not below the baseline's own, nor above it short of an upgrade. One that ended before any request was sent
+    // leaves the turn native.
     const edit = !t.effortStopped ? t.patch.effortEdit : undefined;
     const effort = edit?.kind === 'set' && isSymbolicEffort(edit.value) ? edit.value : !t.effortStopped ? t.patch.effort : undefined;
     if (t.patch.model && !model) {
@@ -803,9 +808,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    * conversation already under way (a resume from before this record, or a store that lost it) may have resumed on
    * the Router's last pair, so the host's environment and settings model is native when it names another model, as it
    * is when the turn names none. A stored drift the host's environment or settings name is the person's choice. Null
-   * starts from the turn's pair.
+   * starts from the turn's pair. `read` is false when a read failed or outlasted the step, so null says nothing.
    */
-  const rootRecordAtStart = async (engine: RouterEngine, incoming: RootPair, signal: AbortSignal, underWay = false): Promise<{ record: RootRecord | null; saved: string; hostModel: string | undefined; cache: RootCache | null }> => {
+  const rootRecordAtStart = async (engine: RouterEngine, incoming: RootPair, signal: AbortSignal, underWay = false): Promise<{ record: RootRecord | null; saved: string; hostModel: string | undefined; cache: RootCache | null; read: boolean }> => {
     let saved = '';
     let hostModel: string | undefined;
     let cache: RootCache | null = null;
@@ -825,9 +830,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       return { native: { model, effort: effort ?? null }, routed: null, drift: incoming, origin: 'host_environment' };
     };
     try {
-      return { record: await record(), saved, hostModel, cache };
+      return { record: await record(), saved, hostModel, cache, read: true };
     } catch {
-      return { record: null, saved, hostModel, cache: null };
+      return { record: null, saved, hostModel, cache: null, read: false };
     }
   };
   /**
@@ -874,7 +879,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
   /** A drifted turn runs on the session's own pair wherever the Router leaves it, routed or not, while that pair may be sent. */
   const restoreNative = (e: TurnStepEvent, patch: RoutingPatch | null, allowed: boolean): RoutingPatch | null => {
     const t = turns.get(e.turnId);
-    if (!allowed || !t || t.baselineSource === 'turn.step' || e.model !== t.incomingModel || e.effort !== t.incomingEffort) return patch;
+    if (!t || t.baselineSource === 'turn.step') return patch;
+    // A step that goes out unrestored is never followed by one that switches the turn mid-way.
+    if (!allowed || t.restoreStopped || e.model !== t.incomingModel || e.effort !== t.incomingEffort) { t.restoreStopped = true; return patch; }
     const model = patch?.model ?? t.baseline.model;
     const effort = t.baseline.effort;
     const keepsEffort = patch?.effort === undefined && patch?.effortEdit === undefined;
@@ -911,7 +918,6 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const generation = rootGeneration;
     const resumed = !rootLoaded;
     if (resumed) {
-      rootLoaded = true;
       // #263: a new session's first request already carries the host's context messages (17 on 2.1.303), so the count
       // cannot tell it from a resume; a prior assistant message can. A failed read is a new conversation: its pair stands.
       const read = engine.transcript ? await within(engine.transcript().catch(() => null), signal) : null;
@@ -920,7 +926,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const hits = engine.effortCacheHits ? await within(engine.effortCacheHits().catch(() => []), signal) : [];
       const context = engine.loadContext ? parseRootContext(await within(engine.loadContext().catch(() => null), signal)) : null;
       // A newer root turn or session began while the read waited: it owns the record now, and this turn stays native.
+      // The record stays unread, so the next turn reads it again rather than take its own pair, perhaps the Router's
+      // restored one, as native.
       if (signal.aborted || generation !== rootGeneration) return null;
+      // A record that could not be read is never written over from this turn's pair: the turn stays native.
+      if (!start.read) { log(engine, { event: 'root', turn: e.turnId, skipped: 'record_unread' }); return null; }
+      rootLoaded = true;
       // The last process's context goes before this turn's request, which turnStart already holds.
       if (context && read && read.length >= context.transcript) {
         lastReply ??= context.reply;
@@ -977,6 +988,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       stopped: false,
       modelStopped: false,
       effortStopped: false,
+      restoreStopped: false,
       // Explicit zero cache usage is cold. Missing usage remains unknown; it
       // must not be converted to zero or waive the existing cache protection.
       warmEffort: (() => { const v = rootCaches.get(cacheId(native.model), String(cacheEpoch));
@@ -1037,7 +1049,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const started = engine.now();
     const binding = { scope: 'child', agent_id: id, turn: e.turnId, index: e.index };
     const result = await client.assess(engine, key.key, state, offer.questions, live,
-      usage => log(engine, { event: 'late', ...binding, usage: loggable(usage) }),
+      usage => log(engine, { event: 'late', ...binding, jev_model: JEV_MODEL, usage: loggable(usage) }),
       () => log(engine, { event: 'request', ...binding, sent: true }));
     const decision = result.ok ? selectPair(offer, result.answers) : { patch: {} as RoutingPatch, reasons: { model: 'not_asked', effort: 'not_asked' }, diagnostics: null };
     let patch = decision.patch as RoutingPatch;
@@ -1189,6 +1201,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
     if (!rootEnabled) return;
     const t = turns.get(e.turnId);
+    // The host sent this step on its own pair, so a drifted turn is not restored at a later one.
+    if (t && terminal) t.restoreStopped = true;
     if (!t || t.stopped) return;
     t.stopped = true;
     t.controller.abort();
@@ -1329,7 +1343,9 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
     const finishedAt = engine.now();
     let observation: RouterObservation | null = null;
-    try { if (result?.usage) observation = await engine.observation?.(e.agentId, requestStartedAt, result.usage, finishedAt) ?? null; } catch { /* Observation cannot replay a completed native request. */ }
+    // The host waits on this. A child's state reads only the counts, which the observation does not change, so its record
+    // waits for the hook's deferred reconcile instead; only the root's cache view takes the TTL from it.
+    try { if (result?.usage && e.agentId === undefined) observation = await engine.observation?.(e.agentId, requestStartedAt, result.usage, finishedAt) ?? null; } catch { /* Observation cannot replay a completed native request. */ }
     // Keep the host's return untouched. Only the accounting/cache view gains the linked transcript's TTL counters.
     const accounted = result && observation ? { ...result, usage: { ...result.usage!, cache_creation: { ephemeral_5m_input_tokens: observation.usage.write5m, ephemeral_1h_input_tokens: observation.usage.write1h } } } : result;
     if (e.agentId === undefined) observeStep(engine, e, patch, accounted, observation, requestStartedAt, finishedAt);
@@ -1556,7 +1572,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const started = engine.now();
     // The `spawn` receipt is the applied route; a final guard that stops the route leaves this sent intent without one,
     // so its Jev cost reads as unknown rather than none.
-    const result = await client.assess(engine, key.key, state, offer.questions, live, usage => log(engine, { event: 'late', scope: 'spawn', tool_use_id: e.tool_use_id, usage: loggable(usage) }),
+    const result = await client.assess(engine, key.key, state, offer.questions, live, usage => log(engine, { event: 'late', scope: 'spawn', tool_use_id: e.tool_use_id, jev_model: JEV_MODEL, usage: loggable(usage) }),
       () => log(engine, { event: 'request', scope: 'spawn', tool_use_id: e.tool_use_id, sent: true }));
     // The dashboard counts a Jev call by its duration, as for root and child steps (#267).
     const timing = { hook_version: ROUTER_HOOK_VERSION, host_version: hostBase ?? null, duration_ms: Math.max(0, engine.now() - started) };

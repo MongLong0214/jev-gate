@@ -186,7 +186,7 @@ export const buildRestore = (messages: readonly DigestMessage[], requests: reado
   const section = (title: string, lines: string[]): void => { if (lines.length) sections.push(`## ${title}\n${lines.join('\n')}`); };
 
   const failures = head.flatMap((m) => (m.role === 'assistant' ? m.toolUses.filter((u) => u.isError === true) : [])).slice(-3).reverse()
-    .map((u) => take(`[${toolInput(u)}]${u.text ? `\n${u.text.trim()}` : ''}`, FAILURE_CHARS + INPUT_CHARS)).filter(Boolean).reverse();
+    .map((u) => take(`[${clip(toolInput(u), INPUT_CHARS)}]${u.text ? `\n${u.text.trim()}` : ''}`, FAILURE_CHARS + INPUT_CHARS)).filter(Boolean).reverse();
   const allotted = allotRequests(requests, Math.floor(Math.max(0, left) * REQUEST_SHARE));
   const fitted = requests.map((r, i) => (allotted[i] ? take(r, allotted[i]!) : '')).filter(Boolean);
   section('Latest requests (oldest first; excerpts, not the whole conversation)', fitted.map((t) => `▸ ${t}`));
@@ -243,15 +243,16 @@ export const functionPathAsked = (env: Env, session: string, now: number): boole
 };
 
 export interface ClassicDeps { now?: () => number; transport?: Transport; key?: string | undefined; signal?: AbortSignal }
-const nodeTransport: Transport = {
-  fetch: async (url, init) => { const reply = await fetch(url, init); return { status: reply.status, text: await reply.text() }; },
+/** `abandon` ends a request the selection stopped waiting for, so it cannot hold the hook's process open. */
+const nodeTransport = (abandon: AbortSignal): Transport => ({
+  fetch: async (url, init) => { const reply = await fetch(url, { ...init, signal: abandon }); return { status: reply.status, text: await reply.text() }; },
   sleep: (ms, signal) => new Promise((resolve, reject) => {
     const done = () => { signal.removeEventListener('abort', stop); resolve(); };
     const timer = setTimeout(done, ms);
     const stop = () => { clearTimeout(timer); signal.removeEventListener('abort', stop); reject(new Error('aborted')); };
     if (signal.aborted) stop(); else signal.addEventListener('abort', stop, { once: true });
   }),
-};
+});
 
 const record = (writer: TraceWriter | null, session: string, fields: Rec): void => {
   try {
@@ -260,7 +261,7 @@ const record = (writer: TraceWriter | null, session: string, fields: Rec): void 
 };
 
 /** PreCompact: the engine's summarizer instructions, as stdout; the restore is saved for SessionStart. */
-const preCompact = async (input: HookInput, env: Env, config: CompactConfig, deps: ClassicDeps, writer: TraceWriter | null): Promise<string | null> => {
+const preCompact = async (input: HookInput, env: Env, config: CompactConfig, deps: ClassicDeps, transport: Transport, writer: TraceWriter | null): Promise<string | null> => {
   const now = deps.now ?? Date.now;
   const runId = randomUUID();
   const log = (fields: Rec): void => record(writer, input.session, { run_id: runId, stage: 'pre', trigger: input.trigger, mode: config.mode, ...fields });
@@ -287,7 +288,7 @@ const preCompact = async (input: HookInput, env: Env, config: CompactConfig, dep
     try {
       const key = 'key' in deps ? deps.key : resolveApiKey(env);
       const baseline: DigestResult = { digest: '', start: lastAssistant, digestChars: 0, tailChars: 0, tailMessages: 0, headMessages: lastAssistant };
-      const selection = await createCompactSelector(config.jevTimeoutMs ?? 1000)(messages, baseline, key, deps.transport ?? nodeTransport, deps.signal, true);
+      const selection = await createCompactSelector(config.jevTimeoutMs ?? 1000)(messages, baseline, key, transport, deps.signal, true);
       priorities = selection.priorities; jev = selection.reason;
       log({ stage: 'jev', jev_sent: selection.sent, jev_ms: selection.durationMs, jev_model: selection.model, usage: selection.usage, candidates: selection.candidates, available: selection.available, dependencies: selection.priorities.length, selection: selection.reason, selection_ties: selection.ties, selection_validation: selection.validation });
     } catch { jev = 'error'; log({ stage: 'jev', jev_sent: null, selection: 'error' }); }
@@ -308,11 +309,16 @@ const restoreContext = (input: HookInput, env: Env, config: CompactConfig, deps:
   if (input.agent) return null;
   const now = (deps.now ?? Date.now)();
   const state = readState(env, input.session);
-  if (!state?.restore || state.transcript !== input.transcript || state.shadow || state.restored_chars !== null || now - state.at > STATE_MAX_AGE_MS) return null;
+  // No restore saved: PreCompact deferred (its record says why) or this one was already given.
+  if (!state?.restore) return null;
   // A compaction the Mod answered after this one was saved is not this one's.
-  try { if (statSync(askedPath(env, input.session)).mtimeMs >= state.at) return null; } catch { /* no marker */ }
-  if (state.restore.length > shares(config.budgetChars).restore) return null;
-  try { writePrivateJson(statePath(env, input.session), { ...state, restore: null, restored_chars: state.restore.length }); } catch { return null; }
+  const answered = (): boolean => { try { return statSync(askedPath(env, input.session)).mtimeMs >= state.at; } catch { return false; } };
+  const skipped = state.shadow ? 'shadow' : state.transcript !== input.transcript ? 'transcript' : now - state.at > STATE_MAX_AGE_MS ? 'stale'
+    : answered() ? 'function_path' : state.restore.length > shares(config.budgetChars).restore ? 'over_share' : null;
+  // The record also shows that this compaction finished: a PreCompact with neither this nor PostCompact was never applied.
+  const skip = (reason: string): null => { record(writer, input.session, { stage: 'restore', skipped: reason, restore_chars: 0 }); return null; };
+  if (skipped) return skip(skipped);
+  try { writePrivateJson(statePath(env, input.session), { ...state, restore: null, restored_chars: state.restore.length }); } catch { return skip('state'); }
   record(writer, input.session, { stage: 'restore', restore_chars: state.restore.length });
   return JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: state.restore } });
 };
@@ -339,11 +345,14 @@ export const runClassicCompact = async (stdin: string, env: Env, deps: ClassicDe
     if (!input || !config || !config.enabled) return null;
     const opened = openTraceDir(claudeTraceDir(env), env);
     const writer = opened.ok ? opened.writer : null;
+    // A Jev request still open when the hook is done is abandoned: its usage stays unknown (`jev_sent` with no usage).
+    const abandon = new AbortController();
     try {
-      if (input.event === 'PreCompact') return await preCompact(input, env, config, deps, writer);
+      if (input.event === 'PreCompact') return await preCompact(input, env, config, deps, deps.transport ?? nodeTransport(abandon.signal), writer);
       if (input.event === 'SessionStart' && input.source === 'compact') return restoreContext(input, env, config, deps, writer);
       if (input.event === 'PostCompact') return postCompact(input, env, deps, writer);
     } finally {
+      abandon.abort();
       writer?.finish?.({ producer: 'classic', session_id: input.session, hook_event_name: input.event });
     }
   } catch { /* the engine's compaction goes on as it was */ }
@@ -361,7 +370,10 @@ if (isMainModule()) {
     let text = '';
     try { for await (const chunk of process.stdin) { text += String(chunk); if (text.length > 1024 * 1024) break; } } catch { /* an unreadable stdin is no input */ }
     const out = await runClassicCompact(text, process.env);
-    if (out) process.stdout.write(out + '\n');
+    // The host reads the output when the process ends and drops it from one it kills at the hook timeout, so the process
+    // ends as soon as the output is flushed: nothing left running can hold it open.
     process.exitCode = 0;
+    if (out) process.stdout.write(out + '\n', () => process.exit(0));
+    else process.exit(0);
   })();
 }

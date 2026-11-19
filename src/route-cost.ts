@@ -7,7 +7,7 @@ import { providerContextLimit, providerPrice } from './provider-prices.js';
  * for every model, with no baseline conversation to return to. Null for the same model: an effort change alone kept
  * the cache (read ratio p10 1.00 over 383 same-model effort changes, 2026-10). `added` is the new input the switched
  * request carries past the observed prefix, such as the person's prompt; it sets the price band, not the token counts.
- * `horizon` is the requests the target is expected to serve. Over a turn each produces the latest observed output; one
+ * `horizon` is the most requests the target can serve; the hold is judged over `STRETCH_FEWEST` of them. Over a turn each produces the latest observed output; one
  * request alone (Codex, a spawn) may produce none to that, so its worst case counts no output saving.
  */
 export const routeCost = (host: 'claude' | 'codex', from: string, to: string, cache: ModelCache | undefined, epoch: string, now: number, added = 1, horizon = 1) => {
@@ -32,7 +32,7 @@ export const routeCost = (host: 'claude' | 'codex', from: string, to: string, ca
   // Claude's latest observed write TTL supplies the active context's write policy for a model not yet seen. Cache
   // expiry still uses each model's own observation; absent TTL retains the conservative price range.
   return { ...switchCost({ prefix, targetHeld: size(target) ?? 0, baseline: fromPrice, target: toPrice, baselineCache: cacheState(baseline, now), targetCache,
-    baselineWrite: writeRate(fromPrice, ttl(baseline) ?? (host === 'claude' ? ttl(latest) : null)), targetWrite: writeRate(toPrice, ttl(target) ?? (host === 'claude' ? ttl(latest) : null)), outputRange: latest?.output != null ? [horizon > 1 ? latest.output : 0, latest.output] : null, returns: cache !== undefined, horizon }),
+    baselineWrite: writeRate(fromPrice, ttl(baseline) ?? (host === 'claude' ? ttl(latest) : null)), targetWrite: writeRate(toPrice, ttl(target) ?? (host === 'claude' ? ttl(latest) : null)), outputRange: latest?.output != null ? [horizon > 1 ? latest.output : 0, latest.output] : null, returns: cache !== undefined, horizon: [Math.min(STRETCH_FEWEST, horizon), horizon] }),
     evidence: { baseline: seen(baseline), target: seen(target), write_ttl_source: host === 'claude' && ttl(latest) !== null ? 'observed_context' : 'per_model_or_unknown', prefix_source: prefix === null ? 'unobserved' : latest === baseline ? 'baseline' : latest === target ? 'target' : latest!.model },
     output_basis: horizon > 1 ? 'previous_output' : 'scenario_zero_to_previous_output', future_output: 'unknown', new_content: added > 1 ? 'price_band_only' : 'unobserved_not_counted', jev_cost: 'separate_observed_usage',
     scope: horizon > 1 ? 'turn_horizon' : 'next_request_scenario', horizon, return_horizon: 'request_after_horizon_may_return_to_baseline', return_cost: 'in_delta_usd', handoff_cost: 'unknown', whole_session_cost: 'unknown' };
@@ -45,6 +45,13 @@ export const routeCost = (host: 'claude' | 'codex', from: string, to: string, ca
  * rises more than 0.6%; 6 to 10 let one session rise 3%, 15 one 13%, no guard (as v0.8.22) one 27.5%.
  */
 export const TURN_HORIZON = 5;
+/**
+ * The fewest requests a root switch is held to serve: 5 is the most a switch can serve before its return (#274), not what
+ * it does. Over 48 hours (2026-11-17 to 11-19) 16 switches to a cold target served 1,1,1,1,2,3,3,3,3,4,5,5,5,5,5,5
+ * requests (p25 2), and every one of 8 Opus to Haiku stretches cost more than its estimate over 5. Over 2, 7 of them
+ * hold and the one that saved still moves; all 16 together avoid an estimated $2.81 at list prices.
+ */
+export const STRETCH_FEWEST = 2;
 /**
  * #274: a request reads an earlier cache entry only from at most 20 blocks back, so a model's cache, live by its TTL, is
  * out of reach once enough requests to other models come between. Over 100 returns to a model within 55 minutes (three

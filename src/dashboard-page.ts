@@ -492,7 +492,7 @@ context_unverified:['문맥 호환 미확인','Context compatibility unverified'
 no_record:['기록 없음','No record'],
 no_cache:['캐시 없음','No cache'],
 shorter_request:['이전보다 짧은 요청','Shorter request'],
-task_notification_without_request:['요청 없는 작업 알림','Task notification without request'],
+task_notification_without_request:['요청 없는 작업 알림','Task notification without request'],record_unread:['저장 기록 판독 실패','Stored record not read'],
 no_task_text:['사용자 작업 입력 없음','No user task text'],
 first_step_native:['첫 단계 네이티브 유지','Native first step'],
 next_turn:['다음 턴','Next turn'],
@@ -615,7 +615,7 @@ admission_delivery_failed:['필수 원문 전달 불가','Required text cannot b
 prompt_id_absent:['프롬프트 식별자 없음','No prompt id'],
 depth_unknown:['세션 깊이 미확인','Session depth unknown'],
 depth_below_floor:['세션이 위임 기준보다 얕음','Session below the delegation floor'],
-task_notification:['작업 알림 턴','Task notification turn'],ok:['정상','OK'],invalid:['유효하지 않음','Invalid'],unknown_model:['모델 미확인','Unknown model'],ambiguous:['판정 모호','Ambiguous']};
+task_notification:['작업 알림 턴','Task notification turn'],same_turn:['진행 중인 턴의 입력','Input inside the running turn'],ok:['정상','OK'],invalid:['유효하지 않음','Invalid'],unknown_model:['모델 미확인','Unknown model'],ambiguous:['판정 모호','Ambiguous']};
 const routingReason=value=>value?REASONS[value]?label(...REASONS[value]):label('기록된 사유 · 진단 정보 참고','Recorded reason · see diagnostics'):label('기록 없음','Not recorded');
 const humanText=value=>String(tr(value||'')).split(' · ').map(v=>({single:label('단일 워커','Single worker'),incomplete:label('작업 완료 조건 미충족','Completion conditions not met'),legacy_model:label('이전 모델 기록','Historical model record'),fable_disabled_by_config:label('설정에서 최상위 모델 제외','Frontier model excluded by settings')}[v]||REASONS[v]&&label(...REASONS[v])||(/^[a-z][a-z_]+$/.test(v)&&v.includes('_')?label('추가 진단 기록','Additional diagnostic record'):v))).join(' · ');
 const diagnosticsOf=(s,r,a)=>({host:r?.host,runId:r?.id,recordId:s?.id,sessionId:s?.sessionId,at:s?.at,reason:s?.cause,modelReason:s?.routing?.modelReason,effortReason:s?.routing?.effortReason,source:(s?.details||[]).filter(x=>diagnosticText(x)&&!s.judgements?.some(j=>x.startsWith(j.question+':'))),current:a?.current?{runId:a.current.runId,at:a.current.at}:undefined});

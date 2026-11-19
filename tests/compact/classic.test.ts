@@ -1,4 +1,6 @@
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -256,6 +258,28 @@ describe('classic path: restore', () => {
     expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env, { now: () => Date.now() + 31 * 60_000 })).toBeNull();
   });
 
+  it('a restore it does not give leaves a record of why', async () => {
+    const skipped = (): unknown[] => traces().filter((t) => t['stage'] === 'restore').map((t) => t['skipped']);
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env, { now: () => Date.now() + 31 * 60_000 })).toBeNull();
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact', transcript_path: join(dir, 'other.jsonl') }), env)).toBeNull();
+    const file = join(dir, 'state/jev-gate/compact', files('state/jev-gate/compact')[0]!);
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')) as Rec, restore: 'x'.repeat(shares(8000).restore + 1) }), { mode: 0o600 });
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), { ...env, CLAUDE_PLUGIN_OPTION_COMPACTBUDGETCHARS: '8000' })).toBeNull();
+    writeFileSync(askedPath(env, SESSION), '{}');
+    utimesSync(askedPath(env, SESSION), new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toBeNull();
+    expect(skipped()).toEqual(['stale', 'transcript', 'over_share', 'function_path']);
+    rmSync(askedPath(env, SESSION));
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), { ...env, CLAUDE_PLUGIN_OPTION_COMPACTMODE: 'shadow' });
+    expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toBeNull();
+    expect(skipped().at(-1)).toBe('shadow');
+    expect(traces().filter((t) => t['stage'] === 'restore').every((t) => t['restore_chars'] === 0)).toBe(true);
+    // The dashboard says no restore was given, and why; none reads as a restore.
+    const steps = loadActivity({ traceDir: env['JEV_GATE_TRACE_DIR']!, env }).operations.feed.filter((s) => s.feature === 'compact' && s.summary.startsWith('보존 문맥 복원'));
+    expect(steps.map((s) => s.summary).sort()).toEqual(['stale', 'transcript', 'over_share', 'function_path', 'shadow'].map((r) => `보존 문맥 복원 안 함 · ${r}`).sort());
+  });
+
   it('PostCompact records the summary against the budget and clears the state', async () => {
     await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
     await runClassicCompact(input('SessionStart', { source: 'compact' }), env);
@@ -299,6 +323,17 @@ describe('classic path: restore', () => {
     expect(restored).toContain('▸ Rename parseRow to readRow in src/rows.ts and keep the tests green.');
     expect(restored).not.toContain('b6w41xrqn');
     expect(restored).not.toContain('This session is being continued');
+  });
+
+  it('a request typed with a pasted image is the latest request: its text is restored and sent, the image is not', async () => {
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
+    write([...session(), ...call(101, 'ok'), { type: 'user', uuid: 'img', promptSource: 'typed', message: { role: 'user', content: [{ type: 'text', text: 'Now fix the layout in this screenshot.' }, image] } }, ...call(102, 'latest exchange')]);
+    const jev = fakeJev((ids) => Object.fromEntries(ids.map((id) => [id, 'unrelated'])));
+    await runClassicCompact(input('PreCompact', { trigger: 'auto' }), { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true' }, { transport: jev.transport, key: 'test-key-123' });
+    expect(JSON.parse(jev.calls[0]!).state.current_task).toBe('Now fix the layout in this screenshot.');
+    const restored = await runClassicCompact(input('SessionStart', { source: 'compact' }), env);
+    expect(restored).toContain('▸ Now fix the layout in this screenshot.');
+    expect(restored).not.toContain('iVBORw0KGgo=');
   });
 
   it('#408: a request past 700 and 2,000 characters is restored whole, and Jev is sent it at the outbound bound', async () => {
@@ -392,6 +427,19 @@ describe('classic path: budget', () => {
     }
   });
 
+  it('a failed call keeps its error text when its input is long: the input is cut first', () => {
+    const big = 'const x = 1;\n'.repeat(80);
+    const messages = [
+      { role: 'user' as const, text: 'Refactor the parser.', toolUses: [] },
+      { role: 'assistant' as const, text: '', toolUses: [{ tool_use_id: 't1', tool: 'Edit', input: { file_path: '/r/parse.ts', old_string: big, new_string: big }, text: 'String to replace not found in file.', isError: true }] },
+      { role: 'user' as const, text: '', toolUses: [] },
+      { role: 'assistant' as const, text: 'Retrying.', toolUses: [] },
+    ];
+    const failed = buildRestore(messages, ['Refactor the parser.'], [], RESTORE_CAP)!.split('## Latest failed calls')[1]!;
+    expect(failed).toContain('String to replace not found in file.');
+    expect(failed).toContain('[Edit {"file_path":"/r/parse.ts"');
+  });
+
   it('#408: requests are fitted after the failures, newest whole while it fits, else each its start first, and leave room for the selected results', () => {
     const recs = session(8, 3000);
     const failing = [...call(97, 'E1 ' + 'e'.repeat(2000), true), ...call(98, 'E2 ' + 'e'.repeat(2000), true)];
@@ -474,6 +522,40 @@ describe('classic path: wiring', () => {
     const ours = Object.entries(hooks).flatMap(([event, groups]) => groups.filter((g) => g.hooks.some((h) => h.command.includes('compact-hook.js'))).map((g) => `${event}:${g.matcher ?? '*'}`));
     expect(ours.sort()).toEqual(['PostCompact:*', 'PreCompact:*', 'SessionStart:compact']);
     expect(statSync(new URL('../../scripts/build-claude-compact.mjs', import.meta.url)).isFile()).toBe(true);
+  });
+});
+
+describe('classic path: the hook process', () => {
+  it('a Jev that never answers neither holds the process past its output nor costs the guidance', async () => {
+    // The host drops the output of a hook it kills at its timeout (10 s), so the bundle must end once it has written.
+    const jev = createServer((req) => { req.resume(); });
+    await new Promise<void>((resolve) => jev.listen(0, '127.0.0.1', resolve));
+    try {
+      const bundle = join(dir, 'compact-hook.js');
+      const built = spawnSync(process.execPath, [new URL('../../scripts/build-claude-compact.mjs', import.meta.url).pathname, bundle], { encoding: 'utf8' });
+      expect(built.status, built.stderr).toBe(0);
+      writeFileSync(bundle, readFileSync(bundle, 'utf8').replace('https://api.typesafe.ai/v1/systemone', `http://127.0.0.1:${(jev.address() as { port: number }).port}/jev`));
+      const childEnv: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CLAUDE_|ANTHROPIC_|TYPESAFE_|JEV_|XDG_)/.test(name)));
+      Object.assign(childEnv, { ...env, CLAUDE_PLUGIN_OPTION_COMPACTJEVENABLED: 'true', TYPESAFE_API_KEY: 'fake-local-jev-key' });
+      const started = Date.now();
+      const run = await new Promise<{ code: number | null; out: string; ms: number }>((resolve, reject) => {
+        const child = spawn(process.execPath, [bundle], { env: childEnv });
+        let out = '';
+        child.stdout.on('data', (chunk) => { out += chunk; });
+        const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+        child.on('error', (error) => { clearTimeout(timer); reject(error); });
+        child.on('close', (code) => { clearTimeout(timer); resolve({ code, out, ms: Date.now() - started }); });
+        child.stdin.end(input('PreCompact', { trigger: 'auto' }));
+      });
+      expect(run.out).toContain('jev-gate compact');
+      expect(run.code).toBe(0);
+      expect(run.ms).toBeLessThan(5_000);
+      expect(traces().find((t) => t['guided'] === true)).toMatchObject({ selection: 'timeout' });
+      expect(traces().find((t) => t['stage'] === 'jev')).toMatchObject({ jev_sent: true, usage: null, selection: 'timeout' });
+    } finally {
+      jev.closeAllConnections();
+      jev.close();
+    }
   });
 });
 

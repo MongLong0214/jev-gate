@@ -1,7 +1,10 @@
 import { sameModel } from './claude-models.js';
 import { normalizeUsage, type TokenUsage } from './cost.js';
 
-export const ROUTER_OBSERVATION_WAIT_MS = 1500;
+// The host's response waits on this read (n 1663: p50 135 ms, p90 1563 ms at 1500). Past 300 ms the root's response
+// keeps its effort and TTL unknown in memory: the next switch that turn prices that cache as unknown (a range) until a
+// later response is linked. The trace record still gets them from the hook's --defer reconciliation.
+export const ROUTER_OBSERVATION_WAIT_MS = 300;
 // Leave startup/serialization room beyond the bounded transcript flush wait.
 export const ROUTER_OBSERVATION_PROCESS_MS = ROUTER_OBSERVATION_WAIT_MS + 500;
 

@@ -411,6 +411,21 @@ describe('activity: router_cost', () => {
     expect(withChild.metrics).toMatchObject({ applied: 2, effect: c.metrics?.effect });
   });
 
+  it('subtracts child-step and spawn Jev charges with the root ones, each joined to its own call', () => {
+    const rows = result('claude-haiku-5-5', { input: 0, output: 2000, cache_read: 0, cache_creation: 0 }, 5);
+    const child = { scope: 'child', agent_id: 'a1', turn: 'c1', index: 1 }, spawned = { scope: 'spawn', tool_use_id: 'u1' };
+    const calls = [
+      router('request', { ...child, sent: true }), router('child_route', { ...child, sent: true, jev_model: JEV_MODEL, usage: { input: 1_000_000 } }),
+      router('late', { ...child, jev_model: JEV_MODEL, usage: { input: 1_000_000 } }),
+      router('request', { ...spawned, sent: true }), router('spawn', { tool_use_id: 'u1', scope: 'subagent', sent: true, jev_model: JEV_MODEL, usage: { input: 1_000_000 } }),
+    ];
+    const c = check(run([...rows, ...calls]), 'router_cost');
+    expect(c.message).toContain('minus Jev $0.0840');
+    expect(c.metrics?.effect).toBeCloseTo(-.048);
+    // A child call sent without a receipt is unknown, never free.
+    expect(check(run([...rows, calls[0]!]), 'router_cost').message).toContain('1 Jev calls without recorded cost');
+  });
+
   it.each(['usage', 'model', 'receipt'])('keeps Jev cost unknown without recorded %s', missing => {
     const rows = result('claude-haiku-5-5', { input: 0, output: 2000, cache_read: 0, cache_creation: 0 }, 5), call = rows[0]!;
     Object.assign(call, { sent: true, jev_model: JEV_MODEL, usage: { input: 0 } });
@@ -474,7 +489,21 @@ describe('activity: compact', () => {
   });
 
   const pre = (body: Rec = {}, minutes = 30): Rec => rec('mod_compact', { stage: 'pre', mode: 'active', selection: 'selected', ...body }, minutes);
-  it('fails on a pre with no post', () => expect(check(run([pre()]), 'compact')).toMatchObject({ level: 'fail', message: expect.stringContaining('1 pre without post (sessions s1)') }));
+  it('fails on an applied compaction (its SessionStart recorded) with no post', () => {
+    expect(check(run([pre(), rec('mod_compact', { stage: 'restore' }, 29)]), 'compact')).toMatchObject({ level: 'fail', message: expect.stringContaining('1 pre without post (sessions s1)') });
+    expect(check(run([pre(), rec('mod_compact', { stage: 'restore', skipped: 'stale' }, 29)]), 'compact')).toMatchObject({ level: 'fail', message: expect.stringContaining('1 pre without post (sessions s1)') });
+  });
+  it('a PreCompact the host never applied (an ahead-of-time summary it discarded) is no failure', () => {
+    const c = check(run([pre(), pre({}, 20), rec('mod_compact', { stage: 'restore' }, 19), rec('mod_compact', { stage: 'post' }, 19)]), 'compact');
+    expect(c).toMatchObject({ level: 'ok', message: expect.stringContaining('1 pre the host never applied') });
+    expect(c.message).not.toContain('without post');
+    expect(check(run([pre()]), 'compact')).toMatchObject({ level: 'ok', message: expect.stringContaining('1 pre the host never applied') });
+  });
+  it('counts a skipped restore by its reason, not as a restore', () => {
+    const c = check(run([pre(), rec('mod_compact', { stage: 'restore', skipped: 'stale', restore_chars: 0 }, 29), rec('mod_compact', { stage: 'post' }, 29)]), 'compact');
+    expect(c).toMatchObject({ level: 'warn', message: expect.stringContaining('1 pre / 0 restore / 1 post; 1 without restore (sessions s1); restore skipped stale 1') });
+    expect(c.metrics).toMatchObject({ restored: 0 });
+  });
   it('does not judge a compaction still in flight', () => expect(level([pre({}, 1)], 'compact')).toBe('ok'));
   it('is ok for a full pre / restore / post', () => expect(level([pre(), rec('mod_compact', { stage: 'restore' }, 29), rec('mod_compact', { stage: 'post' }, 29)], 'compact')).toBe('ok'));
   it('does not let a recent session restore hide an older missing restore', () => {

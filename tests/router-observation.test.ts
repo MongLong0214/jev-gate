@@ -78,7 +78,7 @@ describe('Router transcript evidence', () => {
     writeFileSync(join(temp, 'projects', '-Users-a-other', `${id}.jsonl`), '');
     expect(transcriptOf(id, env)).toBeNull();
   });
-  it.each(['root', 'child', 'new_file'])('links %s evidence flushed after the old 300 ms window through the real helper process', async kind => {
+  it.each(['root', 'child', 'new_file'])('links %s evidence flushed within the 300 ms window through the real helper process', async kind => {
     temp = mkdtempSync(join(tmpdir(), 'jev-router-delayed-'));
     const project = join(temp, 'projects', 'repo'); mkdirSync(project, { recursive: true });
     const path = join(project, 'session.jsonl'), agent = kind === 'child' ? 'child' : '';
@@ -88,7 +88,7 @@ describe('Router transcript evidence', () => {
       writeFileSync(path, ''); mkdirSync(join(project, 'session', 'subagents'), { recursive: true });
       writeFileSync(file, lines(evidence.slice(0, 1)));
     }
-    const timer = setTimeout(() => writeFileSync(file, lines(evidence)), kind === 'new_file' ? 1100 : 800);
+    const timer = setTimeout(() => writeFileSync(file, lines(evidence)), kind === 'new_file' ? 200 : 150);
     try {
       const { stdout } = await exec(process.execPath, [join(bundleDir, 'observe.mjs'), 'session', agent, String(since), JSON.stringify(raw)], { env: { ...process.env, CLAUDE_CONFIG_DIR: temp }, timeout: 2500 });
       expect(JSON.parse(stdout)).toMatchObject({ request: 'request-1', effort: 'xhigh', usage: { write1h: 20 } });
@@ -100,7 +100,7 @@ describe('Router transcript evidence', () => {
     const project = join(temp, 'projects', 'repo'); mkdirSync(project, { recursive: true });
     const path = join(project, 'session.jsonl'), evidence = rows();
     if (kind === 'ambiguous') writeFileSync(path, lines([...evidence, { ...evidence[0], id: 'request-2' }, { ...evidence[1], requestRef: 'request-2' }]));
-    const timer = kind === 'past_deadline' ? setTimeout(() => writeFileSync(path, lines(evidence)), 2200) : undefined;
+    const timer = kind === 'past_deadline' ? setTimeout(() => writeFileSync(path, lines(evidence)), 800) : undefined;
     try {
       const { stdout } = await exec(process.execPath, [join(bundleDir, 'observe.mjs'), 'session', '', String(since), JSON.stringify(raw)], { env: { ...process.env, CLAUDE_CONFIG_DIR: temp }, timeout: 2000 });
       expect(JSON.parse(stdout)).toBeNull();

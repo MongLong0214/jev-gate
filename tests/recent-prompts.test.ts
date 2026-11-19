@@ -33,12 +33,14 @@ describe('shared human input classification and selection', () => {
       user(notice, { promptSource: 'system', origin: { kind: 'task-notification', producer: 'session-task', runId: 'r' }, queueTranscriptOnly: true }),
       user('summary', { isCompactSummary: true }), user('meta', { isMeta: true }), user('sidechain', { isSidechain: true }),
       user('<command-name>/model</command-name>'), user('[Request interrupted by user]'),
-      user([{ type: 'tool_result', content: 'out' }]), user([{ type: 'text', text: 'with image' }, { type: 'image' }]),
+      user([{ type: 'tool_result', content: 'out' }]), user([{ type: 'text', text: 'with result' }, { type: 'tool_result', content: 'out' }]), user([{ type: 'image' }]),
       user('scheduled', { promptSource: 'system' }), user('peer', { origin: { kind: 'peer' } }),
       { type: 'attachment', attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: notice } },
       { type: 'queue-operation', operation: 'enqueue', content: notice },
     ]) expect(humanInputText(row)).toBeNull();
     expect(humanInputText(user([{ type: 'text', text: 'blocks ' }, { type: 'text', text: 'joined' }]))).toBe('blocks \njoined');
+    // A request typed with a pasted image is a request: its text counts and the image is dropped.
+    expect(humanInputText(user([{ type: 'text', text: 'fix this layout' }, { type: 'image', source: { type: 'base64', data: 'AAAA' } }], { promptSource: 'typed' }))).toBe('fix this layout');
   });
 
   it('filters secrets and host commands, keeps the latest bounded requests and clips long input', () => {

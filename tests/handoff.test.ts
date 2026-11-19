@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { delegationModel, handoffBreakEven, handoffModel, HANDOFF_ROOT_REQUESTS } from '../src/admission.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { readTurnProgress } from '../src/depth.js';
+import { readSessionDepth, readTurnProgress } from '../src/depth.js';
 import { runHook, type HookResult } from '../src/hook.js';
 import { newGeneration, readJob, updateJob } from '../src/job.js';
 
@@ -58,6 +58,13 @@ describe('readTurnProgress', () => {
     expect(readTurnProgress(p, 'p2')).toMatchObject({ ok: true, requests: 2, prompt: 'run the stats' });
   });
 
+  it('does not count the host’s own rows for a Code Mode script’s tool calls, nor read the depth from one', () => {
+    const synthetic = (id: string, tool = 'Read') => ({ type: 'assistant', isVirtual: true, message: { id, model: '<synthetic>', role: 'assistant', content: [{ type: 'tool_use', id: `repl_${id}`, name: tool, input: {} }], usage: { cache_read_input_tokens: 0, cache_creation_input_tokens: 0, input_tokens: 0 } } });
+    const p = write([prompt('p2', 'go'), request('a'), synthetic('s1'), synthetic('s2'), result('p2'), request('b'), synthetic('s3', 'Agent')]);
+    expect(readTurnProgress(p, 'p2')).toMatchObject({ ok: true, requests: 2, delegated: true, depth: DEPTH });
+    expect(readSessionDepth(p)).toMatchObject({ ok: true, tokens: DEPTH });
+  });
+
   it('is unknown when the turn’s start cannot be reached or nothing carries usage', () => {
     expect(readTurnProgress(write([request('a'), result('p2'), request('b')]), 'p2')).toMatchObject({ ok: false });
     expect(readTurnProgress(write([prompt('p2', 'go')]), 'p2')).toMatchObject({ ok: false });
@@ -100,6 +107,17 @@ describe('PreToolUse handoff offer (#356)', () => {
     expect(context(offered)['additionalContext']).toContain('cheaper when about 8 or more steps of work remain');
     const state = readJob(env, 's1');
     expect(state.ok && state.value?.current.handoff_offered).toBe(true);
+    expect(await pre(env, turn(20))).toMatchObject({ kind: 'skip', stdout: null });
+  });
+
+  it('stays offered once when a prompt is delivered inside the turn', async () => {
+    const env = direct(makeEnv());
+    expect((await pre(env, turn(8))).kind).toBe('context');
+    const generation = readJob(env, 's1');
+    // A queued message or a Code Mode script result: the running turn's prompt_id again (2.1.327).
+    const delivered = await runHook({ env, stdin: Readable.from([JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's1', prompt_id: 'p2', prompt: '<event kind="repl-eval" eval="3"><result>ok</result></event>', transcript_path: turn(9) })]) });
+    expect(delivered).toMatchObject({ kind: 'skip', code: 'same_turn', stdout: null });
+    expect(readJob(env, 's1')).toEqual(generation);
     expect(await pre(env, turn(20))).toMatchObject({ kind: 'skip', stdout: null });
   });
 

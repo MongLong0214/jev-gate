@@ -126,6 +126,8 @@ describe('dashboard rebuild sharing (#210)', () => {
       const trace = make(), handler = activityHandler({ traceDir: trace, env: { HOME: make(), JEV_GATE_STATE_DIR: make() } });
       writeFileSync(join(trace, 'a.json'), JSON.stringify({ phase: 'admission_result', session_id: 's', written_at: new Date(+now - 86_400_000 + 1000).toISOString(), decision: { shape: 'orchestrated' } }));
       writeFileSync(join(trace, 'c.json'), JSON.stringify({ phase: 'mod_compact', stage: 'pre', mode: 'active', session_id: 'c', written_at: now.toISOString() }));
+      // Its SessionStart(compact) restore shows the host applied it, so a PostCompact missing past the grace is a failure.
+      writeFileSync(join(trace, 'd.json'), JSON.stringify({ phase: 'mod_compact', stage: 'restore', restore_chars: 100, session_id: 'c', written_at: now.toISOString() }));
       const facts = () => (JSON.parse(handler.full()!.json) as { activity24h: { all: Array<{ feature: string; level: string; metrics: { fired: number } }> } }).activity24h.all;
       const first = await handler.load();
       expect(facts().find(c => c.feature === 'admission')?.metrics.fired).toBe(1);
