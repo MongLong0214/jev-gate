@@ -93,6 +93,14 @@ describe('official model freshness CI', () => {
         expect(() => priceMetadata({ ...raw, [key]: raw[key] + surcharge }, []), key + ': ' + surcharge).toThrow(/long-context price contract/);
       }
     }
+    // A recognized start covers neither the rest of its line nor a later line that names a quantity of input tokens.
+    const full = ' for the full request.\n';
+    for (const known of ['P' + rule.slice(1), reworded]) for (const key of Object.keys(raw)) {
+      for (const surcharge of [known.replace(full, ', except that input and cache rates triple above 500K input tokens.\n'), known.replace(full, full.trimEnd() + ' Above 500K input tokens the rates triple.\n'), known + 'Above 500K input tokens, input and cache rates triple.\n']) {
+        expect(surcharge).not.toEqual(known);
+        expect(() => priceMetadata({ ...raw, [key]: raw[key] + surcharge }, []), key + ': ' + surcharge).toThrow(/long-context price contract/);
+      }
+    }
     expect(priceMetadata(raw, [])[0].bands).toEqual([{ input: 2, read: 0.1, write: 2.5, output: 10, maxPrompt: 922000 }]);
   });
   it.each([

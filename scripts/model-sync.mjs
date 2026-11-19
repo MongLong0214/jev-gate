@@ -212,11 +212,11 @@ export function priceMetadata(raw, official) {
     const base = { input: value('Input'), read: value('Cached input'), write: value('Cache writes'), output: value('Output') };
     requireFact(model && context && Object.values(base).every(v => Number.isFinite(v) && v >= 0), `Unknown OpenAI price contract: ${key}`);
     const limit = Number(context.replaceAll(',', ''));
-    // The same surcharge in both publisher wordings: "prompts with more than … are priced at 2x …" and, from the 6.2 pages, "requests with more than …, … rates double …".
-    const rule = /\b(?:(?:API )?prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output|requests with more than (\d+)K input tokens, input and cache rates double and output costs 1\.5 times the short-context rate)/gi;
-    const surcharges = [...text.matchAll(rule)];
-    // A recognized rule does not cover another beside it: what is left of the page without it must not state a surcharge.
-    requireFact(surcharges.length <= 1 && !/\bprompts\b[^\n]*\bpriced\b|\bmore than \d+K input tokens\b/i.test(text.replace(rule, '')), `Unknown long-context price contract: ${key}`);
+    // The same surcharge in both publisher wordings, each a whole line: "prompts with more than … are priced at 2x …" and, from the 6.2 pages, "For requests with more than …, … rates double …".
+    const rule = /^(?:- )?(?:(?:API )?prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output|For requests with more than (\d+)K input tokens, input and cache rates double and output costs 1\.5 times the short-context rate) for the full request\.$/i;
+    // A line that prices prompts or names a quantity of input tokens states a surcharge. It must be that rule and nothing more: a recognized start covers neither the rest of its line nor another line.
+    const surcharges = text.split('\n').filter(line => /\bprompts\b.*\bpriced\b|\b\d[\d,.]*[KM]? input tokens\b/i.test(line)).map(line => rule.exec(line.trim()));
+    requireFact(surcharges.length <= 1 && surcharges.every(Boolean), `Unknown long-context price contract: ${key}`);
     const long = surcharges[0];
     const bands = long ? [{ ...base, maxPrompt: Number(long[1] ?? long[2]) * 1000 }, { maxPrompt: limit, input: base.input * 2, read: base.read * 2, write: base.write * 2, output: base.output * 1.5 }] : [{ ...base, maxPrompt: limit }];
     add('codex', model, SOURCES[key].replace(/\.md$/, ''), bands);
