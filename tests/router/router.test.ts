@@ -1834,9 +1834,10 @@ describe('root effort and the prompt cache', () => {
   // the record named the baseline's.
   describe('a switched turn that returns to its baseline', () => {
     const CAPABLE = { host: '2.1.293', connection: 'api-key', excluded: false, hipaa: false } as const;
-    const setup = async (capable: boolean) => {
+    const SWITCH = answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: ['fast', .99], effort: ['low', .99] });
+    const setup = async (capable: boolean, respond: Responder = SWITCH) => {
       const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
-      const f = fakeEngine({ hostBase: '2.1.293', respond: answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: ['fast', .99], effort: ['low', .99] }) });
+      const f = fakeEngine({ hostBase: '2.1.293', respond });
       f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
       f.engine.currentEffort = async () => undefined;
       if (capable) f.engine.cacheCapability = async () => CAPABLE;
@@ -1875,6 +1876,18 @@ describe('root effort and the prompt cache', () => {
       expect(sent).toEqual(Array(7).fill('s:high'));
       expect(f.logs.find(l => l.event === 'root' && l.turn === 'long')).toMatchObject({ cost_reason: 'return_effort', reasons: { model: 'return_effort' },
         proposed_patch: expect.objectContaining({ model: 'claude-haiku-5-5', effort: 'low' }), patch: {}, held_for_cache: 'low' });
+    });
+    it('holds a switch whose effort is above the one the baseline itself would run', async () => {
+      // Haiku (effort_0) keeps the turn's high; Sonnet itself would run low, so a return on high would cost more than it.
+      const { f, sent } = await setup(true, async req => {
+        const reply = await SWITCH(req);
+        const body = JSON.parse(reply.text);
+        body.answers.effort_0 = JSON.parse((await answering({ effort: ['high', .99] })(req)).text).answers.effort_0;
+        return { ...reply, text: JSON.stringify(body) };
+      });
+      expect(sent).toEqual(Array(7).fill('s:low'));
+      expect(f.logs.find(l => l.event === 'root' && l.turn === 'long')).toMatchObject({ cost_reason: 'return_effort', reasons: { model: 'return_effort' },
+        proposed_patch: expect.objectContaining({ model: 'claude-haiku-5-5' }), patch: { effort: 'low' } });
     });
   });
   it('keeps the original model pair when an observed priced switch has a strictly positive cost floor', async () => {
@@ -2677,10 +2690,13 @@ describe('#81: control correctness', () => {
     expect(result).toEqual({ chunks: ['chunk'], result: host });
     expect(result.result).toBe(host);
     expect(calls).toHaveLength(1);
-    expect(f.engine.observation).toHaveBeenCalledExactlyOnceWith(e.agentId, 0, host.usage, 0);
+    // The host waits on a root's observation only: a child's record goes unlinked to the hook's deferred reconcile.
+    if (scope === 'root') expect(f.engine.observation).toHaveBeenCalledExactlyOnceWith(e.agentId, 0, host.usage, 0);
+    else expect(f.engine.observation).not.toHaveBeenCalled();
+    const unobserved = fails || scope === 'child';
     const row = f.logs.find(l => l.event === `${scope}_result`);
-    expect(row).toMatchObject({ observed_effort: fails ? 'unknown' : 'medium', effort_evidence: fails ? 'unobserved' : 'transcript_api_request',
-      accounting: { write5m: fails ? null : 0, write1h: fails ? null : 20 } });
+    expect(row).toMatchObject({ observed_effort: unobserved ? 'unknown' : 'medium', effort_evidence: unobserved ? 'unobserved' : 'transcript_api_request',
+      request_ref: unobserved ? null : 'linked-request', accounting: { write5m: unobserved ? null : 0, write1h: unobserved ? null : 20 } });
     if (scope === 'root') {
       expect(row).toMatchObject({ applied: { effort: 'low' }, cost: fails ? { usd: null, reason: 'write_ttl_unknown' } : { usd: expect.any(Number) } });
     } else expect(row).toMatchObject({ requested_effort: 'high' });
@@ -3300,7 +3316,9 @@ describe('root baseline across a resume', () => {
     const saved = store.get('session');
     const s = processOf(store, FAIL);
     const read = deferred<unknown>();
-    s.f.engine.loadRoot = () => read.promise;
+    // The newer turn reads the record itself: the superseded read never marked it read.
+    let reads = 0;
+    s.f.engine.loadRoot = () => ++reads === 1 ? read.promise : Promise.resolve(saved);
     s.router.turnStart({ turnId: 't1', text: TEXT });
     const late = streamNext<TurnStepEvent>(undefined, COUNTS);
     const first = drain(s.router.turnStep(s.f.engine, { turnId: 't1', index: 0, model: 'claude-haiku-5-5', effort: 'medium', messageCount: 40 }, late.next));
@@ -3310,6 +3328,56 @@ describe('root baseline across a resume', () => {
     await first;
     expect(late.calls.map(c => [c.model, c.effort])).toEqual([['claude-haiku-5-5', 'medium']]);
     expect(await turn(s, 't3', 'claude-haiku-5-5', 'medium', 48)).toEqual([['claude-haiku-5-5', 'medium'], ['claude-haiku-5-5', 'medium']]);
+  });
+
+  it('reads the record again at the next turn when the first step outlasts the budget during the read', async () => {
+    const store = DRIFTED();
+    const saved = store.get('session');
+    const s = processOf(store, KEEP);
+    const read = deferred<unknown>();
+    let reads = 0;
+    s.f.engine.loadRoot = () => ++reads === 1 ? read.promise : Promise.resolve(store.get('session'));
+    s.router.turnStart({ turnId: 't1', text: TEXT });
+    const late = streamNext<TurnStepEvent>(undefined, COUNTS);
+    const first = drain(s.router.turnStep(s.f.engine, { turnId: 't1', index: 0, model: 'claude-haiku-5-5', effort: 'medium', messageCount: 40 }, late.next));
+    await settle();
+    s.f.expire();
+    await settle();
+    read.resolve(saved);
+    await first;
+    s.router.turnComplete({ turnId: 't1', reason: 'answer', answer: 'Done.' });
+    expect(late.calls.map(c => [c.model, c.effort])).toEqual([['claude-haiku-5-5', 'medium']]);
+    // The host still runs the drift; the stored native pair is restored, and the drift is never stored as native.
+    expect(await turn(s, 't2', 'claude-haiku-5-5', 'medium', 44)).toEqual([['claude-opus-5-5', 'xhigh'], ['claude-opus-5-5', 'xhigh']]);
+    expect(store.get('session')).toMatchObject({ native: { model: 'claude-opus-5-5', effort: 'xhigh' } });
+  });
+
+  it('keeps a turn native and the stored record unwritten when the record cannot be read', async () => {
+    const store = DRIFTED();
+    const s = processOf(store, KEEP);
+    let reads = 0;
+    s.f.engine.loadRoot = () => ++reads === 1 ? Promise.reject(new Error('store unreadable')) : Promise.resolve(store.get('session'));
+    expect(await turn(s, 't1', 'claude-haiku-5-5', 'medium', 40)).toEqual([['claude-haiku-5-5', 'medium'], ['claude-haiku-5-5', 'medium']]);
+    expect(store.get('session')).toMatchObject({ native: { model: 'claude-opus-5-5', effort: 'xhigh' }, routed: { model: 'claude-haiku-5-5', effort: 'low' } });
+    expect(s.f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 't1', skipped: 'record_unread' }));
+    expect(await turn(s, 't2', 'claude-haiku-5-5', 'medium', 44)).toEqual([['claude-opus-5-5', 'xhigh'], ['claude-opus-5-5', 'xhigh']]);
+  });
+
+  it.each(['outlasts the budget', 'is sent by the host without the hook'] as const)('never switches a drifted turn to the native model after its first step %s', async (how) => {
+    const jev = deferred<{ status: number; text: string }>();
+    const s = processOf(DRIFTED(), () => jev.promise);
+    s.router.turnStart({ turnId: 't1', text: TEXT });
+    const first = streamNext<TurnStepEvent>(undefined, COUNTS);
+    const run = drain(s.router.turnStep(s.f.engine, { turnId: 't1', index: 0, model: 'claude-haiku-5-5', effort: 'medium', messageCount: 40 }, first.next));
+    for (let i = 0; i < 20 && s.f.sent.length === 0; i++) await settle();
+    if (how === 'outlasts the budget') s.f.expire(); else first.controller.abort();
+    await settle();
+    await run;
+    const later = streamNext<TurnStepEvent>(undefined, COUNTS);
+    await drain(s.router.turnStep(s.f.engine, { turnId: 't1', index: 1, model: 'claude-haiku-5-5', effort: 'medium', messageCount: 42 }, later.next));
+    expect(first.calls.map(c => [c.model, c.effort])).toEqual(how === 'outlasts the budget' ? [['claude-haiku-5-5', 'medium']] : []);
+    expect(later.calls.map(c => [c.model, c.effort])).toEqual([['claude-haiku-5-5', 'medium']]);
+    jev.resolve({ status: 503, text: '{}' });
   });
 
   it("drops a drift when the settings re-read fails, even after a first read that named no model", async () => {

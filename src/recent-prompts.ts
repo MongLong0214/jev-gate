@@ -19,11 +19,13 @@ const HUMAN_SOURCES = new Set(['typed', 'queued', 'suggestion_accepted', 'sdk'])
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** A typed request's text; an image pasted beside it is dropped. Any other block (a tool result) makes it no request. */
 const textOnly = (content: unknown): string | null => {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return null;
   const parts: string[] = [];
   for (const b of content) {
+    if (isRecord(b) && b['type'] === 'image') continue;
     if (!isRecord(b) || b['type'] !== 'text' || typeof b['text'] !== 'string') return null;
     parts.push(b['text']);
   }

@@ -87,8 +87,9 @@ export interface SwitchCostInput {
   returns: boolean;
   /** USD. */
   overheadRange?: Range;
-  /** Requests the target serves before a return, the switched one included; each later one reads the prefix on both sides. */
-  horizon?: number;
+  /** Requests the target serves before a return, the switched one included; each later one reads the prefix on both sides.
+   * A range is the fewest and most it may serve: the fewest decides the hold. */
+  horizon?: number | Range;
 }
 /**
  * Over its horizon the switch must cost no more than staying in every scenario its inputs allow; uncertainty keeps the
@@ -100,9 +101,9 @@ export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_h
   const rate = (r: number | Range | null): Range | null => typeof r === 'number' ? [r, r] : r;
   const side = (p: PriceFacts, state: SwitchCostInput['baselineCache'], w: Range | null): Range | null =>
     state === 'warm' ? [p.read, p.read] : !w ? null : state === 'cold' ? w : [Math.min(p.read, w[0]), Math.max(p.read, w[1])];
-  const bw = rate(v.baselineWrite), tw = rate(v.targetWrite);
+  const bw = rate(v.baselineWrite), tw = rate(v.targetWrite), [few, most] = rate(v.horizon ?? 1)!;
   if (!v.baseline || !v.target || [bw, tw, v.outputRange, v.overheadRange].some(r => r && !range(r)) ||
-    [v.prefix ?? 0, v.targetHeld].some(n => !Number.isSafeInteger(n) || n < 0) || v.horizon !== undefined && !(Number.isSafeInteger(v.horizon) && v.horizon >= 1)) return unknown;
+    [v.prefix ?? 0, v.targetHeld].some(n => !Number.isSafeInteger(n) || n < 0) || !(Number.isSafeInteger(few) && few >= 1 && Number.isSafeInteger(most) && most >= few)) return unknown;
   // Returning to a baseline the switch left cold rewrites what staying would have written now and read then: per token
   // a cold baseline is then worth its read rate, not its write. Warm, the baseline reads either way.
   const from = side(v.baseline, v.returns && v.baselineCache === 'cold' ? 'unknown' : v.baselineCache, bw);
@@ -117,9 +118,9 @@ export const switchCost = (v: SwitchCostInput): { hold: boolean; reason: 'cost_h
     times(count((v.prefix ?? 0) - held), [tw[0] - from[1], tw[1] - from[0]]).map(n => n / 1e6),
     times(v.outputRange ?? [0, Infinity], [outputDelta, outputDelta]).map(n => n / 1e6), v.overheadRange ?? [0, 0]];
   // The cache write is paid once; every later request on the target saves the read and output price difference.
-  const later = Math.max(1, v.horizon ?? 1) - 1;
-  if (later) terms.push(times(count(v.prefix ?? 0), [v.target.read - v.baseline.read, v.target.read - v.baseline.read]).map(n => n * later / 1e6),
-    times(v.outputRange ?? [0, Infinity], [outputDelta, outputDelta]).map(n => n * later / 1e6));
+  const later: Range = [few - 1, most - 1];
+  if (later[1]) terms.push(times(times(count(v.prefix ?? 0), [v.target.read - v.baseline.read, v.target.read - v.baseline.read]), later).map(n => n / 1e6),
+    times(times(v.outputRange ?? [0, Infinity], [outputDelta, outputDelta]), later).map(n => n / 1e6));
   const deltaUsd: [number, number] = [terms.reduce((s, t) => s + t[0]!, 0), terms.reduce((s, t) => s + t[1]!, 0)];
   if (deltaUsd.some(Number.isNaN)) return unknown;
   const hold = deltaUsd[1] > 0;

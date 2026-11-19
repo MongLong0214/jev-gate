@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { renderSingleRouteNote } from '../src/coordinator.js';
 import { runHook, type HookDeps, type HookResult } from '../src/hook.js';
-import { jobPath, readJob, updateJob } from '../src/job.js';
+import { jobPath, newGeneration, readJob, updateJob } from '../src/job.js';
 import { appendLiveness, LIVENESS_WINDOW, readLiveness } from '../src/liveness.js';
 import { composeSingleWorkerPrompt, MAX_COMPOSED_BYTES } from '../src/plan.js';
 import { ADMISSION_ANSWERS, ROUTE_ANSWERS, UPGRADE_BASES, type JobState, type WorkerReply } from '../src/types.js';
@@ -584,10 +584,10 @@ describe('Gate A admission', () => {
   it('#284: a late Gate A answer for an older generation of the same prompt_id is recorded, never applied to the newer one', async () => {
     const env = makeEnv();
     let newer: string | undefined;
-    // The host re-sends the prompt_id (a queued prompt or a notice) while the first answer is still in flight.
+    // The prompt_id is registered again as a new generation while the first answer is still in flight.
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       if (newer === undefined) {
-        await run(env, promptEvent(), fakeJev({ forbidsDelegation: 0.95 }));
+        updateJob(env, 's1', prev => newGeneration(prev, 's1', 'p1', 'direct').state);
         newer = state(env).current.generation_id;
       }
       return await (fakeJev({ execution: 'orchestrated' }) as unknown as typeof fetch)(url, init);
@@ -596,6 +596,27 @@ describe('Gate A admission', () => {
     const after = state(env);
     expect(after.current).toMatchObject({ prompt_id: after.history[0]?.prompt_id, generation_id: newer, shape: 'direct', request: null });
     expect(after.history[0]?.generation_id).not.toBe(newer);
+  });
+
+  it('asks nothing about a prompt delivered inside the running turn and keeps the turn\'s generation', async () => {
+    const dir = join(tmp, `trace-same-turn-${++transcriptSeq}`);
+    const env = makeEnv({ JEV_GATE_TRACE_DIR: dir });
+    const fetchImpl = fakeJev({ execution: 'orchestrated' });
+    await run(env, promptEvent(), fetchImpl);
+    const turn = state(env).current, asked = fetchImpl.mock.calls.length;
+    expect(asked).toBeGreaterThan(0);
+    // 2.1.327: a queued message and every Code Mode script result arrive under the running turn's prompt_id.
+    for (const prompt of ['Also check the compact path.', '<event nonce="n" kind="repl-eval" eval="1" status="settled">\n<result>src/hook.ts: 58 KB of source</result>\n</event>']) {
+      expect(await run(env, promptEvent({ prompt }), fetchImpl)).toMatchObject({ kind: 'skip', code: 'same_turn', stdout: null });
+    }
+    expect(fetchImpl.mock.calls.length).toBe(asked);
+    expect(state(env)).toMatchObject({ current: { generation_id: turn.generation_id, shape: turn.shape }, history: [] });
+    const results = readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>).filter(row => row['phase'] === 'admission_result');
+    expect(results.filter(row => (row['decision'] as Record<string, unknown>)['reason'] === 'same_turn')).toEqual([1, 2].map(() => expect.objectContaining({ attempted: false, known_not_sent: true })));
+    // The next turn is a new request again.
+    await run(env, promptEvent({ prompt_id: 'p2' }), fetchImpl);
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(asked);
+    expect(state(env).current.prompt_id).toBe('p2');
   });
 });
 

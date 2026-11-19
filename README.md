@@ -239,6 +239,7 @@ Restart the host after upgrading to load new hooks and connection settings. Old 
 | Worker dispatch denied | The Router records `spawn_denied` with a reason code (for example `policy_unavailable`, `no_eligible_model`, `subagent_model_pinned`); fix that cause, or check pins and `frontierEnabled` |
 | Model/effort warning | Inspect selected, submitted, and observed values; distinguish request mismatch from missing response facts |
 | Settings seem ignored | Use user-level plugin options and start a fresh host |
+| Claude in Chrome or computer use unavailable | Automatic setup turns Code Mode on where you set nothing; set `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` to `0` in your settings `env` and restart |
 
 Run `node "<plugin path>/dist/cli.js" doctor` (Codex: `cli.mjs`). It groups failures and warnings with next actions and checks native CLI model/effort capabilities, including alias resolutions and minimum host versions. Use `--json` for structured facts, `--verbose` for every local check, or `--check-update` to compare with the public GitHub release. Model inventories perform no inference; advertised capabilities do not prove account access or provider execution. The dashboard header shows its running version, release status and installed Claude version mismatches. A passing doctor checks local readiness; it does not prove API availability, model access, source accuracy, or performance. [Advanced usage](docs/advanced-usage.md).
 

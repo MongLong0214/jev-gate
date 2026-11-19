@@ -288,9 +288,10 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
       if (!unknownEvidence.has(id)) { spend += ownSpend; saved += ownSaved; rewrite += ownRewrite; switched += ownSwitched; switches += ownSwitches; }
     }
     // A sent intent without a priced result is unknown, including failures that could still have consumed service usage.
-    // Join late usage to the same call; never add both the ordinary and late receipt.
+    // Join late usage to the same call; never add both the ordinary and late receipt. Child-step and spawn calls are paid
+    // for the same routing, so they count against it with the root's, each joined by its own binding.
     const jevCalls = new Map<string, Rec[]>();
-    for (const r of router('request', 'root', 'late').filter(r => r['scope'] === 'root' && (r['sent'] === true || r['event'] === 'late' || r['event'] === 'root' && !r['skipped'] && r['sent'] !== false))) group(jevCalls, step(r), r);
+    for (const r of router('request', 'root', 'child_route', 'spawn', 'late').filter(r => r['sent'] === true || r['event'] === 'late' || r['event'] !== 'request' && !r['skipped'] && r['sent'] !== false)) group(jevCalls, routerDecisionKey(r), r);
     let unknownJev = 0;
     for (const rows of jevCalls.values()) {
       const priced = rows.filter(r => r['event'] !== 'request').map(r => estimateJevCostUsd(str(r['jev_model']) ?? str(rows.find(n => str(n['jev_model']))?.['jev_model']), tokenCount(sub(r, 'usage')['input']))).filter((n): n is number => n !== null);
@@ -338,14 +339,19 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     // and finish with applied (not post); their complete replacement needs no separate restore callback.
     const compacts = byHost.claude.filter(r => ['mod_compact', 'claude_compact'].includes(String(r['phase'])));
     const classic = compacts.filter(r => r['path'] === 'classic' || ['pre', 'restore', 'post'].includes(String(r['stage'])));
-    const started: Rec[] = [], missing: Rec[] = [], unrestored: Rec[] = [];
+    const started: Rec[] = [], missing: Rec[] = [], unrestored: Rec[] = [], unapplied: Rec[] = [];
     for (const [i, r] of classic.entries()) {
       if (r['stage'] !== 'pre' || 'deferred' in r) continue;
       started.push(r);
       const later = classic.slice(i + 1).filter(n => n['session_id'] === r['session_id']), end = later.findIndex(n => n['stage'] === 'pre' && !('deferred' in n));
       const own = end < 0 ? later : later.slice(0, end), posted = own.some(n => n['stage'] === 'post'), settled = posted || end >= 0 || input.now - at(r) > COMPACT_GRACE_MS;
-      if (settled && !posted) missing.push(r);
-      if (settled && r['mode'] !== 'shadow' && !own.some(n => n['stage'] === 'restore')) unrestored.push(r);
+      // SessionStart(compact) records its restore or why it gave none, so it shows the host applied the compaction. A
+      // PreCompact with neither that nor PostCompact was never applied: the host ran it for an ahead-of-time summary it
+      // then discarded, or the compaction was cancelled or failed. Only an applied one is missing its PostCompact.
+      const applied = posted || own.some(n => n['stage'] === 'restore');
+      if (settled && !applied) unapplied.push(r);
+      if (settled && applied && !posted) missing.push(r);
+      if (settled && applied && r['mode'] !== 'shadow' && !own.some(n => n['stage'] === 'restore' && !('skipped' in n))) unrestored.push(r);
     }
     const runs = new Map<string, Rec[]>();
     for (const r of compacts.filter(r => !classic.includes(r))) group(runs, JSON.stringify([r['session_id'], r['run_id'] ?? r['invocation_id']]), r);
@@ -358,7 +364,8 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
       if (terminal?.['applied'] === true) functionApplied++;
       if (terminal ? terminal['coreError'] === true || terminal['fallback'] === 'error' : input.now - at(start) > COMPACT_GRACE_MS) functionFailed++;
     }
-    const restores = classic.filter(r => r['stage'] === 'restore').length, posts = classic.filter(r => r['stage'] === 'post'), posted = posts.length;
+    const restores = classic.filter(r => r['stage'] === 'restore' && !('skipped' in r)).length, posts = classic.filter(r => r['stage'] === 'post'), posted = posts.length;
+    const restoreSkips = tally(classic.flatMap(r => r['stage'] === 'restore' && str(r['skipped']) ? [str(r['skipped'])!] : []));
     const skipped = input.keyPresent ? started.filter(r => r['selection'] === 'disabled').length : 0, invalid = compacts.filter(r => r['stage'] === 'jev' && ['invalid_answers', 'error'].includes(String(r['selection']))).length;
     const overBudget = compacts.filter(r => r['within_budget'] === false || r['applied'] === true && num(r['budget']) !== null && (num(r['digestChars']) ?? 0) + (num(r['tailChars']) ?? 0) > Number(r['budget'])).length;
     const selections = tally(compacts.filter(r => r['stage'] === 'pre' || r['stage'] === 'jev' && r['path'] !== 'classic').flatMap(r => str(r['selection']) ? [str(r['selection'])!] : []));
@@ -367,7 +374,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     const used = last && typeof last['applied'] === 'boolean' ? num(last['digestChars']) !== null && num(last['tailChars']) !== null ? Number(last['digestChars']) + Number(last['tailChars']) : null
       : last && num(last['summary_chars']) !== null && num(last['restored_chars']) !== null ? Number(last['summary_chars']) + Number(last['restored_chars']) : null;
     say(missing.length ? 'fail' : skipped || invalid || unrestored.length || functionFailed || overBudget ? 'warn' : started.length + functionFired ? 'ok' : 'info',
-      `compact: ${started.length} pre / ${restores} restore / ${posted} post${missing.length ? `; ${missing.length} pre without post (sessions ${sessionsOf(missing)})` : ''}${unrestored.length ? `; ${unrestored.length} without restore (sessions ${sessionsOf(unrestored)})` : ''}; Function ${functionFired} started / ${functionApplied} applied / ${functionFailed} failed; Jev recorded disabled with a key present ${skipped}; invalid_answers ${invalid}; over budget ${overBudget}${selections ? `; selections ${selections}` : ''}`,
+      `compact: ${started.length} pre / ${restores} restore / ${posted} post${missing.length ? `; ${missing.length} pre without post (sessions ${sessionsOf(missing)})` : ''}${unrestored.length ? `; ${unrestored.length} without restore (sessions ${sessionsOf(unrestored)})` : ''}${restoreSkips ? `; restore skipped ${restoreSkips}` : ''}${unapplied.length ? `; ${unapplied.length} pre the host never applied (summary discarded or compaction cancelled)` : ''}; Function ${functionFired} started / ${functionApplied} applied / ${functionFailed} failed; Jev recorded disabled with a key present ${skipped}; invalid_answers ${invalid}; over budget ${overBudget}${selections ? `; selections ${selections}` : ''}`,
       missing.length ? 'A compaction started but its PostCompact never recorded; check /hooks for the PostCompact entry and the host log.' : 'Some compactions failed, exceeded budget or ran without a restore or Jev selection; check the Compact records.', 'compact',
       { fired: started.length + functionFired, applied: posts.filter(r => {
         const pre = [...started].reverse().find(n => n['session_id'] === r['session_id'] && at(n) <= at(r));

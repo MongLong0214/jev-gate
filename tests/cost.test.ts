@@ -4,7 +4,7 @@ import { normalizeUsage, usageCost, ModelCache, cacheState, observedTtl, switchC
 import { providerPrice } from '../src/provider-prices.js';
 import { delegationCost } from '../src/admission.js';
 import { claudeEffortCache, effortCacheHit } from '../src/claude-cache.js';
-import { CACHE_GONE, CACHE_REACH, costHold, routeCost, TURN_HORIZON } from '../src/route-cost.js';
+import { CACHE_GONE, CACHE_REACH, costHold, routeCost, STRETCH_FEWEST, TURN_HORIZON } from '../src/route-cost.js';
 import { observedDelegationPrices } from '../src/delegation-prices.js';
 
 const price = { source: 'fixture', revision: 'test-v1', input: 4, read: .2, write5m: 5, write1h: 8, output: 20 };
@@ -79,7 +79,7 @@ describe('observed usage and cost', () => {
   it('lets the switch guard decide with the transcript TTL, instead of an unknown expiry or write price range', () => {
     const observed = (ttlMs: number | null) => {
       const cache = new ModelCache();
-      cache.observe({ model: 'claude-opus-5-5', epoch: 'one', at: 0, ttlMs, ttlBoundsMs: [300_000, 3_600_000], input: 0, read: 49_000, write: 1000, output: 3000 });
+      cache.observe({ model: 'claude-opus-5-5', epoch: 'one', at: 0, ttlMs, ttlBoundsMs: [300_000, 3_600_000], input: 0, read: 49_000, write: 1000, output: 8000 });
       return cache;
     };
     const cost = (ttl: number | null, now = 1000) => routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', observed(ttl), 'one', now, 1, TURN_HORIZON);
@@ -121,11 +121,16 @@ describe('observed usage and cost', () => {
     o.observe({ model: 'claude-opus-5-5', at: 0, epoch: 'e', ttlMs: 3_600_000, read: 148_000, write: 1000, input: 1000, output: 1500 });
     expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10)).toMatchObject({ hold: true, reason: 'cost_hold', scope: 'next_request_scenario',
       output_basis: 'scenario_zero_to_previous_output', inputs: { outputRange: [0, 1500] } });
-    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: false, reason: 'cost_allows', scope: 'turn_horizon', horizon: 5,
-      output_basis: 'previous_output', inputs: { outputRange: [1500, 1500] } });
+    // The hold is judged over the fewest requests a switch serves (STRETCH_FEWEST): a 1.5k output does not repay
+    // Haiku's write within 2, a 4k one does; the most a switch serves still bounds the saving.
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', o, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: true, reason: 'cost_hold', scope: 'turn_horizon', horizon: 5,
+      output_basis: 'previous_output', inputs: { outputRange: [1500, 1500], horizon: [STRETCH_FEWEST, 5] } });
+    const long = new ModelCache();
+    long.observe({ model: 'claude-opus-5-5', at: 0, epoch: 'e', ttlMs: 3_600_000, read: 148_000, write: 1000, input: 1000, output: 4000 });
+    expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', long, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: false, reason: 'cost_allows' });
     // Sonnet's write is half Opus's, its read half too: at 150k it repays only after about 20 requests.
     expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', o, 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: true, reason: 'cost_hold' });
-    expect(routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', o, 'e', 1000, 10, 25)).toMatchObject({ hold: false });
+    expect(switchCost({ ...routeCost('claude', 'claude-opus-5-5', 'claude-sonnet-5-5', o, 'e', 1000, 10, 25)!.inputs, horizon: 25 })).toMatchObject({ hold: false });
     // Codex keeps the one-request price: a warm sol move to luna with output it may not repeat stays held (#271).
     const x = new ModelCache();
     x.observe({ model: 'gpt-6.1-sol', at: 0, epoch: 'e', ttlMs: 1_800_000, read: 97_000, write: 1000, input: 1000, output: 1000 });
@@ -134,6 +139,27 @@ describe('observed usage and cost', () => {
     for (const horizon of [Infinity, 0, 1.5]) expect(switchCost({ ...v, horizon })).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
     // A horizon never turns an unknown into an allowance.
     expect(routeCost('claude', 'claude-opus-5-5', 'claude-haiku-5-5', new ModelCache(), 'e', 1000, 10, TURN_HORIZON)).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
+  });
+  it('holds the measured Opus to Haiku switches that cost more than staying, and still moves the one that saved', () => {
+    // Recorded inputs of 8 root switches (2026-11-17 to 11-19) and each stretch's cost against staying on Opus at list
+    // prices: every one was allowed over 5 requests; the return reread the cache Opus held, so its write was not extra.
+    const cases = [['11-17T05:45', 95_331, 'warm', 786, -0.057], ['11-18T00:56', 249_667, 'unknown', 1587, -0.028], ['11-18T01:40', 183_961, 'unknown', 430, 0.019],
+      ['11-18T01:57', 235_692, 'warm', 1182, 0.044], ['11-18T03:21', 208_497, 'warm', 1622, -0.012], ['11-18T04:17', 250_360, 'unknown', 823, 0.127],
+      ['11-19T00:17', 144_566, 'unknown', 666, 0.004], ['11-19T00:27', 131_755, 'warm', 964, -0.005]] as const;
+    const price = (model: string, prefix: number) => providerPrice('claude', model, prefix + 1)!;
+    const judged = cases.map(([at, prefix, baselineCache, output]) => {
+      const target = price('claude-haiku-5-5', prefix);
+      const v = { prefix, targetHeld: 0, baseline: price('claude-opus-5-5', prefix), target, baselineCache, targetCache: 'cold' as const, baselineWrite: [5, 8] as const,
+        targetWrite: [target.write5m!, target.write1h!] as const, outputRange: [output, output] as const, returns: true };
+      expect(switchCost({ ...v, horizon: TURN_HORIZON })).toMatchObject({ hold: false });
+      return [at, switchCost({ ...v, horizon: [STRETCH_FEWEST, TURN_HORIZON] }).hold];
+    });
+    expect(judged.filter(([, hold]) => !hold).map(([at]) => at)).toEqual(['11-17T05:45']);
+    // A cold baseline is rewritten on the return anyway, so it is priced at its read rate and moves when that saves.
+    const compacted = { prefix: 31_000, targetHeld: 0, baseline: price('claude-opus-5-5', 31_000), target: price('claude-haiku-5-5', 31_000), baselineCache: 'cold' as const,
+      targetCache: 'cold' as const, baselineWrite: [5, 8] as const, targetWrite: [0.125, 0.2] as const, outputRange: [1587, 1587] as const, returns: true, horizon: [STRETCH_FEWEST, TURN_HORIZON] as const };
+    expect(switchCost(compacted)).toMatchObject({ hold: false, reason: 'cost_allows' });
+    expect(switchCost({ ...compacted, horizon: [3, 2] })).toMatchObject({ hold: true, reason: 'cost_unknown_hold' });
   });
   it('reads a target cache live by its TTL as warm only within reach of its last request (#274)', () => {
     // 55b329 at 08:50:55Z: Haiku answered 18 requests before, live by its TTL, and the switch read 30,040 of 99,448.

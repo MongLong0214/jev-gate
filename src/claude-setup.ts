@@ -31,6 +31,12 @@ export const claudeDefaults = (env: Env): Record<string, string> => ({
   CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0',
   JEV_GATE_TRACE_DIR: claudeTraceDir(env),
 });
+/**
+ * Written once like the launch defaults, but nothing Jev Gate does needs it: an owner's own value, on or off, is their
+ * choice, so it is never a conflict and no restart is asked for it. Code Mode leaves Claude in Chrome and computer use
+ * unavailable in the session (2.1.327).
+ */
+export const claudePreferences: Record<string, string> = { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' };
 export const integratedClaudePlugin = (env: Env): boolean => {
   try {
     const root = env['CLAUDE_PLUGIN_ROOT'];
@@ -84,6 +90,9 @@ export const prepareClaude = (env: Env): ClaudeSetup => {
     for (const [name, fallback] of Object.entries(defaults)) {
       if (launch[name] === undefined && (env[name] === undefined || env[name] === fallback)) { launch[name] = fallback; changed = true; }
       else if (name.startsWith('CLAUDE_CODE_') && (launch[name] ?? env[name]) !== fallback) conflicts.push(name);
+    }
+    for (const [name, preferred] of Object.entries(claudePreferences)) {
+      if (launch[name] === undefined && env[name] === undefined) { launch[name] = preferred; changed = true; }
     }
     if (changed) value['env'] = launch;
     if (value['worktree'] === undefined) { value['worktree'] = { baseRef: 'head' }; changed = true; }

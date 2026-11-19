@@ -275,6 +275,7 @@ const ADMISSION_REASON: Record<string, string> = {
   admission_tie: '판정 동률', admission_abstain: 'Jev 판단 보류', admission_forced: '실험 설정으로 고정', admission_forbids_delegation: '요청이 위임을 금지',
   admission_shape_unknown: '실행 형태 미확인', admission_delivery_failed: '필수 원문 전달 불가', prompt_id_absent: '프롬프트 식별자 없음',
   depth_unknown: '세션 깊이 미확인', depth_below_floor: '세션이 위임 기준보다 얕음', task_notification: '작업 알림 턴',
+  same_turn: '진행 중인 턴의 입력',
 };
 const ROUTER_EVENT: Record<string, string> = {
   router: '세션 설정', request: 'Jev 요청', root: '루트 턴 판단', root_result: '루트 응답 모델 확인', root_stop: '루트 판단 중단', spawn: 'Agent 생성 판단',
@@ -719,7 +720,7 @@ const modStep = (row: ModRecord, closed: Set<string>, responses: Map<string, str
       if (r['jev_sent'] === true) details.push(compactUsage(r));
       if (number(r['dependencies']) !== null) choice = `${n(number(r['dependencies']))} / ${n(number(r['candidates']))}`;
       details.push(text(`후보 ${n(number(r['candidates']))}/${n(number(r['available']))}`, `필수 근거 ${n(number(r['dependencies']))}`, number(r['jev_ms']) === null ? null : `${n(number(r['jev_ms']))}ms`));
-    } else summary = r['stage'] === 'pre' ? r['guided'] === true ? '호스트 요약 지침 적용' : '호스트 압축 준비' : r['stage'] === 'restore' ? '보존 문맥 복원' : r['stage'] === 'post' ? '호스트 압축 완료 · 예산 관측' : started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['skipped'] ? text('호스트 사전 요약 생략 · 이 시점 대화로 로컬 digest 구성 가능', token(r['skipped'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
+    } else summary = r['stage'] === 'pre' ? r['guided'] === true ? '호스트 요약 지침 적용' : '호스트 압축 준비' : r['stage'] === 'restore' ? r['skipped'] ? text('보존 문맥 복원 안 함', token(r['skipped'])) : '보존 문맥 복원' : r['stage'] === 'post' ? '호스트 압축 완료 · 예산 관측' : started ? '대화 압축 시작' : r['deferred'] ? text('호스트 압축으로 넘김', token(r['deferred'])) : r['skipped'] ? text('호스트 사전 요약 생략 · 이 시점 대화로 로컬 digest 구성 가능', token(r['skipped'])) : r['applied'] === true ? '로컬 digest 적용 · 요약 모델 호출 대체' : text('호스트 압축 사용', token(r['fallback']), r['coreSkip'] === true ? '호스트 건너뜀' : null);
     if (['restore', 'post'].includes(String(r['stage']))) details.push(text(number(r['summary_chars']) === null ? null : `summary ${n(number(r['summary_chars']))}자`, number(r['restore_chars'] ?? r['restored_chars']) === null ? null : `restore ${n(number(r['restore_chars'] ?? r['restored_chars']))}자`, number(r['budget']) === null ? null : `budget ${n(number(r['budget']))}자`));
     if (r['stage'] !== 'jev' && r['selection']) details.push(text('Jev 선별', compactSelectionReason(r['selection'])));
     details.push(text(`모드 ${token(r['mode']) ?? '?'}`, `트리거 ${token(r['trigger']) ?? '?'}`, r['subagent'] === true ? '서브에이전트' : '루트', `메시지 ${n(number(r['messages']))}개`));
