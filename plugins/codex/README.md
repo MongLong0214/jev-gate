@@ -30,7 +30,7 @@ Use Codex normally:
 ```sh
 codex
 # Native options still work:
-codex --model gpt-6.1-sol --sandbox workspace-write
+codex --model gpt-6.2-sol --sandbox workspace-write
 ```
 
 If a session was open before installation, start a new native host after connection readiness. The plugin cannot change an endpoint already loaded by that host. Historical provider metadata and a running helper do not prove that the current host loaded the endpoint: its startup observation stays unknown until actual inference traffic is seen. `jev_agent` is installed as an MCP tool; only a current Gate dispatch can start an owned worker. Invalid judgments, missing keys, unsupported input and unknown depth preserve native execution.
@@ -134,7 +134,7 @@ For example, this **opt-in** mapping includes Terra:
 
 ```json
 {
-  "gate": {"models": {"fast":"gpt-6-luna","standard":"gpt-5.6-terra","deep":"gpt-6.1-sol","frontier":"gpt-6-astra"}},
+  "gate": {"models": {"fast":"gpt-6-luna","standard":"gpt-6.1-terra","deep":"gpt-6.2-sol","frontier":"gpt-6.2-astra"}},
   "router": {"model":true}
 }
 ```

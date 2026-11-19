@@ -76,13 +76,15 @@ describe('official model freshness CI', () => {
   });
   it('retains API long-context surcharges across publisher wording and rejects unknown or duplicate surcharge rules', () => {
     const page = (model: string) => `Model ID: \`${model}\`\nMaximum input tokens: 922,000\n| Input | $2 | 1M tokens |\n| Cached input | $0.1 | 1M tokens |\n| Cache writes | $2.5 | 1M tokens |\n| Output | $10 | 1M tokens |\n`;
-    const raw = Object.fromEntries(['sol', 'terra', 'luna', 'astra'].map(key => [key, page(`gpt-${key}`)]));
+    const raw = Object.fromEntries(['sol', 'terra', 'luna', 'astra', 'solPrevious', 'astraPrevious'].map(key => [key, page(`gpt-${key}`)]));
     const rule = 'prompts with more than 272K input tokens are priced at 2x input and cache rates and 1.5x output for the full request.\n';
     const expected = [{ input: 2, read: 0.1, write: 2.5, output: 10, maxPrompt: 272000 }, { input: 4, read: 0.2, write: 5, output: 15, maxPrompt: 922000 }];
-    for (const prefix of ['P', 'API p']) {
-      expect(priceMetadata({ ...raw, sol: raw.sol + prefix + rule.slice(1) }, [])[0].bands).toEqual(expected);
+    // The 6.2 pages (2026-11) state the same surcharge as "For requests with more than …".
+    const reworded = 'For requests with more than 272K input tokens, input and cache rates double and output costs 1.5 times the short-context rate for the full request.\n';
+    for (const text of ['P' + rule.slice(1), 'API p' + rule.slice(1), reworded]) {
+      expect(priceMetadata({ ...raw, sol: raw.sol + text }, [])[0].bands).toEqual(expected);
     }
-    for (const surcharge of [rule.replace('2x', '3x'), rule + rule]) {
+    for (const surcharge of [rule.replace('2x', '3x'), rule + rule, reworded.replace('double', 'triple'), reworded + rule]) {
       expect(() => priceMetadata({ ...raw, sol: raw.sol + surcharge }, [])).toThrow(/long-context price contract/);
     }
     expect(priceMetadata(raw, [])[0].bands).toEqual([{ input: 2, read: 0.1, write: 2.5, output: 10, maxPrompt: 922000 }]);
@@ -141,6 +143,22 @@ describe('official model freshness CI', () => {
     expect(codexCandidates(catalog, false).find(m => m.id === 'gpt-6.1-terra')).toMatchObject({ rank: 1, efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] });
     expect(codexCandidates(catalog, true).some(m => m.id === 'gpt-5.6-luna')).toBe(false);
     expect(catalogTierModels('gpt-5.6-luna', catalog).fast).toBe('gpt-6-luna');
+  });
+  it('places the 6.2 generation by documented role where its catalog wording says fast or names no role', () => {
+    const [sol, terra, luna] = parseCodex(rawCodex);
+    // Descriptions as the publisher catalog lists them (2026-11-19).
+    const catalog = [
+      { ...sol, model: 'gpt-6.2-sol', description: 'Fast, go-to model for coding and everyday work.' },
+      { ...sol, model: 'gpt-6.2-astra', description: 'Our most capable model for complex coding and professional work.' },
+      { ...sol, model: 'gpt-6-astra', description: 'Previous generation model for complex coding and professional work.' },
+      { ...sol, description: 'Previous generation model for coding and everyday work.' },
+      { ...terra, description: 'Efficient model that excels at visual understanding and computer use.' },
+      luna,
+    ];
+    expect(verifyCodex(catalog, policy)).toEqual({ fast: 'gpt-6-luna', standard: 'gpt-6.2-sol', deep: 'gpt-6.2-sol', frontier: 'gpt-6.2-astra' });
+    expect(codexCandidates(catalog, true).map(c => [c.id, c.rank])).toEqual([['gpt-6.2-sol', 2], ['gpt-6.2-astra', 3], ['gpt-6.1-terra', 1], ['gpt-6-luna', 0]]);
+    // The same wording on a model the role table does not name reads as fast, so no workhorse is left and the check stops.
+    expect(() => verifyCodex(catalog.map(m => m.model === 'gpt-6.2-sol' ? { ...m, model: 'gpt-6.3-sol' } : m), policy)).toThrow(/workhorse changed/);
   });
   it('does not mistake folders in a current model description for an older model', () => {
     const catalog = parseCodex(rawCodex).map((m: { model: string }) => m.model === 'gpt-6.1-sol' ? { ...m, description: 'Latest workhorse model for coding across folders.' } : m);

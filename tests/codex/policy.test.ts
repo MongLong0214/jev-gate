@@ -222,6 +222,26 @@ describe('Codex ordered routing and recorded application', () => {
     expect(await routeCodex({ model: 'gpt-6.1-sol', effort: 'medium', task: 'Rename a symbol.', session: 's', prompt: 'p', catalog: account, config, env: { TYPESAFE_API_KEY: 'key' }, fetchImpl, trace: { write: (phase, row) => { rows.push({ phase, ...row }); return { ok: true, file: 'f' }; } } })).toEqual({ model: 'gpt-6-luna', effort: 'low', effortEdit: { kind: 'set', value: 'low' } });
     expect(rows.at(-1)).toMatchObject({ excluded: { superseded: 3 }, selection: { roles: [{ option: 'mechanical', model: 'gpt-6-luna' }, { option: 'routine', model: 'gpt-6-luna' }, { option: 'complex', model: 'gpt-6.1-sol' }] }, cost_reason: 'diagnostic_only', selected_model: 'gpt-6-luna' });
   });
+  it('places the 6.2 generation by documented role, whatever its catalog wording', () => {
+    // Descriptions as the publisher catalog lists them (2026-11-19): Sol reads as fast and Astra names no role.
+    const next: CodexModel[] = [
+      { model: 'gpt-6.2-sol', description: 'Fast, go-to model for coding and everyday work.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6.2-astra', description: 'Our most capable model for complex coding and professional work.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6.1-terra', description: 'Efficient model that excels at visual understanding and computer use.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6.1-sol', description: 'Previous generation model for coding and everyday work.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6-astra', description: 'Previous generation model for complex coding and professional work.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: levels(5) },
+    ];
+    expect(codexCandidates(next, true).map(c => [c.id, c.rank])).toEqual([['gpt-6.2-sol', 2], ['gpt-6.2-astra', 3], ['gpt-6.1-terra', 1], ['gpt-6-luna', 0]]);
+    expect(codexCandidates(next, false).map(c => c.id)).toEqual(['gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna']);
+    for (const baseline of ['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-luna']) {
+      expect(catalogTierModels(baseline, next)).toEqual({ fast: 'gpt-6-luna', standard: 'gpt-6.2-sol', deep: 'gpt-6.2-sol', frontier: 'gpt-6.2-astra' });
+    }
+    expect(codexSuccessor('gpt-6.1-sol', next)).toBe('gpt-6.2-sol');
+    expect(codexSuccessor('gpt-6-astra', next)).toBe('gpt-6.2-astra');
+    // Without the Astra opt-in a gpt-6-astra root is not moved, and it is still placed above the models it can be lowered to.
+    expect(codexCandidates(next, false, 'gpt-6-astra').map(c => [c.id, c.rank])).toEqual([['gpt-6.2-sol', 2], ['gpt-6.1-terra', 1], ['gpt-6-astra', 3], ['gpt-6-luna', 0]]);
+  });
   const superseded = async (model: string, kind: string, extra: Partial<Parameters<typeof routeCodex>[0]> = {}) => {
     const rows: Obj[] = [];
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {

@@ -12,10 +12,13 @@ export const SOURCES = {
   releases: 'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md',
   codex: 'https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json',
   caching: 'https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md',
-  sol: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol.md',
+  sol: 'https://developers.openai.com/api/docs/models/gpt-6.2-sol.md',
   terra: 'https://developers.openai.com/api/docs/models/gpt-6.1-terra.md',
   luna: 'https://developers.openai.com/api/docs/models/gpt-6-luna.md',
-  astra: 'https://developers.openai.com/api/docs/models/gpt-6-astra.md',
+  astra: 'https://developers.openai.com/api/docs/models/gpt-6.2-astra.md',
+  // Still listed and priced by the publisher. A root can stay on them, so their usage keeps a price and a context limit.
+  solPrevious: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol.md',
+  astraPrevious: 'https://developers.openai.com/api/docs/models/gpt-6-astra.md',
   codexCredits: 'https://learn.chatgpt.com/docs/pricing.md',
 };
 const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
@@ -144,9 +147,10 @@ export function verifyCodex(catalog, { normalizeCatalog, generalCodexModel, code
     const candidate = candidates.find(c => c.id === m.model);
     return candidate && JSON.stringify([...candidate.efforts].sort()) === JSON.stringify(m.supportedReasoningEfforts.map(e => e.reasoningEffort).sort()) && candidate.rank !== undefined;
   }), 'Codex model role or effort support changed; production policy needs an update');
-  const baseline = eligible.find(m => /latest.*workhorse/i.test(m.description))?.model;
-  requireFact(baseline, 'Official Codex workhorse changed; review required');
-  const tiers = catalogTierModels(baseline, catalog);
+  // The catalog no longer names its workhorse (6.2: "Fast, go-to"). Production's role table does, and exactly one current model holds it.
+  const workhorses = candidates.filter(c => c.rank === 2);
+  requireFact(workhorses.length === 1, 'Official Codex workhorse changed; review required');
+  const tiers = catalogTierModels(workhorses[0].id, catalog);
   const lightest = Math.min(...candidates.map(c => c.rank));
   requireFact(Object.values(tiers).every(id => eligible.some(m => m.model === id)) &&
     // A fast dispatch default can also serve focused coding. Missing a mechanical-only model is not a missing task class.
@@ -200,7 +204,7 @@ export function priceMetadata(raw, official) {
     }).sort((a, b) => a.maxPrompt - b.maxPrompt);
     add('claude', model.ids[0], SOURCES.caching.replace(/\.md$/, ''), bands);
   }
-  for (const key of ['sol', 'terra', 'luna', 'astra']) {
+  for (const key of ['sol', 'terra', 'luna', 'astra', 'solPrevious', 'astraPrevious']) {
     const text = raw[key];
     const model = /Model ID: `([^`]+)`/.exec(text)?.[1];
     const value = name => Number(new RegExp('^\\| ' + name + ' \\| \\$(\\d+(?:\\.\\d+)?) \\| 1M tokens \\|$', 'm').exec(text)?.[1]);
@@ -208,10 +212,11 @@ export function priceMetadata(raw, official) {
     const base = { input: value('Input'), read: value('Cached input'), write: value('Cache writes'), output: value('Output') };
     requireFact(model && context && Object.values(base).every(v => Number.isFinite(v) && v >= 0), `Unknown OpenAI price contract: ${key}`);
     const limit = Number(context.replaceAll(',', ''));
-    const surcharges = [...text.matchAll(/\b(?:API )?prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output/gi)];
-    requireFact(surcharges.length <= 1 && (surcharges.length === 1 || !/\bprompts\b[^\n]*\bpriced\b/i.test(text)), `Unknown long-context price contract: ${key}`);
+    // The same surcharge in both publisher wordings: "prompts with more than … are priced at 2x …" and, from the 6.2 pages, "requests with more than …, … rates double …".
+    const surcharges = [...text.matchAll(/\b(?:(?:API )?prompts with more than (\d+)K input tokens are priced at 2x input and cache rates and 1\.5x output|requests with more than (\d+)K input tokens, input and cache rates double and output costs 1\.5 times the short-context rate)/gi)];
+    requireFact(surcharges.length <= 1 && (surcharges.length === 1 || !/\bprompts\b[^\n]*\bpriced\b|\bmore than \d+K input tokens\b/i.test(text)), `Unknown long-context price contract: ${key}`);
     const long = surcharges[0];
-    const bands = long ? [{ ...base, maxPrompt: Number(long[1]) * 1000 }, { maxPrompt: limit, input: base.input * 2, read: base.read * 2, write: base.write * 2, output: base.output * 1.5 }] : [{ ...base, maxPrompt: limit }];
+    const bands = long ? [{ ...base, maxPrompt: Number(long[1] ?? long[2]) * 1000 }, { maxPrompt: limit, input: base.input * 2, read: base.read * 2, write: base.write * 2, output: base.output * 1.5 }] : [{ ...base, maxPrompt: limit }];
     add('codex', model, SOURCES[key].replace(/\.md$/, ''), bands);
   }
   return result;

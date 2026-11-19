@@ -3,9 +3,8 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { validateConfig, type Env } from '../config.js';
 import type { ConfigV5, Tier } from '../types.js';
-import type { CodexModel } from './router.js';
+import { codexCandidates, type CodexModel } from './router.js';
 import { frontierRoutingEnabled } from '../frontier-config.js';
-import { codexSuccessor, generalCodexModel } from './catalog.js';
 import type { CodexCompactConfig } from './compact.js';
 
 export interface CodexPolicyConfig {
@@ -17,14 +16,14 @@ export const resolveCodexConfigPath = (env: Env): string =>
   env['JEV_CODEX_CONFIG'] ?? join(env['XDG_CONFIG_HOME'] ?? join(env['HOME'] || homedir(), '.config'), 'jev-gate', 'codex.json');
 
 export const catalogTierModels = (baseline: string, catalog: readonly CodexModel[]): Record<Tier, string> => {
-  // Use this account's model descriptions, never invented IDs or hidden specialist/review models.
-  const general = catalog.filter(m => generalCodexModel(m) && !codexSuccessor(m.model, catalog));
-  const pick = (pattern: RegExp, fallback: string): string => general.find(m => pattern.test(m.description ?? ''))?.model ?? fallback;
-  const deep = general.some(m => m.model === baseline && /workhorse|coding.*reasoning|reasoning.*coding/i.test(m.description ?? ''))
-    ? baseline : pick(/latest.*workhorse|most.*capable.*coding|advanced.*reasoning/i, baseline);
-  const standard = general.find(m => m.isDefault)?.model ?? pick(/balanced|everyday|workhorse/i, deep);
-  return { fast: pick(/fast|efficient|affordable|easier|lightweight/i, standard), standard, deep,
-    frontier: pick(/frontier|most demanding|most intelligent/i, deep) };
+  // Use this account's models through the Router's own roles, never invented IDs or hidden specialist/review models.
+  // Wording alone does not place a model: the 6.2 catalog calls its workhorse "Fast, go-to".
+  const roles = codexCandidates(catalog, true);
+  const ranked = (rank: number, fallback: string): string => roles.find(c => c.rank === rank)?.id ?? fallback;
+  const deep = roles.some(c => c.id === baseline && c.rank === 2) ? baseline : ranked(2, baseline);
+  const general = catalog.filter(m => roles.some(c => c.id === m.model));
+  const standard = general.find(m => m.isDefault)?.model ?? general.find(m => /balanced|everyday|workhorse/i.test(m.description ?? ''))?.model ?? deep;
+  return { fast: ranked(0, ranked(1, standard)), standard, deep, frontier: ranked(3, deep) };
 };
 /** `gateOffOnInvalid`: a Gate value that does not validate turns only the Gate off, so the Router keeps its own settings. */
 export const loadCodexPolicy = (env: Env, catalog: readonly CodexModel[] = [], gateOffOnInvalid = false): CodexPolicyConfig => {
