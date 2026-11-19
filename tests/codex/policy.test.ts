@@ -242,6 +242,21 @@ describe('Codex ordered routing and recorded application', () => {
     // Without the Astra opt-in a gpt-6-astra root is not moved, and it is still placed above the models it can be lowered to.
     expect(codexCandidates(next, false, 'gpt-6-astra').map(c => [c.id, c.rank])).toEqual([['gpt-6.2-sol', 2], ['gpt-6.1-terra', 1], ['gpt-6-astra', 3], ['gpt-6-luna', 0]]);
   });
+  it('keeps the earlier Sol models in the deep role on an account that does not list 6.2', () => {
+    // An account catalog as Codex CLI 0.165.0 cached it on 2026-11-19: reworded descriptions, no 6.2 model.
+    const earlier: CodexModel[] = [
+      { model: 'gpt-6.1-terra', description: 'Efficient model that excels at visual understanding and computer use.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6.1-sol', description: 'Previous generation model for coding and everyday work.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6-astra', description: 'Previous generation model for complex coding and professional work.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6-sol', description: 'Legacy model for coding and everyday work.', supportedReasoningEfforts: levels() },
+      { model: 'gpt-6-luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: levels(5) },
+    ];
+    expect(codexCandidates(earlier, false, 'gpt-6.1-sol').map(c => [c.id, c.rank])).toEqual([['gpt-6.1-terra', 1], ['gpt-6.1-sol', 2], ['gpt-6-luna', 0]]);
+    expect(codexCandidates(earlier, false, 'gpt-6-sol').map(c => [c.id, c.rank])).toEqual([['gpt-6.1-terra', 1], ['gpt-6-sol', 2], ['gpt-6-luna', 0]]);
+    expect(catalogTierModels('gpt-6.1-sol', earlier)).toEqual({ fast: 'gpt-6-luna', standard: 'gpt-6.1-sol', deep: 'gpt-6.1-sol', frontier: 'gpt-6.1-sol' });
+    // A model described as previous generation is a baseline only, never a target, so nothing moves to it.
+    expect(codexSuccessor('gpt-6-sol', earlier)).toBeNull();
+  });
   const superseded = async (model: string, kind: string, extra: Partial<Parameters<typeof routeCodex>[0]> = {}) => {
     const rows: Obj[] = [];
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {

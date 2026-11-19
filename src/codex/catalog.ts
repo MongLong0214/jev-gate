@@ -64,7 +64,9 @@ export const codexModelRole = (m: CodexModel): { rank: number; description: stri
   // The 6.2 catalog calls Sol "Fast, go-to" and Astra "Our most capable", which the wording rules below read as fast and
   // as no role. Published guidance keeps the order: start most work on Sol, choose Astra for demanding engineering.
   // https://developers.openai.com/api/docs/guides/model-selection and https://learn.chatgpt.com/docs/models (2026-11-19).
-  if (m.model === 'gpt-6.2-sol') return deep;
+  // The same catalog rewords the earlier Sol models ("Previous generation model for coding and everyday work.",
+  // "Legacy model ..."), which the wording rules read as standard. An account not yet offered 6.2 still runs on them.
+  if (m.model === 'gpt-6.2-sol' || m.model === 'gpt-6.1-sol' || m.model === 'gpt-6-sol') return deep;
   // gpt-6-astra, now described only as previous generation, stays a root's baseline without the Astra opt-in and keeps its role.
   if (m.model === 'gpt-6.2-astra' || m.model === 'gpt-6-astra') return frontier;
   const text = m.description ?? '';
