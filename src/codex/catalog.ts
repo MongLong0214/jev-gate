@@ -59,10 +59,20 @@ export const codexModelRole = (m: CodexModel): { rank: number; description: stri
   // The native catalog only says "Codex model". Published guidance includes scoped code fixes with clear checks.
   // https://developers.openai.com/api/docs/guides/model-selection (2026-10-27). Availability/efforts remain account-owned.
   if (m.model === 'gpt-6.1-terra') return { rank: 1, description: 'standard: scoped code fixes, clear writing, visual understanding and computer use with defined inputs and verification; complex projects stay deep.' };
+  const deep = { rank: 2, description: 'deep: hard debugging, competing design constraints or subtle correctness.' };
+  const frontier = { rank: 3, description: 'frontier: exceptional unresolved foundational reasoning.' };
+  // The 6.2 catalog calls Sol "Fast, go-to" and Astra "Our most capable", which the wording rules below read as fast and
+  // as no role. Published guidance keeps the order: start most work on Sol, choose Astra for demanding engineering.
+  // https://developers.openai.com/api/docs/guides/model-selection and https://learn.chatgpt.com/docs/models (2026-11-19).
+  // The same catalog rewords the earlier Sol models ("Previous generation model for coding and everyday work.",
+  // "Legacy model ..."), which the wording rules read as standard. An account not yet offered 6.2 still runs on them.
+  if (m.model === 'gpt-6.2-sol' || m.model === 'gpt-6.1-sol' || m.model === 'gpt-6-sol') return deep;
+  // gpt-6-astra, now described only as previous generation, stays a root's baseline without the Astra opt-in and keeps its role.
+  if (m.model === 'gpt-6.2-astra' || m.model === 'gpt-6-astra') return frontier;
   const text = m.description ?? '';
-  if (/frontier|most demanding|most intelligent/i.test(text)) return { rank: 3, description: 'frontier: exceptional unresolved foundational reasoning.' };
+  if (/frontier|most demanding|most intelligent/i.test(text)) return frontier;
   if (/fast|efficient|affordable|easier|lightweight/i.test(text)) return { rank: 0, description: 'fast: prioritize for file discovery, lookup, listing and mechanical edits with clear checks.' };
   if (/balanced|straightforward|everyday/i.test(text) && !/workhorse|advanced.*reasoning/i.test(text)) return { rank: 1, description: 'standard: ordinary implementation under established contracts.' };
-  if (/workhorse|advanced.*reasoning|coding.*reasoning|reasoning.*coding/i.test(text)) return { rank: 2, description: 'deep: hard debugging, competing design constraints or subtle correctness.' };
+  if (/workhorse|advanced.*reasoning|coding.*reasoning|reasoning.*coding/i.test(text)) return deep;
   return undefined;
 };

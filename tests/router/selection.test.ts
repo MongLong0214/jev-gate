@@ -49,7 +49,8 @@ describe('Claude and Codex routing role parity', () => {
     expect(selectPair(o, exactAnswers(o, 'gpt-6.1-sol', probability)).patch.model).toBe(probability >= .8 ? 'gpt-6.1-sol' : undefined);
   });
   it('keeps unknown model roles unknown and does not infer rank from a name', () => {
-    expect(codexCandidates([{ ...native[0]!, description: 'General coding model' }], false)[0]).not.toHaveProperty('rank');
+    // A later Sol is not placed by its family name; the Sol models that carry a role are named one by one (src/codex/catalog.ts).
+    expect(codexCandidates([{ ...native[0]!, model: 'gpt-7-sol', description: 'General coding model' }], false)[0]).not.toHaveProperty('rank');
     expect(codexCandidates(native, true).find(c => c.id === 'gpt-6-astra')?.rank).toBe(3);
   });
   it('preserves both explicitly pinned dimensions in both adapters even when an alternative is supported', () => {

@@ -74,8 +74,8 @@ export default [
   },
   {
     "host": "codex",
-    "model": "gpt-6.1-sol",
-    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "model": "gpt-6.2-sol",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
     "revision": "68b84362cd24232a",
     "bands": [
       {
@@ -135,6 +135,50 @@ export default [
         "read": 0.02,
         "write": 0.25,
         "output": 0.75
+      }
+    ]
+  },
+  {
+    "host": "codex",
+    "model": "gpt-6.2-astra",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+    "revision": "05f40b9446af2cc2",
+    "bands": [
+      {
+        "input": 8,
+        "read": 0.4,
+        "write": 10,
+        "output": 40,
+        "maxPrompt": 272000
+      },
+      {
+        "maxPrompt": 922000,
+        "input": 16,
+        "read": 0.8,
+        "write": 20,
+        "output": 60
+      }
+    ]
+  },
+  {
+    "host": "codex",
+    "model": "gpt-6.1-sol",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "revision": "68b84362cd24232a",
+    "bands": [
+      {
+        "input": 2,
+        "read": 0.1,
+        "write": 2.5,
+        "output": 10,
+        "maxPrompt": 272000
+      },
+      {
+        "maxPrompt": 922000,
+        "input": 4,
+        "read": 0.2,
+        "write": 5,
+        "output": 15
       }
     ]
   },
