@@ -259,7 +259,8 @@ describe('classic path: restore', () => {
   });
 
   it('a restore it does not give leaves a record of why', async () => {
-    const skipped = (): unknown[] => traces().filter((t) => t['stage'] === 'restore').map((t) => t['skipped']);
+    // Records written in the same millisecond have no order, so the reasons are compared as a set.
+    const skipped = (): string[] => traces().filter((t) => t['stage'] === 'restore').map((t) => String(t['skipped'])).sort();
     await runClassicCompact(input('PreCompact', { trigger: 'auto' }), env);
     expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env, { now: () => Date.now() + 31 * 60_000 })).toBeNull();
     expect(await runClassicCompact(input('SessionStart', { source: 'compact', transcript_path: join(dir, 'other.jsonl') }), env)).toBeNull();
@@ -269,11 +270,11 @@ describe('classic path: restore', () => {
     writeFileSync(askedPath(env, SESSION), '{}');
     utimesSync(askedPath(env, SESSION), new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
     expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toBeNull();
-    expect(skipped()).toEqual(['stale', 'transcript', 'over_share', 'function_path']);
+    expect(skipped()).toEqual(['function_path', 'over_share', 'stale', 'transcript']);
     rmSync(askedPath(env, SESSION));
     await runClassicCompact(input('PreCompact', { trigger: 'auto' }), { ...env, CLAUDE_PLUGIN_OPTION_COMPACTMODE: 'shadow' });
     expect(await runClassicCompact(input('SessionStart', { source: 'compact' }), env)).toBeNull();
-    expect(skipped().at(-1)).toBe('shadow');
+    expect(skipped()).toEqual(['function_path', 'over_share', 'shadow', 'stale', 'transcript']);
     expect(traces().filter((t) => t['stage'] === 'restore').every((t) => t['restore_chars'] === 0)).toBe(true);
     // The dashboard says no restore was given, and why; none reads as a restore.
     const steps = loadActivity({ traceDir: env['JEV_GATE_TRACE_DIR']!, env }).operations.feed.filter((s) => s.feature === 'compact' && s.summary.startsWith('보존 문맥 복원'));
