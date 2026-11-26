@@ -547,10 +547,11 @@ describe('root effort', () => {
     const stops = (f: { logs: Record<string, unknown>[] }) => f.logs.filter(l => l['event'] === 'root_stop');
 
     const reset = await routed();
+    // An assessed turn has its own selection to go on with, as a reset leaves no cache to protect: it is not stopped.
     reset.router.contextChanged();
-    expect(await reset.later(1)).toEqual(step({ index: 1 }));
+    expect(await reset.later(1)).toEqual(step({ index: 1, effort: 'low' }));
     await reset.later(2);
-    expect(stops(reset.f)).toEqual([{ event: 'root_stop', turn: 't1', index: 1, reason: 'context_reset' }]);
+    expect(stops(reset.f)).toEqual([]);
 
     const next = await routed();
     next.router.turnStart({ turnId: 't2', text: TEXT });
@@ -1902,6 +1903,99 @@ describe('root effort and the prompt cache', () => {
     f.clock.ms += 300001; tier = 'deep'; await turn('baseline-write', 'claude-opus-5-5', 'ephemeral_1h_input_tokens');
     tier = 'standard'; expect((await turn('held', 'claude-opus-5-5', 'ephemeral_1h_input_tokens'))?.model).toBe('claude-opus-5-5');
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 'held', cost_reason: 'cost_hold', proposed_patch: expect.objectContaining({ model: 'claude-sonnet-5-5' }), patch: {} }));
+  });
+  // 2026-11-23..26: a turn patched xhigh to medium ran 29 requests there, then 195 at xhigh once the host compacted.
+  describe('a switch held for cache cost', () => {
+    // An Opus baseline with a warm cache, a Sonnet switch held for the cold write it would cost, on a turn at its first step.
+    const held = async () => {
+      let tier = 'standard'; const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
+      const f = fakeEngine({ respond: req => answering({ ...CLEAR, tier: [tier, .99] })(req) });
+      const usage = (ttl: 'ephemeral_5m_input_tokens' | 'ephemeral_1h_input_tokens') => ({ input_tokens: 0, output_tokens: 100, cache_read_input_tokens: 99000, cache_creation_input_tokens: 1000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0, [ttl]: 1000 } });
+      const turn = async (id: string, model: string, ttl: 'ephemeral_5m_input_tokens' | 'ephemeral_1h_input_tokens') => {
+        router.turnStart({ turnId: id, text: TEXT });
+        const n = streamNext<TurnStepEvent>(undefined, usage(ttl));
+        await drain(router.turnStep(f.engine, step({ turnId: id, model }), n.next)); router.turnComplete({ turnId: id }); return n.calls[0];
+      };
+      await turn('target-write', 'claude-sonnet-5-5', 'ephemeral_5m_input_tokens');
+      f.clock.ms += 300001; tier = 'deep'; await turn('baseline-write', 'claude-opus-5-5', 'ephemeral_1h_input_tokens');
+      tier = 'standard';
+      router.turnStart({ turnId: 'held', text: TEXT });
+      const n = streamNext<TurnStepEvent>(undefined, usage('ephemeral_1h_input_tokens'));
+      const at = (index: number, messageCount: number) => drain(router.turnStep(f.engine, step({ turnId: 'held', index, model: 'claude-opus-5-5', messageCount }), n.next));
+      return { router, f, n, at };
+    };
+    const resumed = { event: 'root_resume', scope: 'root', turn: 'held', index: 2, reason: 'context_reset', from: { model: 'claude-opus-5-5', effort: 'high' }, patch: { model: 'claude-sonnet-5-5' }, reasons: expect.objectContaining({ model: expect.any(String) }) };
+    it('goes on with it once a context reset leaves no cache to pay for', async () => {
+      const { f, n, at } = await held();
+      for (const [index, messageCount] of [[0, 40], [1, 42], [2, 5], [3, 7]] as const) await at(index, messageCount);
+      expect(n.calls.map(c => c.model)).toEqual(['claude-opus-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5']);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', scope: 'root', turn: 'held', index: 2, announced: false, continued: 1 }));
+      expect(f.logs.filter(l => l.event === 'root_resume')).toEqual([resumed]);
+      expect(f.logs.filter(l => l.event === 'root_stop')).toEqual([]);
+    });
+    it('goes on with it after a compaction the Mod saw, and counts it continued', async () => {
+      const { router, f, n, at } = await held();
+      await at(0, 40); await at(1, 42);
+      router.contextChanged();
+      await at(2, 5); await at(3, 7);
+      expect(n.calls.map(c => c.model)).toEqual(['claude-opus-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5']);
+      expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', scope: 'root', turn: 'held', index: 2, announced: true, continued: 1 }));
+      expect(f.logs.filter(l => l.event === 'root_resume')).toEqual([resumed]);
+    });
+    it('reads nothing on the steps before a reset, so a slow allowlist cannot abandon the turn', async () => {
+      const { f, n, at } = await held();
+      await at(0, 40);
+      f.allowed.wait = new Promise(() => {});
+      const stalled = at(1, 42);
+      await settle(); f.clock.ms += configOf(MODEL_ONLY).timeoutMs; f.expire();
+      await stalled;
+      f.allowed.wait = null;
+      await at(2, 5); await at(3, 7);
+      expect(f.logs.filter(l => l.event === 'root_stop' || l.event === 'budget_timeout')).toEqual([]);
+      expect(n.calls.map(c => c.model)).toEqual(['claude-opus-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5']);
+    });
+  });
+  it('does not count a reset as continuing a selection whose only part a pin already stopped', async () => {
+    const router = createRouter(configOf(MODEL_ONLY), SWITCHES);
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    const at = (index: number, messageCount: number) => drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5-5', index, messageCount }), n.next));
+    await at(0, 40);
+    f.pins.mainModel = true;
+    await at(1, 42); await at(2, 5); await at(3, 7);
+    expect(n.calls.map(c => c.model)).toEqual(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5']);
+    expect(f.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 1, reason: 'model_pinned' });
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', scope: 'root', turn: 't1', index: 2, announced: false, continued: 0 }));
+    expect(f.logs.filter(l => l.event === 'root_resume')).toEqual([]);
+  });
+  it('leaves no resume for a selection a pin stopped and the baseline cannot take the effort of', async () => {
+    const router = createRouter(configOf({ routeMainEffort: true, routeMainModel: true, routeSubagentModel: false, ...SUBAGENT_OFF, ...FULL_IDS }), SWITCHES);
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['xhigh', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    const at = (index: number, messageCount: number) => drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5-5', index, messageCount }), n.next));
+    await at(0, 40);
+    f.pins.mainModel = true;
+    await at(1, 42); await at(2, 5); await at(3, 7);
+    expect(n.calls.map(c => `${c.model}/${c.effort}`)).toEqual(['claude-opus-5-5/xhigh', 'claude-sonnet-5-5/high', 'claude-sonnet-5-5/high', 'claude-sonnet-5-5/high']);
+    expect(f.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 1, reason: 'model_pinned' });
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', scope: 'root', turn: 't1', index: 2 }));
+    expect(f.logs.filter(l => l.event === 'root_resume')).toEqual([]);
+  });
+  it('lifts a baseline_reach stop on the switch once a context reset leaves no baseline cache to return to', async () => {
+    const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
+    const f = fakeEngine({ hostBase: '2.1.293', respond: answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: ['fast', .99], effort: ['low', .99] }) });
+    f.engine.currentContextBound = async (turnId, index) => ({ turnId, index, inputUpperBound: 20_000, compatible: true });
+    f.engine.currentEffort = async () => undefined;
+    f.engine.cacheCapability = async () => ({ host: '2.1.293', connection: 'api-key', excluded: false, hipaa: false });
+    await warmRoot(router, f, 'claude-sonnet-5-5', 'high');
+    router.turnStart({ turnId: 'long', text: 'Find the exact helper file.' });
+    const n = streamNext<TurnStepEvent>(undefined, { input_tokens: 900, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 1000 });
+    for (let index = 0; index < 9; index++) await drain(router.turnStep(f.engine, { turnId: 'long', index, model: 'claude-sonnet-5-5', effort: 'high', messageCount: index < 7 ? 20 + index : 4 + index }, n.next));
+    expect(n.calls.map(c => c.model === 'claude-haiku-5-5' ? 'h' : 's').join('')).toBe('hhhhhsshh');
+    expect(f.logs).toContainEqual({ event: 'root_stop', turn: 'long', index: 5, reason: 'baseline_reach' });
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', scope: 'root', turn: 'long', index: 7, continued: 1 }));
   });
   it('does not suppress an effort downgrade after the host explicitly reports no cache read or creation', async () => {
     const router = createRouter(configOf(EFFORT_ONLY));

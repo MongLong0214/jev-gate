@@ -69,6 +69,14 @@ describe('operations display model', () => {
       row('router', { event: 'spawn_result', tool_use_id: 'u', requested: 'claude-sonnet-5-5', observed: 'claude-opus-5-5', agent_id: 'a', reason: 'model_mismatch' }, later)], new Date(later), { trace: true });
     expect(spawned.feed.find(s => s.model)?.routing).toMatchObject({ modelReason: 'not_applied' });
   });
+  it('shows the reasons of a context reset resume, not the held decision, on the requests after it', () => {
+    const mid = '2026-09-29T06:00:00.500Z', end = '2026-09-29T06:00:02.000Z', from = { model: 'claude-opus-5-5', effort: 'high' };
+    const result = (index: number, model: string, time: string) => row('router', { event: 'root_result', turn: 't', index, requested: model, applied: { model }, observed: model, confirmation: 'confirmed' }, time);
+    const view = buildOperations([], [row('router', { event: 'root', turn: 't', from, patch: {}, reasons: { model: 'cost_hold', effort: 'same_value' } }), result(1, 'claude-opus-5-5', mid),
+      row('router', { event: 'root_resume', turn: 't', index: 2, reason: 'context_reset', from, patch: { model: 'claude-sonnet-5-5' }, reasons: { model: 'selected', effort: 'same_value' } }, later), result(2, 'claude-sonnet-5-5', end)], new Date(end), { trace: true });
+    expect(view.feed.filter(s => s.model).map(s => s.routing?.modelReason).sort()).toEqual(['cost_hold', 'selected']);
+    expect(view.feed.find(s => s.title === 'Router · 루트 판단 재개')).toBeDefined();
+  });
   it('shows a proposed effort downgrade held by the cache separately from the final request setting', () => {
     const view = buildOperations([], [row('router', { event: 'root', turn: 'warm', from: { model: 'claude-opus-5-5', effort: 'xhigh' }, proposed_patch: { effort: 'low' }, patch: {}, held_for_cache: 'low', reasons: { model: 'same_value', effort: 'cache_preserved' } })], new Date(later), { trace: true });
     expect(view.feed[0]?.details.join(' ')).toContain('캐시 재사용을 위해 effort 유지 · Jev 제안 low · 요청 설정 xhigh');
