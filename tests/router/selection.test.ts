@@ -141,6 +141,26 @@ describe('documented Claude role thresholds and target effort resolution', () =>
     const pinned = claudeOffer('claude-opus-5-5', 'max', false); expect(pinned).toBeNull();
     delete a[name]; const invalid = selectPair(o, a); expect(invalid.patch).toEqual({}); expect(invalid.reasons.effort).toBe('target_effort_unresolved'); expect(invalid.diagnostics.pair_valid).toBe(false);
   });
+  it('runs a switch whose effort answer fell short at the deepest level the target accepts below the baseline', () => {
+    const o = claudeOffer('claude-opus-5-5', 'xhigh'); const name = o.effortQuestions.get('claude-sonnet-5-5')!.name;
+    const light = { type: 'score', probabilities: { 0: 1, 1: 0, 2: 0 } };
+    // Control clears the move (.7 against .6) but not the effort floor (.8): Sonnet takes no xhigh, so it runs at high, not at the unconfirmed low.
+    const short = exactAnswers(o, 'claude-sonnet-5-5', .9, 'ordinary', .7); short[name] = light;
+    expect(selectPair(o, short)).toMatchObject({ patch: { model: 'claude-sonnet-5-5', effort: 'high', effortEdit: { kind: 'set', value: 'high' } },
+      reasons: { model: 'selected', effort: 'nearest_below' }, diagnostics: { pair_valid: true, effort_policy: 'nearest_below' } });
+    // A confident answer sets its own level.
+    const sure = exactAnswers(o, 'claude-sonnet-5-5', .9, 'ordinary', 1); sure[name] = light;
+    expect(selectPair(o, sure)).toMatchObject({ patch: { model: 'claude-sonnet-5-5', effort: 'low' }, reasons: { effort: 'selected' } });
+    // An invalid effort answer and an effort lock keep the native call.
+    const invalid = exactAnswers(o, 'claude-sonnet-5-5', .9, 'ordinary', .7); delete invalid[name];
+    expect(selectPair(o, invalid)).toMatchObject({ patch: {}, reasons: { model: 'pair_invalid', effort: 'target_effort_unresolved' } });
+    const q = o.questions.control!; if (q.type !== 'choice') throw Error('control question absent');
+    const locked = { ...short, control: { type: 'choice', choice: 'effort_lock', confidence: .9, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === 'effort_lock' ? .9 : k === 'unclear' ? .1 : 0])) } };
+    expect(selectPair(o, locked)).toMatchObject({ patch: {}, reasons: { model: 'pair_invalid', effort: 'control_lock' } });
+    // Kept on its own model, a baseline the model does not take unconditionally is the native call itself.
+    const s = claudeOffer('claude-sonnet-5-5', 'xhigh'); const own = exactAnswers(s, '__keep__', .9, 'ordinary', .7); own[s.effortQuestions.get('claude-sonnet-5-5')!.name] = light;
+    expect(selectPair(s, own).patch).toEqual({});
+  });
 });
 const candidates: RouteCandidate[] = [
   { id: 'fixture-A', description: 'coding model A', efforts: ['low', 'high'], omitEffort: false },

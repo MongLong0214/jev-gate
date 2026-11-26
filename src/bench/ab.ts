@@ -331,6 +331,8 @@ export interface TranscriptLine {
   uuid?: string;
   timestamp?: string;
   requestId?: string;
+  /** The api-request row this response answered; the Router's `root_result` names it as `request_ref`. */
+  requestRef?: string;
   /** The host writes the effort each assistant request ran with; this is how a Router change is seen (#132). */
   effort?: string;
   isMeta?: boolean;
@@ -396,8 +398,14 @@ export const sessionFacts = (traceDir: string, sid: string): { routed: Map<strin
   const records = (existsSync(traceDir) ? readdirSync(traceDir) : []).map(file => readJson(join(traceDir, file))).filter((r): r is Record<string, unknown> => isRecord(r) && r['session_id'] === sid)
     .sort((a, b) => String(a['written_at'] ?? '').localeCompare(String(b['written_at'] ?? '')));
   const decisions = new Map(records.filter(r => r['phase'] === 'mod_router' && r['event'] === 'root' && isRecord(r['patch']) && typeof r['patch']['model'] === 'string').map(r => [r['turn'], (r['patch'] as Record<string, unknown>)['model']]));
+  // From a context reset on, a turn routes on its `root_resume` selection, as doctor's router_cost reads it.
+  const resumes = records.filter(r => r['phase'] === 'mod_router' && r['event'] === 'root_resume' && isRecord(r['patch']));
+  const decisionOf = (r: Record<string, unknown>): unknown => {
+    const resume = resumes.findLast(d => d['turn'] === r['turn'] && Number(d['index'] ?? 0) <= Number(r['index'] ?? 0));
+    return resume ? (resume['patch'] as Record<string, unknown>)['model'] : decisions.get(r['turn']);
+  };
   for (const r of records) {
-    if (r['phase'] === 'mod_router' && r['event'] === 'root_result' && r['confirmation'] === 'confirmed' && typeof r['request_id'] === 'string' && typeof r['observed'] === 'string' && decisions.get(r['turn']) === r['observed']) routed.set(r['request_id'], r['observed']);
+    if (r['phase'] === 'mod_router' && r['event'] === 'root_result' && r['confirmation'] === 'confirmed' && typeof r['request_ref'] === 'string' && typeof r['observed'] === 'string' && decisionOf(r) === r['observed']) routed.set(r['request_ref'], r['observed']);
     const hook = typeof r['request_id'] === 'string' && (String(r['phase']).endsWith('_intent') || r['attempted'] === true);
     const router = r['phase'] === 'mod_router' && (r['sent'] === true || r['event'] === 'late');
     // A failed Compact selection records `jev_sent: null` (the classic PreCompact path only `selection: 'error'` on its
@@ -591,7 +599,7 @@ export const rowOf = (r: CellResult, file: TasksFile | null, transcript: string 
   const seen = observedOf(main);
   // A pinned model that the transcript contradicts, or a task turn that ran on more than one model, is not this cell.
   const modelMismatch = seen.models.length === 0 || main.some(e => e.type === 'assistant' && typeof e.message?.model === 'string' && r.model !== undefined && e.message.model !== r.model &&
-    !(r.cond === 'D' && typeof e.requestId === 'string' && facts.routed.get(e.requestId) === e.message.model));
+    !(r.cond === 'D' && typeof e.requestRef === 'string' && facts.routed.get(e.requestRef) === e.message.model));
   const nativeLines = [...main];
   const su: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, complete: true };
   const primeSubs: UsageSum = { input: 0, cache_create: 0, cache_read: 0, output: 0, requests: 0, tools: 0, complete: true };

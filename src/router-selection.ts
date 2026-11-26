@@ -68,6 +68,8 @@ const EFFORT_TEXT: Record<string, string> = {
   max: 'Maximum sustained reasoning for exceptional proof search and competing hypotheses.',
   ultra: 'Exhaustive host-controlled reasoning for adversarial proof search and independent verification.',
 };
+/** EFFORT_TEXT lists the levels shallowest first; this order compares levels across models. */
+const EFFORT_DEPTH = Object.keys(EFFORT_TEXT);
 const ROLE_NAMES = ['fast', 'standard', 'deep', 'frontier'];
 /**
  * The capability options by documented role, cheapest first. Keys and criteria name the work, never a model, role,
@@ -350,6 +352,14 @@ export const selectPair = (offer: PairOffer, raw: unknown): PairDecision => {
       }
     }
   } else if (control.choice === 'effort_lock') reasons.effort = 'control_lock';
+  // A switch whose effort answer fell short of its threshold keeps the baseline's effort. When the target does not accept
+  // that level, it runs at the deepest level the target accepts below it: never deeper than the baseline. An invalid
+  // effort answer, a risk hold or an effort lock still keeps the native call.
+  if (edit.kind === 'keep' && reasons.effort === 'low_confidence' && model !== offer.baseline.model && !pairValidFor(target, edit, offer.baseline.effort)) {
+    const depth = (e: unknown): number => typeof e === 'string' ? EFFORT_DEPTH.indexOf(e) : -1, from = depth(offer.baseline.effort);
+    const below = target.efforts.filter(e => depth(e) >= 0 && depth(e) < from).sort((a, b) => depth(b) - depth(a))[0];
+    if (below) { edit = { kind: 'set', value: below }; reasons.effort = 'nearest_below'; diagnostics.effort_policy = 'nearest_below'; }
+  }
   if (!pairValidFor(target, edit, offer.baseline.effort)) { diagnostics.pair_valid = false; if (reasons.effort === 'answer_invalid') reasons.effort = 'target_effort_unresolved'; reasons.model = 'pair_invalid'; return native(); }
   return { patch: { ...(model !== offer.baseline.model ? { model } : {}), ...(edit.kind !== 'keep' ? { effortEdit: edit } : {}), ...(edit.kind === 'set' ? { effort: edit.value } : {}) }, reasons, diagnostics };
 };
