@@ -25,7 +25,7 @@ describe('bench ab (#130)', () => {
       const save = (name: string, value: object) => writeFileSync(join(dir, `${name}.json`), JSON.stringify({ session_id: 'sid', phase: 'mod_router', turn: 'task-turn', ...value }));
       save(latest, { event: 'root', written_at: '2026-10-20T00:00:02.000Z', patch: { model: 'latest-model' } });
       save(older, { event: 'root', written_at: '2026-10-20T00:00:01.000Z', patch: { model: 'older-model' } });
-      save('result', { event: 'root_result', written_at: '2026-10-20T00:00:03.000Z', request_id: 'task-request', confirmation: 'confirmed', observed: 'latest-model' });
+      save('result', { event: 'root_result', written_at: '2026-10-20T00:00:03.000Z', request_ref: 'task-request', confirmation: 'confirmed', observed: 'latest-model' });
       expect([...sessionFacts(dir, 'sid').routed]).toEqual([['task-request', 'latest-model']]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -35,21 +35,33 @@ describe('bench ab (#130)', () => {
     const usage = { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 };
     const save = (name: string, value: object) => writeFileSync(join(trace, name), JSON.stringify({ session_id: 'sid', ...value }));
     save('prime.json', { phase: 'mod_router', event: 'root', turn: 'prime-turn', patch: { model } });
-    save('prime-result.json', { phase: 'mod_router', event: 'root_result', turn: 'prime-turn', request_id: 'prime-request', confirmation: 'confirmed', observed: model });
+    save('prime-result.json', { phase: 'mod_router', event: 'root_result', turn: 'prime-turn', request_ref: 'prime-request', confirmation: 'confirmed', observed: model });
     writeFileSync(transcript, [
       { type: 'user', message: { content: 'prime' } },
-      { type: 'assistant', requestId: 'prime-request', message: { id: 'prime', model, usage } },
+      { type: 'assistant', requestRef: 'prime-request', message: { id: 'prime', model, usage } },
       { type: 'user', message: { content: 'task' } },
-      { type: 'assistant', requestId: 'task-request', message: { id: 'task', model, usage } },
+      { type: 'assistant', requestRef: 'task-request', message: { id: 'task', model, usage } },
     ].map(v => JSON.stringify(v)).join('\n'));
     const cell: CellResult = { id: 'S-D-1', task: 'S', cond: 'D', rep: 1, sid: 'sid', cwd: dir, model: 'claude-opus-5-5', started_at: '', prime_wall_s: 1, wall_s: 2, prime_rc: 0, rc: 0, timed_out: false, check_rc: null, prime: {}, harness: {}, result_head: 'ok' };
     expect(rowOf(cell, null, transcript, trace)).toMatchObject({ ok: false, model_mismatch: true });
     save('task.json', { phase: 'mod_router', event: 'root', turn: 'task-turn', patch: { model } });
     save('task-result.json', { phase: 'mod_router', event: 'root_result', turn: 'task-turn', confirmation: 'confirmed', observed: model });
     expect(rowOf(cell, null, transcript, trace)).toMatchObject({ ok: false, model_mismatch: true });
-    save('task-result.json', { phase: 'mod_router', event: 'root_result', turn: 'task-turn', request_id: 'task-request', confirmation: 'confirmed', observed: model });
+    save('task-result.json', { phase: 'mod_router', event: 'root_result', turn: 'task-turn', request_ref: 'task-request', confirmation: 'confirmed', observed: model });
     expect(rowOf(cell, null, transcript, trace)).toMatchObject({ ok: true, model_mismatch: false });
     rmSync(dir, { recursive: true });
+  });
+  it('attributes a turn resumed after a context reset to its root_resume selection from that step on (#424)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ab-route-resume-'));
+    try {
+      const save = (name: string, value: object) => writeFileSync(join(dir, `${name}.json`), JSON.stringify({ session_id: 'sid', phase: 'mod_router', turn: 't', ...value }));
+      // Held for its cache cost, the turn's own record carries no model; it resumes on Sonnet after the reset at step 2.
+      save('a', { event: 'root', written_at: '2026-11-26T00:00:01.000Z', index: 0, patch: {}, proposed_patch: { model: 'claude-sonnet-5-5' } });
+      save('b', { event: 'root_result', written_at: '2026-11-26T00:00:02.000Z', index: 1, request_ref: 'held', confirmation: 'confirmed', observed: 'claude-opus-5-5' });
+      save('c', { event: 'root_resume', written_at: '2026-11-26T00:00:03.000Z', index: 2, reason: 'context_reset', patch: { model: 'claude-sonnet-5-5' } });
+      save('d', { event: 'root_result', written_at: '2026-11-26T00:00:04.000Z', index: 2, request_ref: 'resumed', confirmation: 'confirmed', observed: 'claude-sonnet-5-5' });
+      expect([...sessionFacts(dir, 'sid').routed]).toEqual([['resumed', 'claude-sonnet-5-5']]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   it('counts exact Jev intent/result bindings once and retains unobserved consumption as unknown', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ab-jev-'));

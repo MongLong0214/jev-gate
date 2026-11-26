@@ -731,7 +731,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       // baseline model returns on the switch's effort: a switch whose effort is below the one the baseline itself
       // would run this turn is held. So is one above it that its price decided, as a return would run the baseline at an
       // output cost that price leaves out; an upgrade is never held for cost.
-      const kept = result.ok ? floored(keepModelPair(offer, result.answers).patch as RoutingPatch) : null;
+      const keptDecision = result.ok ? keepModelPair(offer, result.answers) : null;
+      const kept = keptDecision ? floored(keptDecision.patch as RoutingPatch) : null;
       const switched = floored(decision.patch as RoutingPatch);
       const returnEffort = kept && (belowEffort(turnEffort(t.baseline, switched.patch), turnEffort(t.baseline, kept.patch)) || priced.reason !== 'upgrade_allowed' && belowEffort(turnEffort(t.baseline, kept.patch), turnEffort(t.baseline, switched.patch)));
       const { hold, reason: costReason } = decision.patch.model && returnEffort && !priced.hold ? { hold: true, reason: 'return_effort' } : priced;
@@ -748,7 +749,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
         excluded: { ...excluded, effort_incompatible: candidates.length - offer.candidates.length }, candidates: offer.candidates.slice(0, 16).map(c => c.id), host_version: hostBase ?? null,
         proposed_patch: decision.patch, patch: t.patch, cost, cost_reason: costReason, effort_cache: preserves ? 'cache_preserved' : missedEffortModels.has(id) ? 'observed_miss_floor_restored' : capabilityReason, ...(preserves && earlier ? { effort_cache_basis: 'earlier_session' } : {}),
         cache_ttl_ms: observedCache?.ttlMs ?? null, cache_floor_expiry_basis: observedCache?.ttlMs != null ? 'observed_ttl' : 'unknown_ttl_upper_bound', ...(cached.held ? { held_for_cache: cached.held } : {}),
-        reasons: { ...decision.reasons, ...(hold ? { model: costReason } : {}), ...(cached.held ? { effort: 'cache_preserved' } : {}) },
+        // A held switch runs the kept pair, so its effort reason is the kept pair's, not the proposal's.
+        reasons: { ...decision.reasons, ...(hold ? { model: costReason, ...(kept && keptDecision ? { effort: keptDecision.reasons.effort } : {}) } : {}), ...(cached.held ? { effort: 'cache_preserved' } : {}) },
         selection: decision.diagnostics, answers: result.ok ? pairReceipt(offer, result.answers) : null });
     } catch (error) { t.stopped = true; log(engine, { event: 'root', turn: turnId, skipped: error === ENDED ? 'turn_retired' : 'internal_error' }); }
   };

@@ -1904,6 +1904,19 @@ describe('root effort and the prompt cache', () => {
     tier = 'standard'; expect((await turn('held', 'claude-opus-5-5', 'ephemeral_1h_input_tokens'))?.model).toBe('claude-opus-5-5');
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'root', turn: 'held', cost_reason: 'cost_hold', proposed_patch: expect.objectContaining({ model: 'claude-sonnet-5-5' }), patch: {} }));
   });
+  // 2026-11-24..25: an Opus-at-xhigh turn whose capability answer chose Sonnet, with its effort answer short of the floor, was dropped as pair_invalid.
+  it('proposes a switch whose effort answer fell short at the nearest effort its target accepts, and logs the effort reason of the pair that runs', async () => {
+    const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF, ...FULL_IDS }), SWITCHES);
+    const f = fakeEngine({ respond: answering({ control: ['task_clear', .7], action_risk: ['ordinary', .99], tier: ['standard', .95], effort: ['low', .99] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    await drain(router.turnStep(f.engine, step({ effort: 'xhigh' }), n.next));
+    const root = f.logs.find(l => l.event === 'root');
+    // With no cache observed the switch is held: the turn runs the kept pair (Opus at the effort its own answer cleared), and the trace names that pair's effort reason.
+    expect(root).toMatchObject({ proposed_patch: { model: 'claude-sonnet-5-5', effort: 'high' }, selection: { effort_policy: 'nearest_below' }, cost_reason: 'cost_unknown_hold',
+      patch: { effort: 'low', effortEdit: { kind: 'set', value: 'low' } }, reasons: { model: 'cost_unknown_hold', effort: 'selected' } });
+    expect(n.calls.map(c => `${c.model}:${c.effort}`)).toEqual(['claude-opus-5-5:low']);
+  });
   // 2026-11-23..26: a turn patched xhigh to medium ran 29 requests there, then 195 at xhigh once the host compacted.
   describe('a switch held for cache cost', () => {
     // An Opus baseline with a warm cache, a Sonnet switch held for the cold write it would cost, on a turn at its first step.
