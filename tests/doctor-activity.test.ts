@@ -133,6 +133,17 @@ describe('activity: gate_a', () => {
     expect(c).toMatchObject({ level: 'fail', message: expect.stringContaining('errors 3 (15.0%: timeout 3)') });
   });
 
+  it('fails while the newest Jev calls all fail, whatever the 24 h rate', () => {
+    const bad = (minutes: number): Rec => rec('admission_result', { attempted: true, decision: { shape: 'direct', reason: 'http_400' }, http: { status: 400, code: 'http', duration_ms: 90 } }, minutes);
+    const sent = (assessment: string, minutes: number): Rec => router('root', { sent: true, assessment }, minutes);
+    const c = check(run([...times(40, () => call()), bad(5), sent('rejected_input', 4), bad(3)]), 'gate_a');
+    expect(c).toMatchObject({ level: 'fail', message: expect.stringContaining('the last 3 calls failed in a row since 2026-10-20T02:55:00.000Z (http_400 2, rejected_input 1)'), action: expect.stringMatching(/Jev API/) });
+    expect(c.message).toContain('hooks keep native calls meanwhile');
+    expect(level([...times(40, () => call()), bad(5), bad(4)], 'gate_a')).toBe('ok');
+    expect(level([...times(40, () => call()), bad(5), sent('aborted', 4), bad(3)], 'gate_a')).toBe('ok');
+    expect(level([...times(40, () => call()), bad(5), bad(4), bad(3), { ...call(), written_at: ago(1) }], 'gate_a')).toBe('ok');
+  });
+
   it('warns when the liveness ring shows a full window that never called Jev', () => {
     const liveness = { version: 1 as const, recent: Array.from({ length: 50 }, () => ({ at: ago(1), attempted: false, reason: 'depth_below_floor' })) };
     expect(check(run([rec('admission_result')], { liveness }), 'gate_a')).toMatchObject({ level: 'warn', message: expect.stringContaining('liveness 0/50'), action: expect.stringMatching(/never calls Jev/) });

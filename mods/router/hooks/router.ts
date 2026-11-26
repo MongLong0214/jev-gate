@@ -387,6 +387,10 @@ interface TurnRouting {
   pending: Promise<void> | null;
   deadline: number;
   patch: RoutingPatch;
+  /** The turn's selection before cache holds and floors: what it runs once a context reset leaves no cache to protect. */
+  selected?: RoutingPatch;
+  /** baseline_reach stopped the model: a context reset lifts that stop, as no baseline cache is left to reach. */
+  reached?: boolean;
   /** The whole turn is native from here on: skipped, diverged or retired. */
   stopped: boolean;
   /** #283: why a stop nothing recorded as it happened (a context reset) left the turn native; its next step records it. */
@@ -728,8 +732,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const returnEffort = kept && (belowEffort(turnEffort(t.baseline, switched.patch), turnEffort(t.baseline, kept.patch)) || priced.reason !== 'upgrade_allowed' && belowEffort(turnEffort(t.baseline, kept.patch), turnEffort(t.baseline, switched.patch)));
       const { hold, reason: costReason } = decision.patch.model && returnEffort && !priced.hold ? { hold: true, reason: 'return_effort' } : priced;
       const cached = hold && kept ? kept : switched;
-      if (!live.aborted && !t.stopped) t.patch = cached.patch;
-      if (!Object.keys(t.patch).length) t.stopped = true;
+      if (!live.aborted && !t.stopped) { t.patch = cached.patch; if (result.ok) t.selected = decision.patch as RoutingPatch; }
+      if (!Object.keys(t.patch).length && !Object.keys(t.selected ?? {}).length) t.stopped = true;
       log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, ...(notices.has(turnId) ? { turn_source: 'task_notification' } : {}), context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
         assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage), jev_model: result.ok ? JEV_MODEL : null,
         discovered_count: MODEL_FACTS.length, eligible_count: candidates.length, offered_count: offer.candidates.length, catalog_complete: false,
@@ -762,7 +766,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     if (pins.mainModel && !t.modelStopped) { t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_pinned' }); }
     if (pins.mainEffort && !t.effortStopped) { t.effortStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'effort_pinned' }); }
     let model = t.modelStopped ? undefined : t.patch.model;
-    if (model && t.baselineSeq !== undefined && rootSeq - t.baselineSeq >= CACHE_REACH) { model = undefined; t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'baseline_reach' }); }
+    if (model && t.baselineSeq !== undefined && rootSeq - t.baselineSeq >= CACHE_REACH) { model = undefined; t.modelStopped = t.reached = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'baseline_reach' }); }
     if (model && (!claudeTargetAllowed(model, allowFable) || !claudeModelAllowed(model, available, aliases))) { model = undefined; t.modelStopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'model_not_allowed' }); }
     if (model && factsOf(model)!.contextTokens < (factsOf(t.baseline.model)?.contextTokens ?? 0)) {
       const bound = await within(engine.currentContextBound?.(e.turnId, e.index).catch(() => undefined) ?? Promise.resolve(undefined), live);
@@ -1237,9 +1241,22 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
   };
 
-  const contextReset = (agentId?: string): void => {
+  const contextReset = (agentId?: string): number => {
+    let continued = 0;
     if (agentId) { const c = children.get(agentId); if (c) { c.controller.abort(); c.controller = new AbortController(); delete c.cache; delete c.step; delete c.cacheEffort; c.cachePreserved = false; } }
-    else { cacheEpoch++; rootCaches.clear(); rootCache = null; lastRoot = null; for (const t of turns.values()) { if (!t.stopped) t.stopReason = 'context_reset'; t.stopped = true; t.controller.abort(); } }
+    else {
+      cacheEpoch++; rootCaches.clear(); rootCache = null; lastRoot = null;
+      // No cache is warm for any model after a reset, so what held an assessed turn back (a cold write on the target, a
+      // return to the baseline's cache, the warm-effort floor) no longer applies: it goes on with its own selection.
+      for (const t of turns.values()) {
+        if (!t.stopped && !t.pending && t.selected) {
+          t.patch = t.selected; t.warmEffort = null; t.baselineSeq = undefined;
+          if (t.reached) t.reached = t.modelStopped = false;
+          if (!Object.keys(t.patch).length) t.stopped = true; else continued++;
+        } else { if (!t.stopped) t.stopReason = 'context_reset'; t.stopped = true; t.controller.abort(); }
+      }
+    }
+    return continued;
   };
   /**
    * #283: a step of a routed turn that goes out native says why, once, when no record said so as the turn stopped: a
@@ -1259,8 +1276,8 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     messageCounts.put(key, e.messageCount);
     if (last === undefined || e.messageCount >= last) return;
     const seen = announced.delete(key);
-    log(engine, { event: 'context_reset', scope: e.agentId === undefined ? 'root' : 'child', agent_id: e.agentId ?? null, turn: e.turnId, index: e.index, messages_before: last, messages_after: e.messageCount, announced: seen });
-    if (!seen) contextReset(e.agentId);
+    const continued = seen ? 0 : contextReset(e.agentId);
+    log(engine, { event: 'context_reset', scope: e.agentId === undefined ? 'root' : 'child', agent_id: e.agentId ?? null, turn: e.turnId, index: e.index, messages_before: last, messages_after: e.messageCount, announced: seen, ...(e.agentId === undefined && !seen ? { continued } : {}) });
   };
 
   async function* turnStep<E extends TurnStepEvent, C, R extends TurnStepOutcome | void>(
