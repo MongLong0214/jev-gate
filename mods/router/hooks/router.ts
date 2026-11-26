@@ -766,7 +766,6 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     // A switch held for cache cost has nothing to apply until a reset: its steps make no host read, or a slow one would
     // spend the step's budget, abandon the turn, and leave nothing for the reset to resume.
     if (!Object.keys(t.patch).length) return null;
-    if (t.resumed) { delete t.resumed; log(engine, { event: 'root_resume', scope: 'root', turn: e.turnId, index: e.index, reason: 'context_reset', from: { model: t.baseline.model, effort: t.baseline.effort ?? null }, patch: t.patch, reasons: t.selectedReasons }); }
     const allowFable = await within(frontierFor(engine), live);
     const available = await within(engine.availableModels().catch(() => []), live);
     const aliases = await within(aliasesOf(engine), live);
@@ -792,7 +791,11 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     }
     if (model && edit?.kind !== 'omit' && !pairValid(model, effort ?? e.effort)) { log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'pair_invalid' }); return null; }
     const patch: RoutingPatch = { ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(edit ? { effortEdit: edit } : {}) };
-    return Object.keys(patch).length ? patch : null;
+    if (!Object.keys(patch).length) return null;
+    // Logged only once the resumed selection is sent: a pin or an allowlist change since the decision stops it first,
+    // and a resume record for a selection that never ran would hide the stop that explains the native steps.
+    if (t.resumed) { delete t.resumed; log(engine, { event: 'root_resume', scope: 'root', turn: e.turnId, index: e.index, reason: 'context_reset', from: { model: t.baseline.model, effort: t.baseline.effort ?? null }, patch: t.patch, reasons: t.selectedReasons }); }
+    return patch;
   };
 
   /**

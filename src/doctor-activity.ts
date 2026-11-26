@@ -227,6 +227,8 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     const decisionOf = (r: Rec): Rec => resumes.get(step(r))?.findLast(d => (num(d['index']) ?? 0) <= (num(r['index']) ?? 0)) ?? decisions.get(step(r)) ?? {};
     const sessions = new Map<string, Rec[]>();
     for (const r of router('root_result')) group(sessions, String(r['session_id']), r);
+    const resets = new Map<string, Rec[]>();
+    for (const r of router('context_reset')) if (r['scope'] === 'root') group(resets, String(r['session_id']), r);
     const usage = (r: Rec): TokenUsage => {
       const u = sub(r, 'usage'), accounting = sub(r, 'accounting');
       const t = normalizeUsage('claude', { input_tokens: u['input'], cache_read_input_tokens: u['cache_read'], cache_creation_input_tokens: u['cache_creation'], output_tokens: u['output'],
@@ -267,6 +269,8 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
       const price = (model: string | null, t: TokenUsage) => usageCost(t, model ? providerPrice('claude', model, t.input! + t.read! + t.write!) : null).usd;
       for (const r of rows) {
         let { prev, back } = context;
+        // A root reset leaves no prefix warm for any model, the Router's own premise: a cache from before it is cold, not unknown.
+        const reset = (h: { at: number }): boolean => resets.get(id)?.some(x => at(x) > h.at && at(x) <= at(r)) ?? false;
         const t = usage(r), model = str(r['observed']), family = familyOf(model), total = t.input! + t.read! + t.write!;
         const actual = price(model, t);
         if (actual === null) unknownEvidence.add(id); else ownSpend += actual;
@@ -283,14 +287,14 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
         if (fromFamily && fromFamily !== family) {
           ownSwitched++; if (prev?.family !== family) ownSwitches++;
           const held = back?.family === fromFamily ? back : prev?.family === fromFamily ? prev : null;
-          const warm = held?.ttl != null ? at(r) - held.at < held.ttl : null;
+          const warm = held && reset(held) ? false : held?.ttl != null ? at(r) - held.at < held.ttl : null;
           if (t.write! > 0 && (warm === null || warm && rewritten === null)) unknownEvidence.add(id);
           const counter = price(from, warm && rewritten !== null ? readInstead(rewritten) : t);
           if (counter === null || actual === null) unknownEvidence.add(id); else ownSaved += counter - actual;
           back = { family: fromFamily, at: at(r), ttl };
         } else {
           if (back?.family === family && t.write! > 0) {
-            const warm = back.ttl === null ? null : at(r) - back.at < back.ttl;
+            const warm = reset(back) ? false : back.ttl === null ? null : at(r) - back.at < back.ttl;
             if (warm === null || warm && rewritten === null) unknownEvidence.add(id);
             if (warm && rewritten !== null) {
               const counter = price(model, readInstead(rewritten));

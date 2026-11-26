@@ -1969,6 +1969,20 @@ describe('root effort and the prompt cache', () => {
     expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', scope: 'root', turn: 't1', index: 2, announced: false, continued: 0 }));
     expect(f.logs.filter(l => l.event === 'root_resume')).toEqual([]);
   });
+  it('leaves no resume for a selection a pin stopped and the baseline cannot take the effort of', async () => {
+    const router = createRouter(configOf({ routeMainEffort: true, routeMainModel: true, routeSubagentModel: false, ...SUBAGENT_OFF, ...FULL_IDS }), SWITCHES);
+    const f = fakeEngine({ respond: answering({ ...CLEAR, tier: ['deep', 0.95], effort: ['xhigh', 0.95] }) });
+    router.turnStart({ turnId: 't1', text: TEXT });
+    const n = streamNext<TurnStepEvent>();
+    const at = (index: number, messageCount: number) => drain(router.turnStep(f.engine, step({ model: 'claude-sonnet-5-5', index, messageCount }), n.next));
+    await at(0, 40);
+    f.pins.mainModel = true;
+    await at(1, 42); await at(2, 5); await at(3, 7);
+    expect(n.calls.map(c => `${c.model}/${c.effort}`)).toEqual(['claude-opus-5-5/xhigh', 'claude-sonnet-5-5/high', 'claude-sonnet-5-5/high', 'claude-sonnet-5-5/high']);
+    expect(f.logs).toContainEqual({ event: 'root_stop', turn: 't1', index: 1, reason: 'model_pinned' });
+    expect(f.logs).toContainEqual(expect.objectContaining({ event: 'context_reset', scope: 'root', turn: 't1', index: 2 }));
+    expect(f.logs.filter(l => l.event === 'root_resume')).toEqual([]);
+  });
   it('lifts a baseline_reach stop on the switch once a context reset leaves no baseline cache to return to', async () => {
     const router = createRouter(configOf({ routeMainModel: true, routeMainEffort: true, ...SUBAGENT_OFF }));
     const f = fakeEngine({ hostBase: '2.1.293', respond: answering({ control: ['task_clear', .99], action_risk: ['ordinary', .99], tier: ['fast', .99], effort: ['low', .99] }) });

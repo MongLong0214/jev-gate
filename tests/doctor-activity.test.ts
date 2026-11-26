@@ -283,6 +283,18 @@ describe('activity: router_released', () => {
     expect(level(resumed(unrouted), 'router_released')).toBe('fail');
     expect(level(resumed(router('root_stop', { turn: 't1', index: 7, reason: 'pair_invalid' }, 6), unrouted), 'router_released')).toBe('ok');
   });
+  it('is ok for a pinned turn whose reset left nothing to resume: the stop before it still explains the native steps', () => {
+    const rows = [
+      router('root', { scope: 'root', turn: 't1', patch: { model: 'claude-opus-5-5', effort: 'xhigh' } }, 10),
+      router('prepared', { scope: 'root', turn: 't1', index: 0, routed: true }, 10),
+      router('root_stop', { turn: 't1', index: 1, reason: 'model_pinned' }, 9),
+      router('prepared', { scope: 'root', turn: 't1', index: 1, routed: false }, 9),
+      router('context_reset', { scope: 'root', turn: 't1', index: 2, continued: 1 }, 8),
+      router('prepared', { scope: 'root', turn: 't1', index: 2, routed: false }, 8),
+      router('prepared', { scope: 'root', turn: 't1', index: 3, routed: false }, 7),
+    ];
+    expect(check(run(rows), 'router_released')).toMatchObject({ level: 'ok', message: expect.stringContaining('0 of 1 patched root turns') });
+  });
   it('does not let a reset or stop from before the resume explain a later unrouted step', () => {
     const before = [router('root', { scope: 'root', turn: 't1', patch: { model: 'claude-haiku-5-5' } }, 11), router('root_stop', { turn: 't1', index: 3, reason: 'baseline_reach' }, 9)];
     expect(level([...before, ...resumed(unrouted)], 'router_released')).toBe('fail');
@@ -387,6 +399,18 @@ describe('activity: router_cost', () => {
     const heldRows = rows.map(r => r === held ? { ...r, patch: {} } : r);
     expect(check(run(heldRows), 'router_cost').message).toMatch(/no routed root model switch/);
     expect(check(run([...heldRows, resume]), 'router_cost').message).toMatch(/1 routed root requests off their turn's baseline model over 1 switches/);
+  });
+
+  it('prices a switch resumed after a context reset without the old model reading the new context from its earlier cache', () => {
+    const rows = (reset: boolean): Rec[] => [
+      ...result('claude-opus-5-5', { input: 2, output: 100, cache_read: 99_000, cache_creation: 1000 }, 30),
+      ...(reset ? [router('context_reset', { scope: 'root', turn: 't-reset', index: 2 }, 29)] : []),
+      ...[...result('claude-sonnet-5-5', { input: 2, output: 100, cache_read: 0, cache_creation: 20_000 }, 28), ...result('claude-sonnet-5-5', { input: 2, output: 100, cache_read: 20_000, cache_creation: 500 }, 27)]
+        .map(r => r['event'] === 'root' ? { ...r, patch: { model: 'claude-sonnet-5-5' } } : r),
+    ];
+    expect(check(run(rows(false)), 'router_cost')).toMatchObject({ level: 'fail', message: expect.stringMatching(/; net -\$/) });
+    // After the reset the old model's cache is cold too: it would have written the new context, as the switch did.
+    expect(check(run(rows(true)), 'router_cost')).toMatchObject({ level: 'ok', message: expect.stringContaining('over 1 switches; net +$0.09') });
   });
 
   it('credits only the recorded model patch applied to the matching request and response', () => {
