@@ -389,6 +389,10 @@ interface TurnRouting {
   patch: RoutingPatch;
   /** The turn's selection before cache holds and floors: what it runs once a context reset leaves no cache to protect. */
   selected?: RoutingPatch;
+  /** The reasons that selection was made for, recorded when a context reset resumes it. */
+  selectedReasons?: { model: string; effort: string };
+  /** A context reset put the selection back on the turn: the first step that applies it records the resume (readers join on it, not on the held decision). */
+  resumed?: boolean;
   /** baseline_reach stopped the model: a context reset lifts that stop, as no baseline cache is left to reach. */
   reached?: boolean;
   /** The whole turn is native from here on: skipped, diverged or retired. */
@@ -515,7 +519,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    * ponytail: a rewind also shortens the list and is read as a reset, which only drops the cache floor early.
    */
   const messageCounts = bounded<string, number>(MAX_CHILDREN + 1);
-  const announced = new Set<string>();
+  const announced = new Map<string, number>();
   let lastIncoming: { effort: TurnStepEvent['effort'] } | null = null;
   /** This session's record only: session.end (exit, /clear, resume) clears it, and the next session reads its own. */
   let rootRecord: RootRecord | null = null;
@@ -732,7 +736,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       const returnEffort = kept && (belowEffort(turnEffort(t.baseline, switched.patch), turnEffort(t.baseline, kept.patch)) || priced.reason !== 'upgrade_allowed' && belowEffort(turnEffort(t.baseline, kept.patch), turnEffort(t.baseline, switched.patch)));
       const { hold, reason: costReason } = decision.patch.model && returnEffort && !priced.hold ? { hold: true, reason: 'return_effort' } : priced;
       const cached = hold && kept ? kept : switched;
-      if (!live.aborted && !t.stopped) { t.patch = cached.patch; if (result.ok) t.selected = decision.patch as RoutingPatch; }
+      if (!live.aborted && !t.stopped) { t.patch = cached.patch; if (result.ok) { t.selected = decision.patch as RoutingPatch; t.selectedReasons = decision.reasons; } }
       if (!Object.keys(t.patch).length && !Object.keys(t.selected ?? {}).length) t.stopped = true;
       log(engine, { event: 'root', scope: 'root', boundary: 'host_hook', turn: turnId, ...(notices.has(turnId) ? { turn_source: 'task_notification' } : {}), context_chars: context?.length ?? 0, from: { model: t.baseline.model, effort: t.baseline.effort ?? null },
         assessment: result.ok ? 'ok' : result.reason, sent: result.ok || result.sent, duration_ms: Math.max(0, engine.now() - started), usage: loggable(result.usage), jev_model: result.ok ? JEV_MODEL : null,
@@ -755,11 +759,15 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
    */
   const applyStored = async (engine: RouterEngine, t: TurnRouting, e: TurnStepEvent, live: AbortSignal): Promise<RoutingPatch | null> => {
     if (t.stopped) return null;
-    const allowFable = await within(frontierFor(engine), live);
     const effectiveEffort = t.patch.effortEdit?.kind === 'omit' ? undefined : t.patch.effort ?? t.baseline.effort;
     if (e.model !== t.incomingModel && e.model !== t.baseline.model && e.model !== t.patch.model || e.effort !== t.incomingEffort && e.effort !== t.baseline.effort && e.effort !== effectiveEffort) {
       t.stopped = true; log(engine, { event: 'root_stop', turn: e.turnId, index: e.index, reason: 'incoming_divergence' }); return null;
     }
+    // A switch held for cache cost has nothing to apply until a reset: its steps make no host read, or a slow one would
+    // spend the step's budget, abandon the turn, and leave nothing for the reset to resume.
+    if (!Object.keys(t.patch).length) return null;
+    if (t.resumed) { delete t.resumed; log(engine, { event: 'root_resume', scope: 'root', turn: e.turnId, index: e.index, reason: 'context_reset', from: { model: t.baseline.model, effort: t.baseline.effort ?? null }, patch: t.patch, reasons: t.selectedReasons }); }
+    const allowFable = await within(frontierFor(engine), live);
     const available = await within(engine.availableModels().catch(() => []), live);
     const aliases = await within(aliasesOf(engine), live);
     const pins = await within(pinsOf(engine, 'root', live), live);
@@ -1248,12 +1256,12 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       cacheEpoch++; rootCaches.clear(); rootCache = null; lastRoot = null;
       // No cache is warm for any model after a reset, so what held an assessed turn back (a cold write on the target, a
       // return to the baseline's cache, the warm-effort floor) no longer applies: it goes on with its own selection.
+      // A part a pin already stopped is no continuation: a turn left with none is native, as without a selection.
       for (const t of turns.values()) {
-        if (!t.stopped && !t.pending && t.selected) {
-          t.patch = t.selected; t.warmEffort = null; t.baselineSeq = undefined;
-          if (t.reached) t.reached = t.modelStopped = false;
-          if (!Object.keys(t.patch).length) t.stopped = true; else continued++;
-        } else { if (!t.stopped) t.stopReason = 'context_reset'; t.stopped = true; t.controller.abort(); }
+        const s = !t.stopped && !t.pending ? t.selected : undefined;
+        if (s) { t.warmEffort = null; t.baselineSeq = undefined; if (t.reached) t.reached = t.modelStopped = false; }
+        if (s && (s.model && !t.modelStopped || !t.effortStopped && (s.effort !== undefined || s.effortEdit !== undefined))) { t.patch = s; t.resumed = true; continued++; }
+        else { if (!t.stopped) t.stopReason = 'context_reset'; t.stopped = true; t.controller.abort(); }
       }
     }
     return continued;
@@ -1275,9 +1283,10 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
     const last = messageCounts.get(key);
     messageCounts.put(key, e.messageCount);
     if (last === undefined || e.messageCount >= last) return;
-    const seen = announced.delete(key);
-    const continued = seen ? 0 : contextReset(e.agentId);
-    log(engine, { event: 'context_reset', scope: e.agentId === undefined ? 'root' : 'child', agent_id: e.agentId ?? null, turn: e.turnId, index: e.index, messages_before: last, messages_after: e.messageCount, announced: seen, ...(e.agentId === undefined && !seen ? { continued } : {}) });
+    const seen = announced.get(key);
+    announced.delete(key);
+    const continued = seen ?? contextReset(e.agentId);
+    log(engine, { event: 'context_reset', scope: e.agentId === undefined ? 'root' : 'child', agent_id: e.agentId ?? null, turn: e.turnId, index: e.index, messages_before: last, messages_after: e.messageCount, announced: seen !== undefined, ...(e.agentId === undefined ? { continued } : {}) });
   };
 
   async function* turnStep<E extends TurnStepEvent, C, R extends TurnStepOutcome | void>(
@@ -1839,7 +1848,7 @@ export const createRouter = (config: RouterConfig, rootSwitches?: readonly RootS
       pinReads.clear();
       diagnosed = false;
     },
-    contextChanged: (agentId?: string): void => { announced.add(agentId ?? ''); contextReset(agentId); },
+    contextChanged: (agentId?: string): void => { announced.set(agentId ?? '', contextReset(agentId)); },
     inFlight: client.inFlight,
   };
 };

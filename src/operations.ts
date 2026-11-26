@@ -278,7 +278,7 @@ const ADMISSION_REASON: Record<string, string> = {
   same_turn: '진행 중인 턴의 입력',
 };
 const ROUTER_EVENT: Record<string, string> = {
-  router: '세션 설정', request: 'Jev 요청', root: '루트 턴 판단', root_result: '루트 응답 모델 확인', root_stop: '루트 판단 중단', spawn: 'Agent 생성 판단',
+  router: '세션 설정', request: 'Jev 요청', root: '루트 턴 판단', root_result: '루트 응답 모델 확인', root_stop: '루트 판단 중단', root_resume: '루트 판단 재개', spawn: 'Agent 생성 판단',
   spawn_result: 'Agent 응답 모델 확인', spawn_native_result: 'Agent 응답 모델 확인', spawn_stop: 'Agent 판단 중단', spawn_denied: 'Agent 생성 거부', spawn_dimension: 'Agent 항목 미적용',
   child: '하위 실행 등록', child_route: '하위 단계 판단', child_result: '하위 단계 응답 모델 확인', child_stop: '하위 단계 판단 중단', cache_restored: '캐시 기준 복원',
   cache_restore_skipped: '캐시 기준 복원 생략', context_restored: '대화 문맥 복원', context_restore_skipped: '대화 문맥 복원 생략', effort_cache: 'effort 캐시 유지', context_reset: '문맥 초기화', budget_timeout: '판단 시간 초과', late: '늦은 응답',
@@ -642,7 +642,8 @@ const routedModRecords = (mods: ModRecord[], records: Rec[], context?: PartConte
       if (want && token(want['effort']) && token(want['effort']) !== token(sent?.['effort'])) routing = { ...routing, effortReason: 'not_applied' };
     }
     if (routing && event === 'spawn_result' && r['reason'] === 'model_mismatch') routing = { ...routing, modelReason: 'not_applied' };
-    if (event === 'root' && turn && (field(r, 'reasons') || field(r, 'from'))) turns.set(turn, r);
+    // A reset's resume replaces the held decision for the rows after it: those requests ran on its selection.
+    if ((event === 'root' || event === 'root_resume') && turn && (field(r, 'reasons') || field(r, 'from'))) turns.set(turn, r);
     if (event === 'spawn' && tool) spawns.set(tool, r);
     if (event === 'child_route' && agent) childSteps.set(routerResponseKey(r), r);
     if (['spawn_result', 'spawn_native_result'].includes(String(event)) && agent && routing) { children.set(agent, { routing, row }); exported?.push({ agent, row, routing }); }

@@ -144,6 +144,20 @@ describe('activity: gate_a', () => {
     expect(level([...times(40, () => call()), bad(5), bad(4), bad(3), { ...call(), written_at: ago(1) }], 'gate_a')).toBe('ok');
   });
 
+  it('leaves a caller cancellation out of the streak, and counts a Codex Router result in it', () => {
+    const cancelled = (minutes: number): Rec => rec('admission_result', { attempted: true, decision: { shape: 'direct', reason: 'aborted' }, http: { status: null, code: 'aborted', duration_ms: 10 } }, minutes);
+    const codex = (ok: boolean, reason: string | null, minutes: number): Rec => rec('codex_router_result', { attempted: true, ok, reason, http: { status: ok ? 200 : 400, code: ok ? null : 'http' } }, minutes);
+    const sent = (assessment: string, minutes: number): Rec => router('root', { sent: true, assessment }, minutes);
+    expect(level([...times(40, () => call()), cancelled(5), cancelled(4), cancelled(3)], 'gate_a')).toBe('ok');
+    const failing = (rows: Rec[]): boolean => check(run(rows), 'gate_a').message.includes('Jev is failing now');
+    const router3 = [sent('rejected_input', 5), sent('rejected_input', 4), sent('rejected_input', 3)];
+    expect(failing(router3)).toBe(true);
+    expect(failing([...router3, codex(true, null, 2)])).toBe(false);
+    expect(failing([...router3, codex(true, 'aborted', 2)])).toBe(true);
+    expect(failing([codex(false, 'http_400', 5), codex(false, 'http_400', 4), codex(true, 'model_mismatch', 3)])).toBe(true);
+    expect(check(run([codex(false, 'http_400', 5), codex(false, 'http_400', 4), codex(false, 'http_400', 3)]), 'gate_a')).toMatchObject({ level: 'fail', message: expect.stringContaining('the last 3 calls failed in a row since 2026-10-20T02:55:00.000Z (http_400 3)') });
+  });
+
   it('warns when the liveness ring shows a full window that never called Jev', () => {
     const liveness = { version: 1 as const, recent: Array.from({ length: 50 }, () => ({ at: ago(1), attempted: false, reason: 'depth_below_floor' })) };
     expect(check(run([rec('admission_result')], { liveness }), 'gate_a')).toMatchObject({ level: 'warn', message: expect.stringContaining('liveness 0/50'), action: expect.stringMatching(/never calls Jev/) });
@@ -254,6 +268,25 @@ describe('activity: router_released', () => {
     expect(level(turn(router('context_reset', { scope: 'root', turn: 't1', index: 1 }, 8), released), 'router_released')).toBe('ok');
     expect(level(turn(router('turn_end', { scope: 'root', turn: 't1' }, 9), released), 'router_released')).toBe('ok');
   });
+  // A reset puts a held (or reach-stopped) selection back on the turn; its resume is the decision from then on.
+  const resumed = (...after: Rec[]): Rec[] => [
+    router('root', { scope: 'root', turn: 't1', patch: {} }, 10),
+    router('context_reset', { scope: 'root', turn: 't1', index: 5 }, 8),
+    router('root_resume', { scope: 'root', turn: 't1', index: 5, reason: 'context_reset', from: { model: 'claude-opus-5-5' }, patch: { model: 'claude-haiku-5-5' } }, 8),
+    router('prepared', { scope: 'root', turn: 't1', index: 5, routed: true }, 8),
+    router('prepared', { scope: 'root', turn: 't1', index: 6, routed: true }, 7),
+    ...after,
+  ];
+  const unrouted = router('prepared', { scope: 'root', turn: 't1', index: 7, routed: false }, 6);
+  it('counts a resumed turn as patched: routed steps after the resume are fine, an unexplained unrouted one is not', () => {
+    expect(check(run(resumed()), 'router_released')).toMatchObject({ level: 'ok', message: expect.stringContaining('0 of 1 patched root turns') });
+    expect(level(resumed(unrouted), 'router_released')).toBe('fail');
+    expect(level(resumed(router('root_stop', { turn: 't1', index: 7, reason: 'pair_invalid' }, 6), unrouted), 'router_released')).toBe('ok');
+  });
+  it('does not let a reset or stop from before the resume explain a later unrouted step', () => {
+    const before = [router('root', { scope: 'root', turn: 't1', patch: { model: 'claude-haiku-5-5' } }, 11), router('root_stop', { turn: 't1', index: 3, reason: 'baseline_reach' }, 9)];
+    expect(level([...before, ...resumed(unrouted)], 'router_released')).toBe('fail');
+  });
   it('ignores a child step and an unpatched turn', () => {
     expect(level([router('root', { scope: 'root', turn: 't2', patch: {} }), router('prepared', { scope: 'root', turn: 't2', index: 1, routed: false })], 'router_released')).toBe('info');
     expect(level(turn(router('prepared', { scope: 'child', agent_id: 'a1', turn: 't1', index: 1, routed: false }, 8)), 'router_released')).toBe('ok');
@@ -346,6 +379,14 @@ describe('activity: router_cost', () => {
     expect(c.level).toBe('fail');
     expect(c.message).toMatch(/^router_cost: 1 routed root requests off their turn's baseline model over 1 switches; net -\$0\.\d\d at observed TTL/);
     expect(c.message.match(/; net .*?write prices/)?.[0]).toBe(alone.message.match(/; net .*?write prices/)?.[0]);
+  });
+
+  it('joins a request after a context reset to the resume that carries its selection, not the held decision', () => {
+    const rows = result('claude-haiku-5-5', { input: 0, cache_read: 0, cache_creation: 0, output: 2000 }, 5), held = rows.find(r => r['event'] === 'root')!;
+    const resume = router('root_resume', { session_id: 's1', scope: 'root', turn: held['turn'], index: 0, reason: 'context_reset', from: held['from'], patch: held['patch'] }, 5);
+    const heldRows = rows.map(r => r === held ? { ...r, patch: {} } : r);
+    expect(check(run(heldRows), 'router_cost').message).toMatch(/no routed root model switch/);
+    expect(check(run([...heldRows, resume]), 'router_cost').message).toMatch(/1 routed root requests off their turn's baseline model over 1 switches/);
   });
 
   it('credits only the recorded model patch applied to the matching request and response', () => {

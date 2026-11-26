@@ -122,9 +122,11 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
   const ring = input.liveness?.recent ?? [], ringCalls = ring.filter(e => e.attempted).length, never = ring.length >= LIVENESS_WINDOW && ringCalls === 0;
   // 2026-11-26: the Jev API answered 400 to every call for hours while the rate over 24 h still read ok. The newest calls
   // of Gate A and Router, taken together, say whether Jev is failing now; hooks answer native meanwhile. A wait the turn
-  // itself ended (aborted) says nothing about Jev.
+  // itself ended (aborted) says nothing about Jev, nor does a call Gate A's caller cancelled. Codex Router results count as the
+  // Router calls of a Codex-only view; an ok result can still carry a reason (aborted, model_mismatch).
   const codeOf = (r: Rec): string | null => errorOf(r) ? [str(sub(r, 'decision')['reason']), str(sub(r, 'http')['code'])].find(v => v?.startsWith('http_')) ?? str(sub(r, 'http')['code']) ?? errorOf(r) : null;
-  const recent = [...calls.map(r => ({ r, code: codeOf(r) })), ...router('root', 'spawn', 'child_route').filter(r => r['sent'] === true && r['assessment'] !== 'aborted').map(r => ({ r, code: r['assessment'] === 'ok' ? null : str(r['assessment']) ?? 'unknown' }))].sort((a, b) => at(a.r) - at(b.r));
+  const recent = [...calls.filter(r => sub(r, 'http')['code'] !== 'aborted').map(r => ({ r, code: codeOf(r) })), ...router('root', 'spawn', 'child_route').filter(r => r['sent'] === true && r['assessment'] !== 'aborted').map(r => ({ r, code: r['assessment'] === 'ok' ? null : str(r['assessment']) ?? 'unknown' })),
+    ...phase('codex_router_result').filter(r => r['attempted'] === true && r['reason'] !== 'aborted').map(r => ({ r, code: r['ok'] === true && str(r['reason']) === null ? null : str(r['reason']) ?? str(sub(r, 'http')['code']) ?? 'unknown' }))].sort((a, b) => at(a.r) - at(b.r));
   const down = recent.length - 1 - recent.findLastIndex(c => c.code === null), outage = down >= 3 ? recent.slice(-down) : [];
   const gateAFail = calls.length >= 20 && errors.length / calls.length > 0.1 || outage.length > 0, gateAIdle = calls.length >= 50 && orchestrated === 0;
   say(gateAFail ? 'fail' : gateAIdle || never ? 'warn' : admissions.length ? 'ok' : 'info',
@@ -200,10 +202,15 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     for (const r of rs) if (isRouter(r) && str(r['turn']) && !str(r['agent_id']) && (r['scope'] === undefined || r['scope'] === 'root')) group(turns, `${String(r['session_id'])}:${String(r['turn'])}`, r);
     let patched = 0; const released: string[] = [];
     for (const [key, steps] of turns) {
-      const decision = steps.find(r => r['event'] === 'root' && Object.keys(sub(r, 'patch')).length);
+      // A held turn's reset puts its selection on it: the resume is its decision, as no root record carries that patch.
+      const decision = steps.find(r => r['event'] === 'root' && Object.keys(sub(r, 'patch')).length || r['event'] === 'root_resume');
       if (!decision) continue;
       patched++;
-      const ended = (p: Rec): boolean => steps.some(r => (r['event'] === 'root_stop' || r['event'] === 'context_reset') && (num(r['index']) ?? 0) <= (num(p['index']) ?? 0) || (r['event'] === 'turn_end' || r['event'] === 'budget_timeout') && at(r) <= at(p));
+      // A resume starts the turn's routing over: a stop or reset before it, or at its own step, ended nothing after it.
+      const ended = (p: Rec): boolean => {
+        const index = num(p['index']) ?? 0, resumed = Math.max(-1, ...steps.filter(r => r['event'] === 'root_resume' && (num(r['index']) ?? 0) <= index).map(r => num(r['index']) ?? 0));
+        return steps.some(r => { const i = num(r['index']) ?? 0; return (r['event'] === 'root_stop' && i >= resumed || r['event'] === 'context_reset' && i > resumed) && i <= index || (r['event'] === 'turn_end' || r['event'] === 'budget_timeout') && at(r) <= at(p); });
+      };
       if (steps.some(p => p['event'] === 'prepared' && p['routed'] === false && (num(p['index']) ?? 0) > 0 && at(p) >= at(decision) && !ended(p))) released.push(key.split(':')[1]!);
     }
     say(released.length ? 'fail' : patched ? 'ok' : 'info', `router_released: ${released.length} of ${patched} patched root turns went unrouted mid-turn with no root_stop, context_reset or turn_end record${released.length ? ` (turns ${released.map(short).join(', ')})` : ''}`,
@@ -214,6 +221,10 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
     const step = (r: Rec, ...more: string[]): string => [r['session_id'], r['turn'], ...more.map(k => r[k])].map(String).join(':');
     const routedSteps = new Set(router('prepared').filter(r => r['routed'] === true && r['scope'] === 'root' && !str(r['agent_id'])).map(r => step(r, 'index')));
     const decisions = new Map(router('root').filter(r => str(sub(r, 'patch')['model'])).map(r => [step(r), r]));
+    // A reset's resume carries the selection the turn ran from then on, which the held root record's patch does not.
+    const resumes = new Map<string, Rec[]>();
+    for (const r of router('root_resume')) group(resumes, step(r), r);
+    const decisionOf = (r: Rec): Rec => resumes.get(step(r))?.findLast(d => (num(d['index']) ?? 0) <= (num(r['index']) ?? 0)) ?? decisions.get(step(r)) ?? {};
     const sessions = new Map<string, Rec[]>();
     for (const r of router('root_result')) group(sessions, String(r['session_id']), r);
     const usage = (r: Rec): TokenUsage => {
@@ -266,7 +277,7 @@ export const activityChecks = (input: ActivityInput): ActivityCheck[] => {
         const readInstead = (n: number): TokenUsage => ({ ...t, read: t.read! + n, write: t.write! - n,
           write5m: t.write5m === null ? null : t.write === 0 ? t.write5m : t.write5m * (t.write! - n) / t.write!,
           write1h: t.write1h === null ? null : t.write === 0 ? t.write1h : t.write1h * (t.write! - n) / t.write! });
-        const decision = routedSteps.has(step(r, 'index')) ? decisions.get(step(r)) ?? {} : {}, target = str(sub(decision, 'patch')['model']);
+        const decision = routedSteps.has(step(r, 'index')) ? decisionOf(r) : {}, target = str(sub(decision, 'patch')['model']);
         const applied = target && model && sameModel(target, str(r['requested']) ?? '') && sameModel(target, str(sub(r, 'applied')['model']) ?? '') && sameModel(target, model);
         const from = applied ? str(sub(decision, 'from')['model']) : null, fromFamily = familyOf(from);
         if (fromFamily && fromFamily !== family) {
